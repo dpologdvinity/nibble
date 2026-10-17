@@ -1,5 +1,6 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_exception.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +10,8 @@
 #include "tokenizer/unicode.h"
 
 using namespace nibble;
+using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::MessageMatches;
 
 namespace {
 struct TmpModel {
@@ -50,7 +53,7 @@ TEST_CASE("api: context full", "[api]") {
   Model m = Model::load(f.path.string(), {.n_ctx = 8, .n_threads = 2});
   Session s(m);
   CHECK(s.generate("abc", {.max_tokens = 100}, [](std::string_view) { return true; }) == StopReason::ContextFull);
-  CHECK(s.n_prompt_tokens() + s.n_generated() <= 8);
+  CHECK(s.n_prompt_tokens() + s.n_generated() == 8);  // ContextFull fires exactly at n_ctx
 }
 
 TEST_CASE("api: errors", "[api]") {
@@ -59,7 +62,7 @@ TEST_CASE("api: errors", "[api]") {
   Session s(m);
   auto cb = [](std::string_view) { return true; };
   CHECK_THROWS_AS(s.generate(kPrompt, {}, cb), Error);
-  CHECK_THROWS_AS(s.generate("", {}, cb), Error);
+  CHECK_THROWS_MATCHES(s.generate("", {}, cb), Error, MessageMatches(ContainsSubstring("empty prompt")));
   CHECK_THROWS_AS(Model::load("/nonexistent/x.gguf"), Error);
 }
 

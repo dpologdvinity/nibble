@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <cmath>
+#include <cstring>
 
 #include "backend/cpu/cpu_backend.h"
 #include "model/transformer.h"
@@ -20,6 +21,10 @@ double maxdiff(const std::vector<float>& a, const std::vector<float>& b) {
   double m = 0;
   for (size_t i = 0; i < a.size(); ++i) m = std::max(m, double(std::fabs(a[i] - b[i])));
   return m;
+}
+
+bool bitwise_equal(const std::vector<float>& a, const std::vector<float>& b) {
+  return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
 }
 
 struct Loaded {
@@ -77,8 +82,9 @@ TEST_CASE("incremental and chunked prefill equal batch", "[model]") {
   cpu::CpuBackend be(pool);
   Loaded m(tiny_model_gguf(3), be);
   auto batch = run(m, be, kToks, 512, false);
-  CHECK(maxdiff(run(m, be, kToks, 512, true), batch) <= 1e-4);
-  CHECK(maxdiff(run(m, be, kToks, 2, false), batch) <= 1e-4);
+  // Kernels are per-row with a fixed accumulation order, so batching must not change a single bit.
+  CHECK(bitwise_equal(run(m, be, kToks, 512, true), batch));
+  CHECK(bitwise_equal(run(m, be, kToks, 2, false), batch));
 }
 
 TEST_CASE("model tied and explicit output", "[model]") {
