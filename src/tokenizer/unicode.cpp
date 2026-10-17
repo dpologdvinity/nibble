@@ -115,18 +115,52 @@ int unicode_to_byte(char32_t c) {
 
 std::string Utf8Streamer::push(std::string_view bytes) {
   held_.append(bytes);
-  // Find start of the trailing (possibly incomplete) sequence.
-  size_t n = held_.size();
-  size_t keep = 0;
-  for (size_t back = 1; back <= std::min<size_t>(3, n); ++back) {
-    unsigned char b = static_cast<unsigned char>(held_[n - back]);
-    if ((b & 0xC0) == 0x80) continue;  // continuation, keep looking
-    size_t need = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
-    if (need > back) keep = back;
-    break;
+  const std::string_view in = held_;
+  std::string out;
+  size_t i = 0;
+  while (i < in.size()) {
+    const unsigned char b = static_cast<unsigned char>(in[i]);
+    if (b < 0x80) {
+      out += static_cast<char>(b);
+      ++i;
+      continue;
+    }
+    size_t total;
+    unsigned char lo = 0x80, hi = 0xBF;  // allowed range of the second byte
+    if (b >= 0xC2 && b <= 0xDF) total = 2;
+    else if (b >= 0xE0 && b <= 0xEF) {
+      total = 3;
+      if (b == 0xE0) lo = 0xA0;
+      if (b == 0xED) hi = 0x9F;
+    } else if (b >= 0xF0 && b <= 0xF4) {
+      total = 4;
+      if (b == 0xF0) lo = 0x90;
+      if (b == 0xF4) hi = 0x8F;
+    } else {
+      out += "\xEF\xBF\xBD";  // invalid lead
+      ++i;
+      continue;
+    }
+    bool ok = true;
+    size_t k = 1;
+    for (; k < total && i + k < in.size(); ++k) {
+      const unsigned char c = static_cast<unsigned char>(in[i + k]);
+      if (c < (k == 1 ? lo : 0x80) || c > (k == 1 ? hi : 0xBF)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      out += "\xEF\xBF\xBD";  // bad continuation: replace lead only
+      ++i;
+    } else if (k < total) {
+      break;  // valid but incomplete prefix: hold
+    } else {
+      out.append(in.substr(i, total));
+      i += total;
+    }
   }
-  std::string out = held_.substr(0, n - keep);
-  held_.erase(0, n - keep);
+  held_.erase(0, i);
   return out;
 }
 

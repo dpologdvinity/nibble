@@ -74,3 +74,57 @@ TEST_CASE("utf8 streamer", "[unicode]") {
   REQUIRE(s.flush() == "\xEF\xBF\xBD");
   REQUIRE(s.flush() == "");
 }
+
+TEST_CASE("utf8 streamer invalid input", "[unicode]") {
+  const std::string R = "\xEF\xBF\xBD";
+  auto run = [&](std::initializer_list<const char*> parts) {
+    Utf8Streamer s;
+    std::string o;
+    for (auto p : parts) o += s.push(p);
+    return o + s.flush();
+  };
+  REQUIRE(run({"\xFF", "a"}) == R + "a");
+  REQUIRE(run({"\xF0", "a"}) == R + "a");
+  REQUIRE(run({"\xC3\x28"}) == R + "(");
+  REQUIRE(run({"\x80"}) == R);
+  REQUIRE(run({"\xE0", "\x80"}) == R + R);
+  REQUIRE(run({"\xED\xA0"}) == R + R);
+  REQUIRE(run({"\xF4\x90"}) == R + R);
+  REQUIRE(run({"\xC0\xC1\xF5"}) == R + R + R);
+}
+
+TEST_CASE("utf8 streamer property", "[unicode]") {
+  uint32_t st = 12345;
+  auto rnd = [&] { st = st * 1664525u + 1013904223u; return st >> 8; };
+  const char alpha[] = {'a', '\x80', '\xBF', '\xC2', '\xC3', '\xE0', '\xED', '\xF0', '\xF4', '\xFF', '\x9F', '\xA0'};
+  for (int t = 0; t < 10000; ++t) {
+    std::string in;
+    size_t len = rnd() % 12;
+    for (size_t i = 0; i < len; ++i) in += (rnd() % 3 == 0) ? char(rnd() & 0xFF) : alpha[rnd() % sizeof alpha];
+    Utf8Streamer s;
+    std::string out;
+    for (size_t p = 0; p < in.size();) {
+      size_t n = 1 + rnd() % 4;
+      out += s.push(std::string_view(in).substr(p, n));
+      p += n;
+    }
+    out += s.flush();
+    REQUIRE_NOTHROW(utf8_decode(out));
+    // valid input round-trips
+    std::string v;
+    for (size_t i = 0, n = rnd() % 6; i < n; ++i) {
+      char32_t c = rnd() % 0x110000;
+      if (c >= 0xD800 && c <= 0xDFFF) c = 0x41;
+      utf8_append(v, c);
+    }
+    Utf8Streamer s2;
+    std::string o2;
+    for (size_t p = 0; p < v.size();) {
+      size_t n = 1 + rnd() % 3;
+      o2 += s2.push(std::string_view(v).substr(p, n));
+      p += n;
+    }
+    o2 += s2.flush();
+    REQUIRE(o2 == v);
+  }
+}
