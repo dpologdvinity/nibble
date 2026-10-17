@@ -71,3 +71,18 @@ TEST_CASE("cpu backend supports", "[cpu_backend]") {
   CHECK(be.supports(DType::F16));
   CHECK_FALSE(be.supports(DType::Q4_0));
 }
+
+TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
+  ThreadPool pool(4);
+  cpu::CpuBackend be(pool);
+  be.reserve(64, 6);
+  const size_t cap = be.scratch_capacity();
+  std::mt19937 g(3);
+  const int64_t H = 6, KV = 2, D = 16;
+  auto k = rnd(64 * KV * D, g), v = rnd(64 * KV * D, g), q = rnd(H * D, g);
+  float* out = be.alloc(H * D);
+  for (int64_t pos = 0; pos < 64; ++pos) {
+    be.attention(q.data(), k.data(), v.data(), out, 1, pos, H, KV, D);
+    REQUIRE(be.scratch_capacity() == cap);
+  }
+}

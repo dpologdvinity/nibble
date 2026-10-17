@@ -9,13 +9,14 @@ namespace nibble::cpu {
 
 class CpuBackend final : public Backend {
  public:
-  // max_ctx: optional hint; pre-sizes attention scratch so the first calls do not allocate.
-  explicit CpuBackend(ThreadPool& pool, int64_t max_ctx = 0, int64_t max_heads = 0);
+  explicit CpuBackend(ThreadPool& pool);
   ~CpuBackend() override;
   CpuBackend(const CpuBackend&) = delete;
   CpuBackend& operator=(const CpuBackend&) = delete;
 
   bool supports(DType t) const override { return t == DType::F32 || t == DType::F16; }
+  void reserve(int64_t n_ctx, int64_t n_heads) override;
+  size_t scratch_capacity() const { return scratch_.size(); }  // test hook
   float* alloc(int64_t n_floats) override;
   void read(float* host_dst, const float* src, int64_t n) override;
   void embed(const Tensor& table, std::span<const int32_t> ids, float* out) override;
@@ -33,8 +34,8 @@ class CpuBackend final : public Backend {
   ThreadPool& pool_;
   std::vector<void*> allocs_;
   // Attention scores: one slot of (pos0+n) floats per head (parallel_for chunk = 1 head,
-  // so slots are never shared). Grow-only; allocates only when n_heads*ctx exceeds the
-  // previous high-water mark (or the constructor hint), never in steady-state decoding.
+  // so slots are never shared). Sized by reserve(); attention() only grows it if called
+  // beyond the reserved size, which is outside the no-allocation guarantee.
   std::vector<float> scratch_;
 };
 

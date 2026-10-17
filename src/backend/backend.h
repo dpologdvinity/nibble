@@ -18,6 +18,9 @@ class Backend {
  public:
   virtual ~Backend() = default;
   virtual bool supports(DType weight_type) const = 0;
+  // Called once by the model before generation. Afterwards, ops with pos0 + n <= n_ctx and
+  // n_heads <= the reserved head count must not allocate.
+  virtual void reserve(int64_t n_ctx, int64_t n_heads) = 0;
   virtual float* alloc(int64_t n_floats) = 0;  // owned by backend, freed in destructor
   virtual void read(float* host_dst, const float* src, int64_t n) = 0;
   virtual void embed(const Tensor& table, std::span<const int32_t> ids, float* out) = 0;  // out[n, ne0]

@@ -8,8 +8,11 @@
 
 namespace nibble::cpu {
 
-CpuBackend::CpuBackend(ThreadPool& pool, int64_t max_ctx, int64_t max_heads) : pool_(pool) {
-  if (max_ctx > 0 && max_heads > 0) scratch_.resize(static_cast<size_t>(max_ctx * max_heads));
+CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool) {}
+
+void CpuBackend::reserve(int64_t n_ctx, int64_t n_heads) {
+  const size_t need = static_cast<size_t>(n_ctx * n_heads);
+  if (scratch_.size() < need) scratch_.resize(need);
 }
 
 CpuBackend::~CpuBackend() {
