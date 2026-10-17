@@ -58,6 +58,12 @@ if(NIBBLE_FUZZ)
   target_link_options(fuzz_gguf PRIVATE ${NIBBLE_FUZZ_FLAGS})
   target_link_libraries(fuzz_gguf PRIVATE Threads::Threads)
 
+  add_executable(fuzz_load tests/fuzz/fuzz_load.cpp ${NIBBLE_SOURCES})
+  target_include_directories(fuzz_load PRIVATE include src)
+  target_compile_options(fuzz_load PRIVATE -Wall -Wextra -Wpedantic -Werror ${NIBBLE_FUZZ_FLAGS})
+  target_link_options(fuzz_load PRIVATE ${NIBBLE_FUZZ_FLAGS})
+  target_link_libraries(fuzz_load PRIVATE Threads::Threads)
+
   add_executable(make_seed tests/fuzz/make_seed.cpp ${NIBBLE_SOURCES})
   target_include_directories(make_seed PRIVATE include src tests)
   target_compile_options(make_seed PRIVATE -Wall -Wextra -Wpedantic -Werror)

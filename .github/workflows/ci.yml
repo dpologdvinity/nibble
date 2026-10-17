@@ -22,6 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: CXX=clang++ cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF
-      - run: cmake --build build-fuzz -j --target fuzz_gguf make_seed
+      - run: cmake --build build-fuzz -j --target fuzz_gguf fuzz_load make_seed
       - run: build-fuzz/make_seed build-fuzz/seed
       - run: build-fuzz/fuzz_gguf -max_total_time=60 build-fuzz/seed
+      - run: build-fuzz/fuzz_load -max_total_time=60 build-fuzz/seed
