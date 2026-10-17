@@ -33,7 +33,7 @@ include(Catch)
 enable_testing()
 file(GLOB NIBBLE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/test_*.cpp)
 add_executable(nibble_tests ${NIBBLE_TEST_SOURCES})
-target_include_directories(nibble_tests PRIVATE include src)
+target_include_directories(nibble_tests PRIVATE include src cli)
 target_compile_definitions(nibble_tests PRIVATE NIBBLE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(nibble_tests PRIVATE nibble Catch2::Catch2WithMain)
 
@@ -81,6 +81,12 @@ add_custom_command(TARGET make_test_gguf POST_BUILD
 add_test(NAME cli_info_small COMMAND nibble info ${CMAKE_BINARY_DIR}/tests/data/small.gguf)
 set_tests_properties(cli_info_small PROPERTIES PASS_REGULAR_EXPRESSION
   "general.architecture = qwen2.*token_embd.weight +F16 +\\[64, 10\\]")
+# Metadata strings (scalar and array elements) are printed with control bytes escaped.
+string(ASCII 27 NIBBLE_ESC)
+add_test(NAME cli_info_escapes_control COMMAND nibble info ${CMAKE_BINARY_DIR}/tests/data/escape.gguf)
+set_tests_properties(cli_info_escapes_control PROPERTIES
+  PASS_REGULAR_EXPRESSION "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\""
+  FAIL_REGULAR_EXPRESSION "${NIBBLE_ESC}")
 add_test(NAME cli_info_missing_exit COMMAND nibble info /nonexistent.gguf)
 set_tests_properties(cli_info_missing_exit PROPERTIES WILL_FAIL TRUE)
 add_test(NAME cli_info_missing_msg COMMAND nibble info /nonexistent.gguf)

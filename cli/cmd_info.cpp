@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "commands.h"
+#include "escape.h"
 #include "gguf/gguf.h"
 #include "nibble/error.h"
 #include "tensor.h"
@@ -44,7 +45,7 @@ std::string fmt_array(const gguf::Array& a) {
   std::string out;
   for (size_t k = 0; k < a.size() && k < kShow; ++k) {
     if (k) out += ", ";
-    if (a.is_string()) out += "\"" + std::string(a.str_at(k)) + "\"";
+    if (a.is_string()) out += "\"" + escape_control(a.str_at(k)) + "\"";
     else if (a.is_float()) out += fmt_double(a.float_at(k));
     else out += std::to_string(a.int_at(k));
   }
@@ -58,7 +59,7 @@ std::string fmt_value(const gguf::Value& v) {
         if constexpr (std::is_same_v<T, int64_t>) return std::to_string(x);
         else if constexpr (std::is_same_v<T, double>) return fmt_double(x);
         else if constexpr (std::is_same_v<T, bool>) return x ? "true" : "false";
-        else if constexpr (std::is_same_v<T, std::string>) return x;
+        else if constexpr (std::is_same_v<T, std::string>) return escape_control(x);
         else return fmt_array(x);
       },
       v);
@@ -71,7 +72,7 @@ int cmd_info(int argc, char** argv) {
   const gguf::File f = gguf::File::open(argv[1]);
 
   std::printf("GGUF v%u\n\n", f.version());
-  for (const auto& [key, val] : f.metadata()) std::printf("%s = %s\n", key.c_str(), fmt_value(val).c_str());
+  for (const auto& [key, val] : f.metadata()) std::printf("%s = %s\n", escape_control(key).c_str(), fmt_value(val).c_str());
 
   std::printf("\ntensors: %zu\n", f.tensors().size());
   uint64_t total = 0;
@@ -81,7 +82,7 @@ int cmd_info(int argc, char** argv) {
       if (d) dims += ", ";
       dims += std::to_string(t.tensor.ne[static_cast<size_t>(d)]);
     }
-    std::printf("%-40s %-6s [%s]  offset=%llu\n", t.name.c_str(),
+    std::printf("%-40s %-6s [%s]  offset=%llu\n", escape_control(t.name).c_str(),
                 ggml_type_name(static_cast<uint32_t>(t.tensor.type)), dims.c_str(),
                 static_cast<unsigned long long>(t.offset));
     total += t.nbytes;

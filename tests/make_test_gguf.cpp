@@ -44,5 +44,11 @@ int main(int argc, char** argv) {
     write_file(dir + "/small.gguf", w.build());
   }
   write_file(dir + "/tiny.gguf", tiny_model_gguf(1));
+  {
+    GgufWriter w;  // terminal-escape injection probe for `nibble info`
+    w.add_string("evil", "\x1b[31mred\n");
+    w.add_string_array("evil.arr", {"\x1b[0m"});
+    write_file(dir + "/escape.gguf", w.build());
+  }
   return 0;
 }
