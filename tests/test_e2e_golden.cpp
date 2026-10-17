@@ -2,6 +2,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -11,6 +13,7 @@
 #include "gguf/gguf.h"
 #include "model/transformer.h"
 #include "thread_pool.h"
+#include "tokenizer/tokenizer.h"
 
 using namespace nibble;
 
@@ -19,10 +22,14 @@ struct Engine {
   ThreadPool pool{int(std::max(1u, std::thread::hardware_concurrency()))};
   cpu::CpuBackend be{pool};
   gguf::File file;
+  tok::Tokenizer tokenizer;
   model::LlamaConfig cfg;
   model::Weights w;
   explicit Engine(const std::string& path)
-      : file(gguf::File::open(path)), cfg(model::LlamaConfig::from_gguf(file)), w(model::Weights::bind(file, cfg, be)) {}
+      : file(gguf::File::open(path)),
+        tokenizer(tok::Tokenizer::from_gguf(file)),
+        cfg(model::LlamaConfig::from_gguf(file)),
+        w(model::Weights::bind(file, cfg, be)) {}
 };
 
 Engine& engine(const std::string& path) {
@@ -72,6 +79,15 @@ void run_prompt(const std::string& name) {
   REQUIRE(g.n_vocab == uint32_t(e.cfg.n_vocab));
   const size_t total = g.tokens.size(), np = g.n_prompt;
   std::vector<float> out(g.n_vocab);
+
+  // 0. our tokenizer (parse_special=true, as the API uses) reproduces llama.cpp's prompt tokens
+  {
+    std::ifstream in(root + "/tests/e2e/prompts/" + name + ".txt", std::ios::binary);
+    REQUIRE(in);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::vector<int32_t> want(g.tokens.begin(), g.tokens.begin() + std::ptrdiff_t(np));
+    REQUIRE(e.tokenizer.encode(text, /*parse_special=*/true) == want);
+  }
 
   // 1. incremental, one token at a time
   {
