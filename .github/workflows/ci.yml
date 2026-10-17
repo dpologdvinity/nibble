@@ -17,3 +17,11 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_NATIVE=OFF -DNIBBLE_SANITIZE=address,undefined
       - run: cmake --build build -j
       - run: ctest --test-dir build -LE e2e --output-on-failure
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: CXX=clang++ cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF
+      - run: cmake --build build-fuzz -j --target fuzz_gguf make_seed
+      - run: build-fuzz/make_seed build-fuzz/seed
+      - run: build-fuzz/fuzz_gguf -max_total_time=60 build-fuzz/seed
