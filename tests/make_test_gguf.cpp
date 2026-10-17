@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "gguf_writer.h"
+#include "tiny_model.h"
 
 static void write_file(const std::string& path, const std::vector<uint8_t>& bytes) {
   std::ofstream f(path, std::ios::binary);
@@ -27,5 +28,6 @@ int main(int argc, char** argv) {
     w.add_tensor("token_embd.weight", nibble::DType::F16, {64, 10}, std::vector<uint8_t>(64 * 10 * 2, 0));
     write_file(dir + "/small.gguf", w.build());
   }
+  write_file(dir + "/tiny.gguf", tiny_model_gguf(1));
   return 0;
 }

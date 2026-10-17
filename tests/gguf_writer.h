@@ -130,9 +130,10 @@ class GgufWriter {
   };
   template <class V>
   static void put(std::vector<uint8_t>& b, V v) {
-    uint8_t raw[sizeof v];
-    std::memcpy(raw, &v, sizeof v);
-    b.insert(b.end(), raw, raw + sizeof v);
+    // resize+memcpy (not insert) sidesteps a GCC 13 -Wstringop-overflow false positive at -O2.
+    const size_t n = b.size();
+    b.resize(n + sizeof v);
+    std::memcpy(b.data() + n, &v, sizeof v);
   }
   static uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
   static std::vector<uint8_t> head(const std::string& key, ValueType t) {
