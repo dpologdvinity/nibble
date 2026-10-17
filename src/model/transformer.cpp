@@ -4,9 +4,30 @@
 #include <cstdint>
 #include <string>
 
+#include "debug_check.h"
 #include "nibble/error.h"
 
 namespace nibble::model {
+namespace {
+
+// Debug-only shape/dtype agreement checks at op call sites (spec 6.4). Activation
+// pointers carry no shape, so the expected widths passed here are the widths the
+// Transformer sized each activation buffer with. Compiled out under NDEBUG.
+void dcheck_matmul(const Backend& be, const Tensor& w, int64_t in, int64_t out, [[maybe_unused]] const char* op) {
+  NIBBLE_DCHECK(w.n_dims == 2 && w.ne[0] == in && w.ne[1] == out && be.supports(w.type),
+                "matmul %s: weight [%lld, %lld] (n_dims %d, dtype %u) vs activation in=%lld out=%lld", op,
+                static_cast<long long>(w.ne[0]), static_cast<long long>(w.ne[1]), w.n_dims,
+                static_cast<unsigned>(w.type), static_cast<long long>(in), static_cast<long long>(out));
+}
+
+void dcheck_vec(const Tensor& t, int64_t width, [[maybe_unused]] const char* op) {
+  NIBBLE_DCHECK(t.n_dims == 1 && t.ne[0] == width && t.type == DType::F32,
+                "%s: tensor [%lld] (n_dims %d, dtype %u) vs activation width %lld (need F32)", op,
+                static_cast<long long>(t.ne[0]), t.n_dims, static_cast<unsigned>(t.type),
+                static_cast<long long>(width));
+}
+
+}  // namespace
 
 Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, int64_t n_ctx, int64_t max_batch)
     : c_(c), w_(w), be_(be), n_ctx_(n_ctx), max_batch_(max_batch) {
@@ -75,9 +96,12 @@ void Transformer::forward(std::span<const int32_t> tokens, int64_t pos0, float* 
   if (pos0 < 0 || pos0 + n > n_ctx_)
     throw Error("context overflow: position " + std::to_string(pos0) + " + " + std::to_string(n) +
                 " tokens exceeds n_ctx " + std::to_string(n_ctx_));
+  NIBBLE_DCHECK(logits_out != nullptr, "forward: null logits_out");
   for (int64_t off = 0; off < n; off += max_batch_)
     run_chunk(tokens.subspan(static_cast<size_t>(off), static_cast<size_t>(std::min(max_batch_, n - off))), pos0 + off);
   const int64_t rows = (n - 1) % max_batch_;  // last row within the final chunk
+  dcheck_vec(w_.output_norm, c_.n_embd, "rmsnorm output_norm");
+  dcheck_matmul(be_, w_.output, c_.n_embd, c_.n_vocab, "output");
   be_.rmsnorm(x_ + rows * c_.n_embd, w_.output_norm, last_, 1, c_.rms_eps);
   be_.matmul(w_.output, last_, logits_, 1);
   be_.read(logits_out, logits_, c_.n_vocab);
@@ -87,29 +111,60 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
   const int64_t n = static_cast<int64_t>(tokens.size()), hd = c_.head_dim, E = c_.n_embd;
   const int64_t kvw = c_.n_kv_heads * hd;
   const RopeParams rp{c_.rope_base, c_.rope_neox, nullptr};
+  const int64_t Q = c_.n_heads * hd;
+  NIBBLE_DCHECK(n > 0 && n <= max_batch_ && pos0 >= 0 && pos0 + n <= n_ctx_,
+                "run_chunk: n=%lld pos0=%lld vs max_batch=%lld n_ctx=%lld", static_cast<long long>(n),
+                static_cast<long long>(pos0), static_cast<long long>(max_batch_), static_cast<long long>(n_ctx_));
+  NIBBLE_DCHECK(c_.n_kv_heads > 0 && c_.n_heads % c_.n_kv_heads == 0 && hd > 0 && hd % 2 == 0,
+                "attention config: n_heads=%lld n_kv_heads=%lld head_dim=%lld", static_cast<long long>(c_.n_heads),
+                static_cast<long long>(c_.n_kv_heads), static_cast<long long>(hd));
+  NIBBLE_DCHECK(w_.layers.size() == static_cast<size_t>(c_.n_layers), "layers: %zu bound vs n_layers=%lld",
+                w_.layers.size(), static_cast<long long>(c_.n_layers));
+  dcheck_matmul(be_, w_.token_embd, E, c_.n_vocab, "embed token_embd");
   be_.embed(w_.token_embd, tokens, x_);
   for (int64_t l = 0; l < c_.n_layers; ++l) {
     const LayerWeights& L = w_.layers[static_cast<size_t>(l)];
     // K and V are projected straight into their cache rows for positions pos0..pos0+n.
     float* kc = k_[static_cast<size_t>(l)] + pos0 * kvw;
     float* vc = v_[static_cast<size_t>(l)] + pos0 * kvw;
+    dcheck_vec(L.attn_norm, E, "rmsnorm attn_norm");
     be_.rmsnorm(x_, L.attn_norm, h_, n, c_.rms_eps);
+    dcheck_matmul(be_, L.wq, E, Q, "attn_q");
     be_.matmul(L.wq, h_, q_, n);
+    dcheck_matmul(be_, L.wk, E, kvw, "attn_k");
     be_.matmul(L.wk, h_, kc, n);
+    dcheck_matmul(be_, L.wv, E, kvw, "attn_v");
     be_.matmul(L.wv, h_, vc, n);
-    if (L.bq) be_.add_bias(q_, *L.bq, n);
-    if (L.bk) be_.add_bias(kc, *L.bk, n);
-    if (L.bv) be_.add_bias(vc, *L.bv, n);
-    be_.rope(q_, n, c_.n_heads, hd, pos0, rp);
-    be_.rope(kc, n, c_.n_kv_heads, hd, pos0, rp);
+    NIBBLE_DCHECK(L.bq.has_value() == c_.qkv_bias && L.bk.has_value() == c_.qkv_bias &&
+                      L.bv.has_value() == c_.qkv_bias,
+                  "qkv bias presence vs config qkv_bias=%d", static_cast<int>(c_.qkv_bias));
+    if (L.bq) {
+      dcheck_vec(*L.bq, Q, "add_bias attn_q.bias");
+      be_.add_bias(q_, *L.bq, n);
+    }
+    if (L.bk) {
+      dcheck_vec(*L.bk, kvw, "add_bias attn_k.bias");
+      be_.add_bias(kc, *L.bk, n);
+    }
+    if (L.bv) {
+      dcheck_vec(*L.bv, kvw, "add_bias attn_v.bias");
+      be_.add_bias(vc, *L.bv, n);
+    }
+    be_.rope(q_, n, c_.n_heads, hd, pos0, rp);   // q_ is [n, n_heads * head_dim] (checked via attn_q)
+    be_.rope(kc, n, c_.n_kv_heads, hd, pos0, rp);  // kc is [n, n_kv_heads * head_dim] (checked via attn_k)
     be_.attention(q_, k_[static_cast<size_t>(l)], v_[static_cast<size_t>(l)], attn_, n, pos0, c_.n_heads,
                   c_.n_kv_heads, hd);
+    dcheck_matmul(be_, L.wo, Q, E, "attn_output");
     be_.matmul(L.wo, attn_, h_, n);
     be_.add(x_, h_, n * E);
+    dcheck_vec(L.ffn_norm, E, "rmsnorm ffn_norm");
     be_.rmsnorm(x_, L.ffn_norm, h_, n, c_.rms_eps);
+    dcheck_matmul(be_, L.w_gate, E, c_.n_ff, "ffn_gate");
     be_.matmul(L.w_gate, h_, gate_, n);
+    dcheck_matmul(be_, L.w_up, E, c_.n_ff, "ffn_up");
     be_.matmul(L.w_up, h_, up_, n);
     be_.silu_mul(gate_, up_, n * c_.n_ff);
+    dcheck_matmul(be_, L.w_down, c_.n_ff, E, "ffn_down");
     be_.matmul(L.w_down, gate_, h_, n);
     be_.add(x_, h_, n * E);
   }

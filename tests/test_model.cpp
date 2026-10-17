@@ -2,7 +2,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <cmath>
+#include <csignal>
 #include <cstring>
+#include <string>
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "backend/cpu/cpu_backend.h"
 #include "model/transformer.h"
@@ -165,3 +170,55 @@ TEST_CASE("transformer huge n_ctx throws Error naming n_ctx", "[model]") {
   }
   CHECK(be.live_allocations() == base);
 }
+
+#ifndef NDEBUG
+// Spec 6.4: Debug builds check shape agreement at every op call. A valid model must
+// pass every check in all prefill modes.
+TEST_CASE("debug checks pass on a valid tiny-model forward", "[model][dcheck]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  for (DType ty : {DType::F32, DType::F16}) {
+    Loaded m(tiny_model_gguf(11, ty), be);
+    auto batch = run(m, be, kToks, 512, false);
+    CHECK(bitwise_equal(run(m, be, kToks, 512, true), batch));
+    CHECK(bitwise_equal(run(m, be, kToks, 2, false), batch));
+  }
+  TinyModelOpts o;
+  o.explicit_output = true;
+  Loaded expl(tiny_model_gguf(5, DType::F32, false, 259, o), be);
+  CHECK(run(expl, be, kToks, 512, false).size() == size_t(expl.cfg.n_vocab));
+}
+
+TEST_CASE("debug check failure aborts naming the op", "[model][dcheck]") {
+  int fds[2];
+  REQUIRE(::pipe(fds) == 0);
+  const pid_t pid = ::fork();
+  REQUIRE(pid >= 0);
+  if (pid == 0) {
+    ::dup2(fds[1], 2);
+    ThreadPool pool(1);
+    cpu::CpuBackend be(pool);
+    std::vector<uint16_t> w16(4, 0);
+    Tensor w;
+    w.type = DType::F16;  // rmsnorm weights must be F32
+    w.n_dims = 1;
+    w.ne = {4, 1, 1, 1};
+    w.data = w16.data();
+    std::vector<float> x(4, 1.f), y(4);
+    be.rmsnorm(x.data(), w, y.data(), 1, 1e-6f);
+    ::_exit(0);  // not reached when the check fires
+  }
+  ::close(fds[1]);
+  std::string err;
+  char buf[512];
+  for (ssize_t r; (r = ::read(fds[0], buf, sizeof buf)) > 0;) err.append(buf, size_t(r));
+  ::close(fds[0]);
+  int status = 0;
+  REQUIRE(::waitpid(pid, &status, 0) == pid);
+  INFO("child stderr: " << err);
+  REQUIRE(WIFSIGNALED(status));
+  CHECK(WTERMSIG(status) == SIGABRT);
+  CHECK_THAT(err, ContainsSubstring("NIBBLE_DCHECK") && ContainsSubstring("rmsnorm") &&
+                      ContainsSubstring("need F32"));
+}
+#endif

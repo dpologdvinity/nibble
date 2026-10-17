@@ -7,6 +7,7 @@
 #include <new>
 
 #include "backend/cpu/ref_ops.h"
+#include "debug_check.h"
 #include "nibble/error.h"
 
 namespace nibble::cpu {
@@ -61,14 +62,25 @@ void CpuBackend::free(float* p) {
 }
 
 void CpuBackend::read(float* host_dst, const float* src, int64_t n) {
+  NIBBLE_DCHECK(host_dst && src && n >= 0, "read: dst=%p src=%p n=%lld", static_cast<void*>(host_dst),
+                static_cast<const void*>(src), static_cast<long long>(n));
   std::memcpy(host_dst, src, static_cast<size_t>(n) * sizeof(float));
 }
 
 void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
+  NIBBLE_DCHECK(out && table.data && !ids.empty() && supports(table.type), "embed: out=%p table=%p n=%zu dtype %u",
+                static_cast<void*>(out), table.data, ids.size(), static_cast<unsigned>(table.type));
+#ifndef NDEBUG
+  for (size_t i = 0; i < ids.size(); ++i)
+    NIBBLE_DCHECK(ids[i] >= 0 && ids[i] < table.ne[1], "embed: ids[%zu]=%d out of range [0, %lld)", i,
+                  static_cast<int>(ids[i]), static_cast<long long>(table.ne[1]));
+#endif
   cpu::embed(table, ids, out);
 }
 
 void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
+  NIBBLE_DCHECK(x && y && w.data && n > 0, "matmul: x=%p y=%p w=%p n=%lld", static_cast<const void*>(x),
+                static_cast<void*>(y), w.data, static_cast<long long>(n));
   // Unsupported dtype throws here on the calling thread (pool tasks must not throw);
   // Task 9 gates on supports() at load time so the hot path never sees one.
   if (!supports(w.type)) cpu::matmul_rows(w, x, y, 0, 0, 0);  // n=0: only the dtype check runs
@@ -76,20 +88,49 @@ void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
 }
 
 void CpuBackend::rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) {
+  NIBBLE_DCHECK(x && y && weight.data && n > 0 && weight.type == DType::F32,
+                "rmsnorm: x=%p y=%p weight=%p n=%lld weight dtype %u (need F32)", static_cast<const void*>(x),
+                static_cast<void*>(y), weight.data, static_cast<long long>(n), static_cast<unsigned>(weight.type));
   cpu::rmsnorm(x, weight, y, n, eps);
 }
-void CpuBackend::add(float* x, const float* y, int64_t count) { cpu::add(x, y, count); }
-void CpuBackend::add_bias(float* x, const Tensor& bias, int64_t n) { cpu::add_bias(x, bias, n); }
+void CpuBackend::add(float* x, const float* y, int64_t count) {
+  NIBBLE_DCHECK(x && y && count > 0, "add: x=%p y=%p count=%lld", static_cast<void*>(x),
+                static_cast<const void*>(y), static_cast<long long>(count));
+  cpu::add(x, y, count);
+}
+void CpuBackend::add_bias(float* x, const Tensor& bias, int64_t n) {
+  NIBBLE_DCHECK(x && bias.data && n > 0 && bias.type == DType::F32,
+                "add_bias: x=%p bias=%p n=%lld bias dtype %u (need F32)", static_cast<void*>(x), bias.data,
+                static_cast<long long>(n), static_cast<unsigned>(bias.type));
+  cpu::add_bias(x, bias, n);
+}
 void CpuBackend::rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, const RopeParams& p) {
+  NIBBLE_DCHECK(x && n > 0 && n_heads > 0 && head_dim > 0 && head_dim % 2 == 0 && pos0 >= 0,
+                "rope: x=%p n=%lld n_heads=%lld head_dim=%lld (must be even) pos0=%lld", static_cast<void*>(x),
+                static_cast<long long>(n), static_cast<long long>(n_heads), static_cast<long long>(head_dim),
+                static_cast<long long>(pos0));
   cpu::rope(x, n, n_heads, head_dim, pos0, p);
 }
 void CpuBackend::copy(float* dst, const float* src, int64_t count) {
+  NIBBLE_DCHECK(dst && src && count >= 0, "copy: dst=%p src=%p count=%lld", static_cast<void*>(dst),
+                static_cast<const void*>(src), static_cast<long long>(count));
   std::memmove(dst, src, static_cast<size_t>(count) * sizeof(float));
 }
-void CpuBackend::silu_mul(float* gate, const float* up, int64_t count) { cpu::silu_mul(gate, up, count); }
+void CpuBackend::silu_mul(float* gate, const float* up, int64_t count) {
+  NIBBLE_DCHECK(gate && up && count > 0, "silu_mul: gate=%p up=%p count=%lld", static_cast<void*>(gate),
+                static_cast<const void*>(up), static_cast<long long>(count));
+  cpu::silu_mul(gate, up, count);
+}
 
 void CpuBackend::attention(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
                            int64_t n_heads, int64_t n_kv_heads, int64_t head_dim) {
+  NIBBLE_DCHECK(q && k && v && out && n > 0 && pos0 >= 0 && n_heads > 0 && n_kv_heads > 0 &&
+                    n_heads % n_kv_heads == 0 && head_dim > 0,
+                "attention: q=%p k=%p v=%p out=%p n=%lld pos0=%lld n_heads=%lld n_kv_heads=%lld head_dim=%lld "
+                "(n_heads must be a multiple of n_kv_heads)",
+                static_cast<const void*>(q), static_cast<const void*>(k), static_cast<const void*>(v),
+                static_cast<void*>(out), static_cast<long long>(n), static_cast<long long>(pos0),
+                static_cast<long long>(n_heads), static_cast<long long>(n_kv_heads), static_cast<long long>(head_dim));
   const int64_t ctx = pos0 + n;
   const size_t need = static_cast<size_t>(ctx * n_heads);
   if (scratch_.size() < need) scratch_.resize(need);

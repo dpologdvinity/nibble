@@ -14,6 +14,12 @@ struct RopeParams {
 
 // Activations are allocated and touched only through the backend (a CUDA backend
 // will hand out device pointers), so model code never dereferences them.
+//
+// Raw activation pointers carry no shape. Backend ops can only debug-check what
+// their arguments describe (tensor dtypes, counts, head ratios, non-null pointers,
+// embed ids in range); activation sizes and weight-vs-activation shape agreement
+// are debug-checked at the call site (Transformer), which knows the buffer widths.
+// Debug checks (NIBBLE_DCHECK, debug_check.h) abort; they compile out in Release.
 class Backend {
  public:
   virtual ~Backend() = default;
