@@ -1,0 +1,88 @@
+The quick brown fox jumps over the lazy dog.
+====
+ leading space
+====
+trailing spaces   
+====
+two  spaces
+====
+three   spaces
+====
+ten          spaces
+====
+tab	separated	values
+====
+line one
+line two
+====
+para one
+
+para two
+====
+windows
+line endings
+
+====
+blank
+  
+whitespace line
+====
+I'm you're they've it'll we'd DON'T
+====
+1 12 123 1234 12345 3.14159 -7 1e10
+====
+!!! ... ?!?
+====
+ !!! ... ?!?
+====
+int main() {
+    for (int i = 0; i < 3; ++i) {
+        std::cout << i << "\n";
+    }
+    return 0;
+}
+====
+{"name": "nibble", "tags": ["llm", "cpp"], "n": 42, "ok": true, "x": null}
+====
+https://example.com/path/to/page?query=1&b=two#frag
+====
+someone.name+tag@example.co.uk
+====
+naïve café Zürich
+====
+Γειά σου κόσμε, τι κάνεις;
+====
+Привет, мир! Как дела?
+====
+مرحبا بالعالم كيف حالك
+====
+नमस्ते दुनिया, आप कैसे हैं?
+====
+你好，世界！今天天气很好。
+====
+こんにちは世界、元気ですか？
+====
+안녕하세요 세계, 잘 지내세요?
+====
+emoji 😀 🎉 done
+====
+zwj 👩‍💻 sequence
+====
+flag 🇫🇷 here
+====
+abc123def
+====
+<|im_start|>user
+====
+ 
+====
+
+
+====
+mixed 日本語 and English, 123 и русский!
+====
+def f(x):
+	return x  # tab indent
+
+====
+end of corpus
