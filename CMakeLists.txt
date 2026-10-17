@@ -57,3 +57,27 @@ if(NIBBLE_FUZZ)
   target_compile_options(make_seed PRIVATE -Wall -Wextra -Wpedantic -Werror)
   target_link_libraries(make_seed PRIVATE Threads::Threads)
 endif()
+
+# CLI
+file(GLOB NIBBLE_CLI_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/cli/*.cpp)
+add_executable(nibble_cli ${NIBBLE_CLI_SOURCES})
+set_target_properties(nibble_cli PROPERTIES OUTPUT_NAME nibble)
+target_include_directories(nibble_cli PRIVATE cli src)
+target_link_libraries(nibble_cli PRIVATE nibble)
+add_executable(make_test_gguf tests/make_test_gguf.cpp)
+target_include_directories(make_test_gguf PRIVATE include src tests)
+target_link_libraries(make_test_gguf PRIVATE nibble)
+add_custom_command(TARGET make_test_gguf POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tests/data
+  COMMAND make_test_gguf ${CMAKE_BINARY_DIR}/tests/data
+  COMMENT "Generating test GGUF fixtures")
+
+add_test(NAME cli_info_small COMMAND nibble info ${CMAKE_BINARY_DIR}/tests/data/small.gguf)
+set_tests_properties(cli_info_small PROPERTIES PASS_REGULAR_EXPRESSION
+  "general.architecture = qwen2.*token_embd.weight +F16 +\\[64, 10\\]")
+add_test(NAME cli_info_missing_exit COMMAND nibble info /nonexistent.gguf)
+set_tests_properties(cli_info_missing_exit PROPERTIES WILL_FAIL TRUE)
+add_test(NAME cli_info_missing_msg COMMAND nibble info /nonexistent.gguf)
+set_tests_properties(cli_info_missing_msg PROPERTIES PASS_REGULAR_EXPRESSION "error: .*nonexistent")
+add_test(NAME cli_usage COMMAND nibble frobnicate)
+set_tests_properties(cli_usage PROPERTIES WILL_FAIL TRUE)
