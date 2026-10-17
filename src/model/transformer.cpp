@@ -27,6 +27,26 @@ void dcheck_vec(const Tensor& t, int64_t width, [[maybe_unused]] const char* op)
                 static_cast<long long>(width));
 }
 
+// rope/attention: the head geometry passed to the op must match the config and the
+// row width of the activation buffer, and the rows being written must fit the context.
+void dcheck_heads(int64_t heads, int64_t want_heads, int64_t head_dim, int64_t want_head_dim, int64_t row_width,
+                  int64_t pos0, int64_t n, int64_t n_ctx, [[maybe_unused]] const char* op) {
+  NIBBLE_DCHECK(heads == want_heads && head_dim == want_head_dim && heads * head_dim == row_width && pos0 >= 0 &&
+                    pos0 + n <= n_ctx,
+                "%s: heads=%lld head_dim=%lld vs config heads=%lld head_dim=%lld, row width %lld; "
+                "pos0=%lld + n=%lld vs n_ctx=%lld",
+                op, static_cast<long long>(heads), static_cast<long long>(head_dim),
+                static_cast<long long>(want_heads), static_cast<long long>(want_head_dim),
+                static_cast<long long>(row_width), static_cast<long long>(pos0), static_cast<long long>(n),
+                static_cast<long long>(n_ctx));
+}
+
+// add/silu_mul: the element count must be rows x the activation width.
+void dcheck_count(int64_t count, int64_t rows, int64_t width, [[maybe_unused]] const char* op) {
+  NIBBLE_DCHECK(count == rows * width, "%s: count=%lld vs rows=%lld x width=%lld", op,
+                static_cast<long long>(count), static_cast<long long>(rows), static_cast<long long>(width));
+}
+
 }  // namespace
 
 Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, int64_t n_ctx, int64_t max_batch)
@@ -150,12 +170,17 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
       dcheck_vec(*L.bv, kvw, "add_bias attn_v.bias");
       be_.add_bias(vc, *L.bv, n);
     }
+    dcheck_heads(c_.n_heads, c_.n_heads, hd, c_.head_dim, Q, pos0, n, n_ctx_, "rope q");
     be_.rope(q_, n, c_.n_heads, hd, pos0, rp);   // q_ is [n, n_heads * head_dim] (checked via attn_q)
+    dcheck_heads(c_.n_kv_heads, c_.n_kv_heads, hd, c_.head_dim, kvw, pos0, n, n_ctx_, "rope k");
     be_.rope(kc, n, c_.n_kv_heads, hd, pos0, rp);  // kc is [n, n_kv_heads * head_dim] (checked via attn_k)
+    dcheck_heads(c_.n_heads, c_.n_heads, hd, c_.head_dim, Q, pos0, n, n_ctx_, "attention q heads");
+    dcheck_heads(c_.n_kv_heads, c_.n_kv_heads, hd, c_.head_dim, kvw, pos0, n, n_ctx_, "attention kv heads");
     be_.attention(q_, k_[static_cast<size_t>(l)], v_[static_cast<size_t>(l)], attn_, n, pos0, c_.n_heads,
                   c_.n_kv_heads, hd);
     dcheck_matmul(be_, L.wo, Q, E, "attn_output");
     be_.matmul(L.wo, attn_, h_, n);
+    dcheck_count(n * E, n, c_.n_embd, "add attn residual");
     be_.add(x_, h_, n * E);
     dcheck_vec(L.ffn_norm, E, "rmsnorm ffn_norm");
     be_.rmsnorm(x_, L.ffn_norm, h_, n, c_.rms_eps);
@@ -163,9 +188,11 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
     be_.matmul(L.w_gate, h_, gate_, n);
     dcheck_matmul(be_, L.w_up, E, c_.n_ff, "ffn_up");
     be_.matmul(L.w_up, h_, up_, n);
+    dcheck_count(n * c_.n_ff, n, c_.n_ff, "silu_mul");
     be_.silu_mul(gate_, up_, n * c_.n_ff);
     dcheck_matmul(be_, L.w_down, c_.n_ff, E, "ffn_down");
     be_.matmul(L.w_down, gate_, h_, n);
+    dcheck_count(n * E, n, c_.n_embd, "add ffn residual");
     be_.add(x_, h_, n * E);
   }
 }
