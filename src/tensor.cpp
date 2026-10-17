@@ -29,7 +29,9 @@ const char* ggml_type_name(uint32_t t) {
 
 int64_t Tensor::row_bytes() const {
   const DTypeInfo& i = dtype_info(type);
-  return ne[0] / i.block_size * i.block_bytes;
+  int64_t out;
+  if (__builtin_mul_overflow(ne[0] / i.block_size, i.block_bytes, &out)) throw Error("row byte size overflows");
+  return out;
 }
 
 }  // namespace nibble

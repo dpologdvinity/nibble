@@ -198,6 +198,8 @@ TEST_CASE("gguf tensor shape rejects", "[gguf]") {
   }
   SECTION("element overflow") { expect_error(one_tensor(DType::F32, {1ll << 62, 4}, 16)); }
   SECTION("dim above int64") { expect_error(one_tensor(DType::F32, {-1}, 16)); }
+  SECTION("row bytes wrap 2^62") { expect_error(one_tensor(DType::F32, {1ll << 62}, 16)); }
+  SECTION("row bytes wrap 2^62+1") { expect_error(one_tensor(DType::F32, {(1ll << 62) + 1}, 16)); }
   SECTION("byte overflow") { expect_error(one_tensor(DType::F32, {1ll << 61}, 16)); }
 }
 
@@ -219,7 +221,8 @@ TEST_CASE("gguf tensor placement rejects", "[gguf]") {
 
 TEST_CASE("gguf unsupported tensor type names the type", "[gguf]") {
   auto b = one_tensor(static_cast<DType>(12), {256}, 144);
-  REQUIRE_THROWS_WITH(File::parse(b), ContainsSubstring("Q4_K") && ContainsSubstring("w"));
+  REQUIRE_THROWS_WITH(File::parse(b), ContainsSubstring("Q4_K") && ContainsSubstring("w") &&
+                                         ContainsSubstring("llama-quantize"));
 }
 
 TEST_CASE("gguf typed getters", "[gguf]") {
@@ -247,4 +250,21 @@ TEST_CASE("gguf open from disk", "[gguf]") {
   std::ofstream("test_gguf_empty.tmp.gguf").close();
   REQUIRE_THROWS_AS(File::open("test_gguf_empty.tmp.gguf"), nibble::Error);
   std::remove("test_gguf_empty.tmp.gguf");
+}
+
+TEST_CASE("gguf scalar bool", "[gguf]") {
+  GgufWriter w;
+  w.add_int("flag", ValueType::Bool, 1);
+  w.add_int("flag0", ValueType::Bool, 0);
+  auto b = w.build();
+  File f = File::parse(b);
+  REQUIRE(std::get<bool>(*f.find("flag")) == true);
+  REQUIRE(std::get<bool>(*f.find("flag0")) == false);
+  REQUIRE_THROWS_AS(f.get_int("flag"), nibble::Error);
+}
+
+TEST_CASE("gguf bool alignment rejected", "[gguf]") {
+  GgufWriter w;
+  w.add_int("general.alignment", ValueType::Bool, 1);
+  expect_error(w.build());
 }

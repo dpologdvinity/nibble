@@ -120,7 +120,8 @@ Value read_value(Reader& r, ValueType t, const std::string& key) {
   bool is_float;
   read_scalar(r, t, key, i, f, is_float);
   if (is_float) return f;
-  return i;  // Bool is also stored as int64_t
+  if (t == ValueType::Bool) return i != 0;
+  return i;
 }
 
 uint64_t align_up(uint64_t v, uint64_t a, const char* what) {
@@ -205,8 +206,9 @@ File File::parse(std::span<const uint8_t> bytes) {
     switch (ggml_type) {
       case 0: case 1: case 2: case 8: ti.tensor.type = static_cast<DType>(ggml_type); break;
       default:
-        throw Error("gguf: tensor '" + name + "' has unsupported type " + ggml_type_name(ggml_type) + " (" +
-                    std::to_string(ggml_type) + "); supported: F32, F16, Q4_0, Q8_0");
+        throw Error("gguf: unsupported tensor type " + std::string(ggml_type_name(ggml_type)) + " (" +
+                    std::to_string(ggml_type) + ") for " + name +
+                    " \xe2\x80\x94 v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize");
     }
     const DTypeInfo& info = dtype_info(ti.tensor.type);
     if (ti.tensor.ne[0] % info.block_size != 0) {
@@ -219,7 +221,12 @@ File File::parse(std::span<const uint8_t> bytes) {
         throw Error("gguf: tensor '" + name + "' element count overflows");
       }
     }
-    uint64_t row_bytes = static_cast<uint64_t>(ti.tensor.ne[0] / info.block_size) * static_cast<uint64_t>(info.block_bytes);
+    uint64_t row_bytes;
+    if (__builtin_mul_overflow(static_cast<uint64_t>(ti.tensor.ne[0] / info.block_size),
+                               static_cast<uint64_t>(info.block_bytes), &row_bytes) ||
+        row_bytes > kMaxI64) {
+      throw Error("gguf: tensor '" + name + "' row byte size overflows");
+    }
     uint64_t rows = static_cast<uint64_t>(ti.tensor.ne[1]) * static_cast<uint64_t>(ti.tensor.ne[2]) *
                     static_cast<uint64_t>(ti.tensor.ne[3]);  // <= elems, no overflow
     if (__builtin_mul_overflow(row_bytes, rows, &ti.nbytes) || ti.nbytes > kMaxI64) {
