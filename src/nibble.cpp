@@ -1,6 +1,7 @@
 #include "nibble/nibble.h"
 
 #include <algorithm>
+#include <new>
 #include <span>
 #include <thread>
 #include <vector>
@@ -49,7 +50,11 @@ Model::~Model() = default;
 
 Model Model::load(const std::string& path, ModelParams p) {
   Model m;
-  m.impl_ = std::make_unique<Impl>(path, p);
+  try {
+    m.impl_ = std::make_unique<Impl>(path, p);
+  } catch (const std::bad_alloc&) {
+    throw Error("out of memory loading " + path);
+  }
   return m;
 }
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 
 #include "nibble/error.h"
 
@@ -26,6 +27,17 @@ class Reader {
     std::memcpy(&v, bytes_.data() + pos_, sizeof v);  // little-endian host assumed
     pos_ += sizeof v;
     return v;
+  }
+
+  const uint8_t* here() const { return bytes_.data() + pos_; }
+  void skip(size_t n) { pos_ += n; }  // caller checked n <= remaining()
+  std::span<const uint8_t> span_from(size_t start) const { return bytes_.subspan(start, pos_ - start); }
+  void skip_string(const char* what) {
+    uint64_t len = read<uint64_t>(what);
+    if (len > remaining()) {
+      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " + what);
+    }
+    pos_ += static_cast<size_t>(len);
   }
 
   std::string read_string(const char* what) {
@@ -89,33 +101,56 @@ void read_scalar(Reader& r, ValueType t, const std::string& key, int64_t& i, dou
   }
 }
 
-Value read_value(Reader& r, ValueType t, const std::string& key) {
-  if (t == ValueType::String) return r.read_string("string value");
-  if (t == ValueType::Array) {
-    Array a;
-    a.elem_type = read_value_type(r, key);
-    if (a.elem_type == ValueType::Array) throw Error("gguf: key '" + key + "' is a nested array (unsupported)");
-    uint64_t count = r.read<uint64_t>("array count");
-    uint64_t min_elem = a.elem_type == ValueType::String ? 8 : scalar_size(a.elem_type);
-    uint64_t need;
-    if (__builtin_mul_overflow(count, min_elem, &need) || need > r.remaining()) {
-      throw Error("gguf: key '" + key + "' array count " + std::to_string(count) + " exceeds file size");
+}  // namespace
+
+// Arrays are recorded as views into the file bytes (no per-element decode or
+// allocation beyond one 8-byte offset per string element), so memory stays
+// bounded by the file size even for adversarial element counts.
+struct detail::ArrayAccess {
+  static Array read(Reader& r, const std::string& key);
+};
+
+Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
+  Array a;
+  a.elem_type_ = read_value_type(r, key);
+  if (a.elem_type_ == ValueType::Array) throw Error("gguf: key '" + key + "' is a nested array (unsupported)");
+  uint64_t count = r.read<uint64_t>("array count");
+  uint64_t min_elem = a.elem_type_ == ValueType::String ? 8 : scalar_size(a.elem_type_);
+  uint64_t need;
+  if (__builtin_mul_overflow(count, min_elem, &need) || need > r.remaining()) {
+    throw Error("gguf: key '" + key + "' array count " + std::to_string(count) + " exceeds file size");
+  }
+  const size_t n = static_cast<size_t>(count);
+  a.count_ = n;
+  const size_t start = r.pos();
+  if (a.elem_type_ == ValueType::String) {
+    a.str_off_.reserve(n);  // n * 8 <= remaining bytes (checked above)
+    for (size_t k = 0; k < n; ++k) {
+      a.str_off_.push_back(r.pos() - start);
+      r.skip_string("array string");
     }
-    const size_t n = static_cast<size_t>(count);
-    if (a.elem_type == ValueType::String) {
-      a.str.reserve(std::min<uint64_t>(n, 4096));  // count is untrusted; grow naturally beyond
-      for (size_t k = 0; k < n; ++k) a.str.push_back(r.read_string("array string"));
-    } else {
+  } else {
+    if (a.elem_type_ == ValueType::U64) {  // keep the int64 contract of int_at()
       for (size_t k = 0; k < n; ++k) {
-        int64_t i = 0;
-        double f = 0;
-        bool is_float;
-        read_scalar(r, a.elem_type, key, i, f, is_float);
-        if (is_float) a.f.push_back(f); else a.i.push_back(i);
+        uint64_t v;
+        std::memcpy(&v, r.here() + k * 8, 8);
+        if (v > kMaxI64) {
+          throw Error("gguf: key '" + key + "' u64 element " + std::to_string(k) + " value " + std::to_string(v) +
+                      " exceeds int64 range");
+        }
       }
     }
-    return a;
+    r.skip(static_cast<size_t>(need));
   }
+  a.data_ = r.span_from(start);
+  return a;
+}
+
+namespace {
+
+Value read_value(Reader& r, ValueType t, const std::string& key) {
+  if (t == ValueType::String) return r.read_string("string value");
+  if (t == ValueType::Array) return detail::ArrayAccess::read(r, key);
   int64_t i = 0;
   double f = 0;
   bool is_float;
@@ -144,13 +179,25 @@ const char* type_label(const Value& v) {
 }  // namespace
 
 File File::open(const std::string& path) {
-  MappedFile m = MappedFile::open(path);
-  File f = parse(m.bytes());
-  f.map_ = std::move(m);
-  return f;
+  try {
+    MappedFile m = MappedFile::open(path);
+    File f = parse_impl(m.bytes());
+    f.map_ = std::move(m);  // moves the handle; the mapping address (and every view into it) is unchanged
+    return f;
+  } catch (const std::bad_alloc&) {
+    throw Error("out of memory loading " + path);
+  }
 }
 
 File File::parse(std::span<const uint8_t> bytes) {
+  try {
+    return parse_impl(bytes);
+  } catch (const std::bad_alloc&) {
+    throw Error("out of memory loading GGUF data");
+  }
+}
+
+File File::parse_impl(std::span<const uint8_t> bytes) {
   Reader r(bytes);
   File f;
 
@@ -294,6 +341,49 @@ const Array& File::get_array(std::string_view key) const {
   const Value& v = require(*this, key);
   if (auto* p = std::get_if<Array>(&v)) return *p;
   wrong_type(key, "array", v);
+}
+
+namespace {
+[[noreturn]] void bad_access(const char* want, ValueType have, size_t i, size_t n) {
+  throw Error(std::string("gguf: array access ") + want + "_at(" + std::to_string(i) + ") on array of type " +
+              std::to_string(static_cast<uint32_t>(have)) + " with " + std::to_string(n) + " elements");
+}
+template <class T>
+T load(const uint8_t* p) {
+  T v;
+  std::memcpy(&v, p, sizeof v);  // little-endian host assumed; no alignment requirement
+  return v;
+}
+}  // namespace
+
+int64_t Array::int_at(size_t i) const {
+  if (!is_int() || i >= count_) bad_access("int", elem_type_, i, count_);
+  const uint8_t* p = data_.data();
+  switch (elem_type_) {
+    case ValueType::U8: return load<uint8_t>(p + i);
+    case ValueType::I8: return load<int8_t>(p + i);
+    case ValueType::Bool: return load<uint8_t>(p + i) != 0;
+    case ValueType::U16: return load<uint16_t>(p + 2 * i);
+    case ValueType::I16: return load<int16_t>(p + 2 * i);
+    case ValueType::U32: return load<uint32_t>(p + 4 * i);
+    case ValueType::I32: return load<int32_t>(p + 4 * i);
+    case ValueType::U64: return static_cast<int64_t>(load<uint64_t>(p + 8 * i));  // range-checked at parse
+    case ValueType::I64: return load<int64_t>(p + 8 * i);
+    default: bad_access("int", elem_type_, i, count_);
+  }
+}
+
+double Array::float_at(size_t i) const {
+  if (!is_float() || i >= count_) bad_access("float", elem_type_, i, count_);
+  if (elem_type_ == ValueType::F32) return load<float>(data_.data() + 4 * i);
+  return load<double>(data_.data() + 8 * i);
+}
+
+std::string_view Array::str_at(size_t i) const {
+  if (!is_string() || i >= count_) bad_access("str", elem_type_, i, count_);
+  const uint8_t* p = data_.data() + str_off_[i];
+  const uint64_t len = load<uint64_t>(p);  // bounds validated at parse
+  return {reinterpret_cast<const char*>(p + 8), static_cast<size_t>(len)};
 }
 
 const TensorInfo* File::find_tensor(std::string_view name) const {

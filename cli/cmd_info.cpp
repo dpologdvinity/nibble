@@ -42,22 +42,13 @@ std::string fmt_double(double d) {
 std::string fmt_array(const gguf::Array& a) {
   constexpr size_t kShow = 3;
   std::string out;
-  size_t count = 0;
-  auto join = [&](const auto& v, auto&& to_s) {
-    count = v.size();
-    for (size_t k = 0; k < v.size() && k < kShow; ++k) {
-      if (k) out += ", ";
-      out += to_s(v[k]);
-    }
-  };
-  if (a.elem_type == ValueType::String) {
-    join(a.str, [](const std::string& s) { return "\"" + s + "\""; });
-  } else if (a.elem_type == ValueType::F32 || a.elem_type == ValueType::F64) {
-    join(a.f, [](double d) { return fmt_double(d); });
-  } else {
-    join(a.i, [](int64_t x) { return std::to_string(x); });
+  for (size_t k = 0; k < a.size() && k < kShow; ++k) {
+    if (k) out += ", ";
+    if (a.is_string()) out += "\"" + std::string(a.str_at(k)) + "\"";
+    else if (a.is_float()) out += fmt_double(a.float_at(k));
+    else out += std::to_string(a.int_at(k));
   }
-  return std::string("[") + value_type_name(a.elem_type) + " x " + std::to_string(count) + "] " + out + "...";
+  return std::string("[") + value_type_name(a.elem_type()) + " x " + std::to_string(a.size()) + "] " + out + "...";
 }
 
 std::string fmt_value(const gguf::Value& v) {

@@ -37,30 +37,29 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   const auto& toks = f.get_array("tokenizer.ggml.tokens");
   const auto& types = f.get_array("tokenizer.ggml.token_type");
   const auto& merges = f.get_array("tokenizer.ggml.merges");
-  if (toks.elem_type != gguf::ValueType::String) throw Error("tokenizer.ggml.tokens is not a string array");
-  if (merges.elem_type != gguf::ValueType::String) throw Error("tokenizer.ggml.merges is not a string array");
-  if (types.elem_type == gguf::ValueType::String || types.elem_type == gguf::ValueType::F32 ||
-      types.elem_type == gguf::ValueType::F64)
-    throw Error("tokenizer.ggml.token_type is not an integer array");
-  if (types.i.size() != toks.str.size())
-    throw Error("tokenizer.ggml.token_type length " + std::to_string(types.i.size()) +
-                " != tokens length " + std::to_string(toks.str.size()));
-  if (toks.str.empty() || toks.str.size() > INT32_MAX) throw Error("bad tokenizer vocab size " + std::to_string(toks.str.size()));
+  if (!toks.is_string()) throw Error("tokenizer.ggml.tokens is not a string array");
+  if (!merges.is_string()) throw Error("tokenizer.ggml.merges is not a string array");
+  if (!types.is_int()) throw Error("tokenizer.ggml.token_type is not an integer array");
+  if (types.size() != toks.size())
+    throw Error("tokenizer.ggml.token_type length " + std::to_string(types.size()) +
+                " != tokens length " + std::to_string(toks.size()));
+  if (toks.empty() || toks.size() > INT32_MAX) throw Error("bad tokenizer vocab size " + std::to_string(toks.size()));
 
   Tokenizer t;
-  t.tokens_ = toks.str;
-  t.types_.reserve(types.i.size());
-  for (size_t k = 0; k < types.i.size(); ++k) {
-    int64_t v = types.i[k];
+  t.tokens_.reserve(toks.size());
+  for (size_t k = 0; k < toks.size(); ++k) t.tokens_.emplace_back(toks.str_at(k));
+  t.types_.reserve(types.size());
+  for (size_t k = 0; k < types.size(); ++k) {
+    int64_t v = types.int_at(k);
     if (v < 1 || v > 6) throw Error("bad token_type " + std::to_string(v) + " at token " + std::to_string(k));
     t.types_.push_back(static_cast<TokenType>(v));
   }
   t.ids_.reserve(t.tokens_.size());
   for (size_t k = 0; k < t.tokens_.size(); ++k) t.ids_.emplace(t.tokens_[k], static_cast<int32_t>(k));  // first wins
 
-  t.ranks_.reserve(merges.str.size());
-  for (size_t k = 0; k < merges.str.size(); ++k) {
-    const std::string& m = merges.str[k];
+  t.ranks_.reserve(merges.size());
+  for (size_t k = 0; k < merges.size(); ++k) {
+    const std::string m(merges.str_at(k));
     size_t sp = m.find(' ', 1);  // same as llama.cpp: first space after position 0
     if (sp == std::string::npos) throw Error("malformed merge (no space): '" + m + "'");
     for (const std::string& part : {m.substr(0, sp), m.substr(sp + 1)})

@@ -40,6 +40,12 @@ target_link_libraries(nibble_tests PRIVATE nibble Catch2::Catch2WithMain)
 catch_discover_tests(nibble_tests TEST_SPEC "~[e2e]")
 catch_discover_tests(nibble_tests TEST_SPEC "[e2e]" EXTRA_ARGS --allow-running-no-tests TEST_SUFFIX " [e2e]" PROPERTIES LABELS e2e)
 
+# Separate binary: replaces global operator new/delete with a counting hook.
+add_executable(nibble_alloc_tests tests/alloc_tests.cpp)
+target_include_directories(nibble_alloc_tests PRIVATE include src tests)
+target_link_libraries(nibble_alloc_tests PRIVATE nibble Catch2::Catch2WithMain)
+catch_discover_tests(nibble_alloc_tests)
+
 option(NIBBLE_FUZZ "Build libFuzzer targets (requires clang)" OFF)
 if(NIBBLE_FUZZ)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -98,6 +104,25 @@ set_tests_properties(cli_run_huge_ctx PROPERTIES PASS_REGULAR_EXPRESSION "error:
 add_test(NAME cli_run_huge_ctx_exit1
   COMMAND sh -c "\"$0\" run -m \"$1\" -p hello -c 1000000000000 >/dev/null 2>&1; test $? -eq 1"
           $<TARGET_FILE:nibble_cli> ${NIBBLE_TINY})
+endif()
+# A 50 MB u8-array GGUF must not amplify into hundreds of MB: nibble info under a
+# ~300 MB address-space limit exits 0 (or 1 with a translated "error:", not a raw
+# std::bad_alloc), never aborts.
+# Skipped under sanitizers: ASan reserves far more virtual memory than the limit.
+if(NOT NIBBLE_SANITIZE)
+set(NIBBLE_BIG_U8 ${CMAKE_BINARY_DIR}/tests/data/big_u8.tmp.gguf)
+add_test(NAME cli_info_big_u8_gen COMMAND make_test_gguf --big-u8 ${NIBBLE_BIG_U8} 50000000)
+set_tests_properties(cli_info_big_u8_gen PROPERTIES FIXTURES_SETUP big_u8)
+add_test(NAME cli_info_big_u8_ulimit
+  COMMAND sh -c "ulimit -v 300000; err=$(\"$0\" info \"$1\" 2>&1 >/dev/null); rc=$?; \
+if [ $rc -eq 0 ]; then exit 0; fi; \
+if [ $rc -eq 1 ] && printf '%s' \"$err\" | grep -q '^error:' && \
+   ! printf '%s' \"$err\" | grep -q 'bad_alloc'; then exit 0; fi; \
+echo \"unexpected exit $rc: $err\"; exit 1"
+          $<TARGET_FILE:nibble_cli> ${NIBBLE_BIG_U8})
+set_tests_properties(cli_info_big_u8_ulimit PROPERTIES FIXTURES_REQUIRED big_u8)
+add_test(NAME cli_info_big_u8_clean COMMAND ${CMAKE_COMMAND} -E rm -f ${NIBBLE_BIG_U8})
+set_tests_properties(cli_info_big_u8_clean PROPERTIES FIXTURES_CLEANUP big_u8)
 endif()
 add_test(NAME cli_run_bad_number COMMAND nibble run -m ${NIBBLE_TINY} -p hi -n abc)
 set_tests_properties(cli_run_bad_number PROPERTIES PASS_REGULAR_EXPRESSION "usage: nibble run")

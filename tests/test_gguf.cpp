@@ -1,4 +1,6 @@
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 
 #include <catch2/catch_test_macros.hpp>
@@ -30,8 +32,20 @@ TEST_CASE("gguf valid file", "[gguf]") {
   REQUIRE(f.get_string("general.architecture") == "qwen2");
   REQUIRE(f.get_int("qwen2.block_count") == 24);
   REQUIRE(f.get_float("qwen2.rope.freq_base") == 10000.0);
-  REQUIRE(f.get_array("tokenizer.ggml.tokens").str == std::vector<std::string>{"a", "bc"});
-  REQUIRE(f.get_array("tokenizer.ggml.token_type").i == std::vector<int64_t>{1, 3, -2});
+  const auto& toks = f.get_array("tokenizer.ggml.tokens");
+  REQUIRE(toks.is_string());
+  REQUIRE(toks.size() == 2);
+  REQUIRE(toks.str_at(0) == "a");
+  REQUIRE(toks.str_at(1) == "bc");
+  REQUIRE_THROWS_AS(toks.str_at(2), nibble::Error);
+  REQUIRE_THROWS_AS(toks.int_at(0), nibble::Error);
+  const auto& types = f.get_array("tokenizer.ggml.token_type");
+  REQUIRE(types.elem_type() == nibble::gguf::ValueType::I32);
+  REQUIRE(types.size() == 3);
+  REQUIRE(types.int_at(0) == 1);
+  REQUIRE(types.int_at(1) == 3);
+  REQUIRE(types.int_at(2) == -2);
+  REQUIRE_THROWS_AS(types.float_at(0), nibble::Error);
   REQUIRE(f.find("nope") == nullptr);
   REQUIRE(f.metadata().size() == 5);
   REQUIRE(f.metadata()[0].first == "general.architecture");
@@ -242,7 +256,10 @@ TEST_CASE("gguf open from disk", "[gguf]") {
     o.write(reinterpret_cast<const char*>(b.data()), static_cast<std::streamsize>(b.size()));
   }
   File f = File::open(path);
-  File g = std::move(f);  // tensor pointers stay valid across moves
+  const char* tok_before = f.get_array("tokenizer.ggml.tokens").str_at(1).data();
+  File g = std::move(f);  // tensor pointers and array views stay valid across moves
+  REQUIRE(g.get_array("tokenizer.ggml.tokens").str_at(1).data() == tok_before);
+  REQUIRE(g.get_array("tokenizer.ggml.tokens").str_at(1) == "bc");
   REQUIRE(g.find_tensor("w") != nullptr);
   REQUIRE(static_cast<const uint8_t*>(g.find_tensor("w")->tensor.data)[383] == 0x5A);
   std::remove(path.c_str());
@@ -277,4 +294,69 @@ TEST_CASE("gguf huge kv count within remaining/12 bound is capped", "[gguf]") {
   put64(kN);
   b.resize(b.size() + kN * 12, 0);
   CHECK_THROWS_AS(File::parse(b), Error);
+}
+
+namespace {
+template <class T>
+std::vector<uint8_t> raw_array_kv(const std::string& key, ValueType t, std::vector<T> v) {
+  std::vector<uint8_t> b;
+  GgufWriter::put_str(b, key);
+  GgufWriter::put_u32(b, static_cast<uint32_t>(ValueType::Array));
+  GgufWriter::put_u32(b, static_cast<uint32_t>(t));
+  GgufWriter::put_u64(b, v.size());
+  for (T x : v) {
+    const size_t n = b.size();
+    b.resize(n + sizeof x);
+    std::memcpy(b.data() + n, &x, sizeof x);
+  }
+  return b;
+}
+}  // namespace
+
+TEST_CASE("gguf array elements decode on demand for every type", "[gguf]") {
+  GgufWriter w;
+  w.add_raw_kv(raw_array_kv<uint8_t>("u8", ValueType::U8, {0, 255}));
+  w.add_raw_kv(raw_array_kv<int8_t>("i8", ValueType::I8, {-128, 127}));
+  w.add_raw_kv(raw_array_kv<uint16_t>("u16", ValueType::U16, {1, 65535}));
+  w.add_raw_kv(raw_array_kv<int16_t>("i16", ValueType::I16, {-32768, 5}));
+  w.add_raw_kv(raw_array_kv<uint32_t>("u32", ValueType::U32, {7, 4294967295u}));
+  w.add_raw_kv(raw_array_kv<int32_t>("i32", ValueType::I32, {-1, 2}));
+  w.add_raw_kv(raw_array_kv<uint64_t>("u64", ValueType::U64, {3, uint64_t{INT64_MAX}}));
+  w.add_raw_kv(raw_array_kv<int64_t>("i64", ValueType::I64, {INT64_MIN, 9}));
+  w.add_raw_kv(raw_array_kv<uint8_t>("bool", ValueType::Bool, {0, 2}));
+  w.add_raw_kv(raw_array_kv<float>("f32", ValueType::F32, {1.5f, -2.0f}));
+  w.add_raw_kv(raw_array_kv<double>("f64", ValueType::F64, {0.25, 1e300}));
+  w.add_raw_kv(raw_array_kv<uint8_t>("empty", ValueType::U8, {}));
+  auto b = w.build();
+  File f = File::parse(b);
+  auto ints = [&](const char* k) {
+    const auto& a = f.get_array(k);
+    REQUIRE(a.is_int());
+    REQUIRE(a.size() == 2);
+    return std::pair{a.int_at(0), a.int_at(1)};
+  };
+  CHECK(ints("u8") == std::pair<int64_t, int64_t>{0, 255});
+  CHECK(ints("i8") == std::pair<int64_t, int64_t>{-128, 127});
+  CHECK(ints("u16") == std::pair<int64_t, int64_t>{1, 65535});
+  CHECK(ints("i16") == std::pair<int64_t, int64_t>{-32768, 5});
+  CHECK(ints("u32") == std::pair<int64_t, int64_t>{7, 4294967295});
+  CHECK(ints("i32") == std::pair<int64_t, int64_t>{-1, 2});
+  CHECK(ints("u64") == std::pair<int64_t, int64_t>{3, INT64_MAX});
+  CHECK(ints("i64") == std::pair<int64_t, int64_t>{INT64_MIN, 9});
+  CHECK(ints("bool") == std::pair<int64_t, int64_t>{0, 1});
+  const auto& f32 = f.get_array("f32");
+  REQUIRE(f32.is_float());
+  CHECK(f32.float_at(0) == 1.5);
+  CHECK(f32.float_at(1) == -2.0);
+  CHECK(f.get_array("f64").float_at(1) == 1e300);
+  CHECK_THROWS_AS(f32.int_at(0), Error);
+  CHECK_THROWS_AS(f32.float_at(2), Error);
+  CHECK(f.get_array("empty").empty());
+  CHECK_THROWS_AS(f.get_array("empty").int_at(0), Error);
+}
+
+TEST_CASE("gguf u64 array element above INT64_MAX rejected", "[gguf]") {
+  GgufWriter w;
+  w.add_raw_kv(raw_array_kv<uint64_t>("big", ValueType::U64, {1, uint64_t{INT64_MAX} + 1}));
+  REQUIRE_THROWS_WITH(File::parse(w.build()), ContainsSubstring("9223372036854775808"));
 }
