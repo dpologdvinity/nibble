@@ -21,6 +21,9 @@ int main(int argc, char** argv) {
   } catch (const nibble::Error& e) {
     std::fprintf(stderr, "error: %s\n", e.what());
     return 1;
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "error: %s\n", e.what());
+    return 1;
   }
   std::fprintf(stderr, "error: unknown subcommand '%s'\n", argv[1]);
   usage();

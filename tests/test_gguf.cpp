@@ -268,3 +268,13 @@ TEST_CASE("gguf bool alignment rejected", "[gguf]") {
   w.add_int("general.alignment", ValueType::Bool, 1);
   expect_error(w.build());
 }
+
+TEST_CASE("gguf huge kv count within remaining/12 bound is capped", "[gguf]") {
+  constexpr uint64_t kN = 2'000'000;  // claims 2M kvs; file is just zero bytes
+  std::vector<uint8_t> b = {'G', 'G', 'U', 'F', 3, 0, 0, 0};
+  auto put64 = [&](uint64_t v) { for (int i = 0; i < 8; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i))); };
+  put64(0);
+  put64(kN);
+  b.resize(b.size() + kN * 12, 0);
+  CHECK_THROWS_AS(File::parse(b), Error);
+}

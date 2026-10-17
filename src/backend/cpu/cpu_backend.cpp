@@ -1,18 +1,31 @@
 #include "backend/cpu/cpu_backend.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <cstring>
 #include <new>
 
 #include "backend/cpu/ref_ops.h"
+#include "nibble/error.h"
 
 namespace nibble::cpu {
 
 CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool) {}
 
 void CpuBackend::reserve(int64_t n_ctx, int64_t n_heads) {
-  const size_t need = static_cast<size_t>(n_ctx * n_heads);
-  if (scratch_.size() < need) scratch_.resize(need);
+  uint64_t need;
+  if (n_ctx < 0 || n_heads < 0 || __builtin_mul_overflow(static_cast<uint64_t>(n_ctx), static_cast<uint64_t>(n_heads), &need) ||
+      need > std::numeric_limits<size_t>::max() / sizeof(float))
+    throw Error("reserve: attention scratch for n_ctx=" + std::to_string(n_ctx) + " n_heads=" + std::to_string(n_heads) +
+                " is too large");
+  if (scratch_.size() < need) {
+    try {
+      scratch_.resize(static_cast<size_t>(need));
+    } catch (const std::exception&) {
+      throw Error("reserve: cannot allocate " + std::to_string(need * sizeof(float)) + " bytes of attention scratch");
+    }
+  }
 }
 
 CpuBackend::~CpuBackend() {
@@ -20,19 +33,31 @@ CpuBackend::~CpuBackend() {
 }
 
 float* CpuBackend::alloc(int64_t n_floats) {
-  if (n_floats < 0) throw std::bad_alloc();
-  size_t bytes = (static_cast<size_t>(n_floats) * sizeof(float) + 63) & ~size_t{63};
+  if (n_floats < 0) throw Error("alloc: negative size " + std::to_string(n_floats) + " floats");
+  uint64_t bytes;
+  if (__builtin_mul_overflow(static_cast<uint64_t>(n_floats), uint64_t{sizeof(float)}, &bytes) ||
+      __builtin_add_overflow(bytes, uint64_t{63}, &bytes))
+    throw Error("alloc: size of " + std::to_string(n_floats) + " floats overflows");
+  bytes &= ~uint64_t{63};
   if (bytes == 0) bytes = 64;
-  void* p = std::aligned_alloc(64, bytes);
-  if (!p) throw std::bad_alloc();
-  std::memset(p, 0, bytes);
+  void* p = std::aligned_alloc(64, static_cast<size_t>(bytes));
+  if (!p) throw Error("alloc: cannot allocate " + std::to_string(bytes) + " bytes");
+  std::memset(p, 0, static_cast<size_t>(bytes));
   try {
     allocs_.push_back(p);
-  } catch (...) {
+  } catch (const std::exception&) {
     std::free(p);
-    throw;
+    throw Error("alloc: out of memory tracking allocation of " + std::to_string(bytes) + " bytes");
   }
   return static_cast<float*>(p);
+}
+
+void CpuBackend::free(float* p) {
+  if (!p) return;
+  auto it = std::find(allocs_.begin(), allocs_.end(), static_cast<void*>(p));
+  if (it == allocs_.end()) return;  // precondition violation; ignore rather than double free
+  std::free(*it);
+  allocs_.erase(it);
 }
 
 void CpuBackend::read(float* host_dst, const float* src, int64_t n) {

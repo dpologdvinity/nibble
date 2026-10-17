@@ -1,5 +1,6 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <filesystem>
 #include <fstream>
 
@@ -94,4 +95,24 @@ TEST_CASE("api: model is movable", "[api]") {
   Model b = std::move(a);
   Session s(b);
   CHECK(s.generate("abc", {.max_tokens = 2}, [](std::string_view) { return true; }) == StopReason::MaxTokens);
+}
+
+TEST_CASE("api: vocab size mismatch rejected at load", "[api]") {
+  for (int64_t d : {int64_t{1}, int64_t{-1}}) {
+    TinyModelOpts mo;
+    mo.vocab_delta = d;
+    TmpModel f(tiny_model_gguf(1, nibble::DType::F32, false, 259, mo));
+    CHECK_THROWS_WITH(Model::load(f.path.string(), {.n_threads = 1}),
+                      Catch::Matchers::ContainsSubstring("tokenizer has 261 tokens but token_embd.weight has " +
+                                                         std::to_string(261 + d) + " rows"));
+  }
+}
+
+TEST_CASE("api: huge n_ctx throws Error", "[api]") {
+#ifdef __SANITIZE_ADDRESS__  // ASan aborts on multi-TB allocations instead of failing them
+  SKIP("multi-TB allocation aborts under ASan");
+#endif
+  TmpModel f(tiny_model_gguf(1));
+  Model m = Model::load(f.path.string(), {.n_ctx = 1000000000000LL, .n_threads = 1});
+  CHECK_THROWS_WITH(Session(m), Catch::Matchers::ContainsSubstring("n_ctx"));
 }

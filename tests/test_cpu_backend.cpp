@@ -6,6 +6,7 @@
 #include "backend/cpu/cpu_backend.h"
 #include "backend/cpu/ref_ops.h"
 #include "fp16.h"
+#include "nibble/error.h"
 
 using namespace nibble;
 
@@ -85,4 +86,28 @@ TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
     be.attention(q.data(), k.data(), v.data(), out, 1, pos, H, KV, D);
     REQUIRE(be.scratch_capacity() == cap);
   }
+}
+
+TEST_CASE("cpu backend free releases allocation", "[cpu_backend]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  const size_t base = be.live_allocations();
+  float* a = be.alloc(100);
+  float* b = be.alloc(200);
+  REQUIRE(be.live_allocations() == base + 2);
+  be.free(a);
+  REQUIRE(be.live_allocations() == base + 1);
+  be.free(nullptr);
+  REQUIRE(be.live_allocations() == base + 1);
+  be.free(b);
+  REQUIRE(be.live_allocations() == base);
+}
+
+TEST_CASE("cpu backend alloc rejects bad sizes", "[cpu_backend]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  CHECK_THROWS_AS(be.alloc(-1), Error);
+  CHECK_THROWS_AS(be.alloc(INT64_MAX / 2), Error);
+  CHECK_THROWS_AS(be.alloc(INT64_MAX), Error);
+  CHECK(be.live_allocations() == 0);
 }

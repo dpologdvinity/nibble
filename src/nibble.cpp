@@ -34,6 +34,9 @@ struct Model::Impl {
         backend(pool),
         weights(model::Weights::bind(file, cfg, backend)),
         n_ctx(p.n_ctx > 0 ? p.n_ctx : std::min<int64_t>(4096, cfg.n_ctx_train)) {
+    if (tokenizer.n_vocab() != cfg.n_vocab)
+      throw Error("tokenizer has " + std::to_string(tokenizer.n_vocab()) + " tokens but token_embd.weight has " +
+                  std::to_string(cfg.n_vocab) + " rows");
     if (p.n_ctx < 0) throw Error("n_ctx must be non-negative, got " + std::to_string(p.n_ctx));
     if (n_ctx <= 0) throw Error("invalid context length " + std::to_string(n_ctx));
   }

@@ -21,7 +21,12 @@ class Backend {
   // Called once by the model before generation. Afterwards, ops with pos0 + n <= n_ctx and
   // n_heads <= the reserved head count must not allocate.
   virtual void reserve(int64_t n_ctx, int64_t n_heads) = 0;
-  virtual float* alloc(int64_t n_floats) = 0;  // owned by backend, freed in destructor
+  // Throws nibble::Error if n_floats < 0 or the allocation fails. Memory is zeroed.
+  virtual float* alloc(int64_t n_floats) = 0;
+  // Releases a block from alloc(). free(nullptr) is a no-op; freeing a pointer this
+  // backend did not allocate (or freeing twice) is a precondition violation. Blocks not
+  // freed are released when the backend is destroyed.
+  virtual void free(float* p) = 0;
   virtual void read(float* host_dst, const float* src, int64_t n) = 0;
   virtual void embed(const Tensor& table, std::span<const int32_t> ids, float* out) = 0;  // out[n, ne0]
   virtual void matmul(const Tensor& w, const float* x, float* y, int64_t n) = 0;  // y[n, w.ne1] = x[n, w.ne0] . W^T

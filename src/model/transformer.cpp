@@ -1,6 +1,8 @@
 #include "model/transformer.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <string>
 
 #include "nibble/error.h"
 
@@ -9,21 +11,63 @@ namespace nibble::model {
 Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, int64_t n_ctx, int64_t max_batch)
     : c_(c), w_(w), be_(be), n_ctx_(n_ctx), max_batch_(max_batch) {
   if (n_ctx <= 0 || max_batch <= 0) throw Error("n_ctx and max_batch must be positive");
-  be.reserve(n_ctx, c.n_heads);
-  const int64_t kv = n_ctx * c.n_kv_heads * c.head_dim, B = max_batch, E = c.n_embd;
-  for (int64_t i = 0; i < c.n_layers; ++i) {
-    k_.push_back(be.alloc(kv));
-    v_.push_back(be.alloc(kv));
+  try {
+    be.reserve(n_ctx, c.n_heads);
+  } catch (const Error& e) {
+    throw Error(std::string("cannot allocate attention scratch for n_ctx=") + std::to_string(n_ctx) +
+                "; try a smaller n_ctx (-c): " + e.what());
   }
-  x_ = be.alloc(B * E);
-  h_ = be.alloc(B * E);
-  q_ = be.alloc(B * c.n_heads * c.head_dim);
-  attn_ = be.alloc(B * c.n_heads * c.head_dim);
-  gate_ = be.alloc(B * c.n_ff);
-  up_ = be.alloc(B * c.n_ff);
-  last_ = be.alloc(E);
-  logits_ = be.alloc(c.n_vocab);
+  const int64_t B = max_batch, E = c.n_embd;
+  // KV cache size with overflow checks; spec 6.2 message on failure.
+  uint64_t kv_floats = static_cast<uint64_t>(n_ctx), kv_bytes = 0;
+  const bool kv_overflow = __builtin_mul_overflow(kv_floats, static_cast<uint64_t>(c.n_kv_heads), &kv_floats) ||
+                           __builtin_mul_overflow(kv_floats, static_cast<uint64_t>(c.head_dim), &kv_floats) ||
+                           __builtin_mul_overflow(kv_floats, uint64_t{2 * sizeof(float)}, &kv_bytes) ||
+                           __builtin_mul_overflow(kv_bytes, static_cast<uint64_t>(c.n_layers), &kv_bytes) ||
+                           kv_floats > static_cast<uint64_t>(INT64_MAX);
+  const std::string kv_msg_tail = " for n_ctx=" + std::to_string(n_ctx) + "; try a smaller n_ctx (-c)";
+  if (kv_overflow) throw Error("cannot allocate KV cache: size overflows" + kv_msg_tail);
+  try {
+    for (int64_t i = 0; i < c.n_layers; ++i) {
+      k_.push_back(grab(static_cast<int64_t>(kv_floats)));
+      v_.push_back(grab(static_cast<int64_t>(kv_floats)));
+    }
+  } catch (const Error&) {
+    release();
+    throw Error("cannot allocate KV cache: " + std::to_string(kv_bytes) + " bytes" + kv_msg_tail);
+  }
+  try {
+    x_ = grab(B * E);
+    h_ = grab(B * E);
+    q_ = grab(B * c.n_heads * c.head_dim);
+    attn_ = grab(B * c.n_heads * c.head_dim);
+    gate_ = grab(B * c.n_ff);
+    up_ = grab(B * c.n_ff);
+    last_ = grab(E);
+    logits_ = grab(c.n_vocab);
+  } catch (...) {
+    release();
+    throw;
+  }
 }
+
+float* Transformer::grab(int64_t n_floats) {
+  float* p = be_.alloc(n_floats);
+  try {
+    owned_.push_back(p);
+  } catch (...) {
+    be_.free(p);
+    throw;
+  }
+  return p;
+}
+
+void Transformer::release() noexcept {
+  for (float* p : owned_) be_.free(p);
+  owned_.clear();
+}
+
+Transformer::~Transformer() { release(); }
 
 void Transformer::forward(std::span<const int32_t> tokens, int64_t pos0, float* logits_out) {
   const int64_t n = static_cast<int64_t>(tokens.size());

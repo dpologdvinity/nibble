@@ -32,7 +32,7 @@ void embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
   const int64_t d = table.ne[0];
   for (size_t t = 0; t < ids.size(); ++t) {
     const int64_t id = ids[t];
-    if (id < 0 || id >= table.rows()) throw Error("embed: token id out of range");
+    if (id < 0 || id >= table.rows()) throw Error("embed: token id " + std::to_string(id) + " out of range (n_vocab " + std::to_string(table.rows()) + ")");
     float* o = out + static_cast<int64_t>(t) * d;
     if (table.type == DType::F32) {
       std::copy_n(as_f32(table) + id * d, d, o);

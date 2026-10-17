@@ -1,5 +1,6 @@
 #include "gguf/gguf.h"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -102,7 +103,7 @@ Value read_value(Reader& r, ValueType t, const std::string& key) {
     }
     const size_t n = static_cast<size_t>(count);
     if (a.elem_type == ValueType::String) {
-      a.str.reserve(n);
+      a.str.reserve(std::min<uint64_t>(n, 4096));  // count is untrusted; grow naturally beyond
       for (size_t k = 0; k < n; ++k) a.str.push_back(r.read_string("array string"));
     } else {
       for (size_t k = 0; k < n; ++k) {
@@ -164,7 +165,7 @@ File File::parse(std::span<const uint8_t> bytes) {
   if (n_kv > r.remaining() / 12) throw Error("gguf: kv count " + std::to_string(n_kv) + " exceeds file size");
   if (n_tensors > r.remaining() / 24) throw Error("gguf: tensor count " + std::to_string(n_tensors) + " exceeds file size");
 
-  f.metadata_.reserve(static_cast<size_t>(n_kv));
+  f.metadata_.reserve(std::min<uint64_t>(n_kv, 4096));  // count is untrusted
   for (uint64_t k = 0; k < n_kv; ++k) {
     std::string key = r.read_string("key");
     ValueType t = read_value_type(r, key);
@@ -183,7 +184,7 @@ File File::parse(std::span<const uint8_t> bytes) {
     alignment = static_cast<uint64_t>(*p);
   }
 
-  f.tensors_.reserve(static_cast<size_t>(n_tensors));
+  f.tensors_.reserve(std::min<uint64_t>(n_tensors, 4096));
   for (uint64_t k = 0; k < n_tensors; ++k) {
     TensorInfo ti{};
     ti.name = r.read_string("tensor name");

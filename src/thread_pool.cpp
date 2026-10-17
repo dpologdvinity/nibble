@@ -7,8 +7,21 @@
 namespace nibble {
 
 ThreadPool::ThreadPool(int n_threads) : n_threads_(n_threads) {
-  if (n_threads <= 0) throw Error("ThreadPool: n_threads must be positive");
-  for (int i = 1; i < n_threads; ++i) workers_.emplace_back([this] { worker_loop(); });
+  if (n_threads <= 0) throw Error("ThreadPool: n_threads must be positive, got " + std::to_string(n_threads));
+  // If creating a worker throws, the destructor will not run: stop and join the ones
+  // already started (destroying a joinable std::thread would call std::terminate).
+  try {
+    workers_.reserve(static_cast<size_t>(n_threads - 1));
+    for (int i = 1; i < n_threads; ++i) workers_.emplace_back([this] { worker_loop(); });
+  } catch (const std::exception& e) {
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      stop_ = true;
+    }
+    cv_work_.notify_all();
+    for (auto& t : workers_) t.join();
+    throw Error("ThreadPool: cannot create " + std::to_string(n_threads) + " threads: " + e.what());
+  }
 }
 
 ThreadPool::~ThreadPool() {

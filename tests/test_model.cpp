@@ -132,3 +132,30 @@ TEST_CASE("forward bounds and head divisibility", "[model]") {
   CHECK_THROWS_AS(t.forward(std::span(kToks).subspan(0, 2), 3, out.data()), Error);
   CHECK_NOTHROW(t.forward(std::span(kToks).subspan(0, 2), 2, out.data()));
 }
+
+TEST_CASE("transformer destroy frees all backend allocations", "[model]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  Loaded m(tiny_model_gguf(1), be);
+  const size_t base = be.live_allocations();
+  for (int i = 0; i < 5; ++i) {
+    model::Transformer t(m.cfg, m.w, be, 64, 8);
+    CHECK(be.live_allocations() > base);
+  }
+  CHECK(be.live_allocations() == base);
+}
+
+TEST_CASE("transformer huge n_ctx throws Error naming n_ctx", "[model]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  Loaded m(tiny_model_gguf(1), be);
+  const size_t base = be.live_allocations();
+  std::vector<int64_t> sizes = {INT64_MAX / 4, INT64_MAX};  // overflow paths
+#ifndef __SANITIZE_ADDRESS__  // ASan aborts on multi-TB allocations instead of failing them
+  sizes.push_back(int64_t{1000000000000});
+#endif
+  for (int64_t n : sizes) {
+    CHECK_THROWS_WITH(model::Transformer(m.cfg, m.w, be, n, 8), ContainsSubstring("n_ctx=" + std::to_string(n)));
+  }
+  CHECK(be.live_allocations() == base);
+}

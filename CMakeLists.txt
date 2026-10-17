@@ -91,5 +91,13 @@ add_test(NAME cli_run_no_prompt_exit2 COMMAND nibble run -m ${NIBBLE_TINY})
 set_tests_properties(cli_run_no_prompt_exit2 PROPERTIES PASS_REGULAR_EXPRESSION "usage: nibble run")
 add_test(NAME cli_run_bad_model COMMAND nibble run -m /nonexistent -p hi)
 set_tests_properties(cli_run_bad_model PROPERTIES WILL_FAIL TRUE)
+# Skipped under sanitizers: ASan aborts on a multi-TB allocation instead of letting new throw.
+if(NOT NIBBLE_SANITIZE)
+add_test(NAME cli_run_huge_ctx COMMAND nibble run -m ${NIBBLE_TINY} -p hello -c 1000000000000)
+set_tests_properties(cli_run_huge_ctx PROPERTIES PASS_REGULAR_EXPRESSION "error: .*n_ctx")
+add_test(NAME cli_run_huge_ctx_exit1
+  COMMAND sh -c "\"$0\" run -m \"$1\" -p hello -c 1000000000000 >/dev/null 2>&1; test $? -eq 1"
+          $<TARGET_FILE:nibble_cli> ${NIBBLE_TINY})
+endif()
 add_test(NAME cli_run_bad_number COMMAND nibble run -m ${NIBBLE_TINY} -p hi -n abc)
 set_tests_properties(cli_run_bad_number PROPERTIES PASS_REGULAR_EXPRESSION "usage: nibble run")

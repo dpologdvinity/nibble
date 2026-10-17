@@ -18,6 +18,8 @@ class CpuBackend final : public Backend {
   void reserve(int64_t n_ctx, int64_t n_heads) override;
   size_t scratch_capacity() const { return scratch_.size(); }  // test hook
   float* alloc(int64_t n_floats) override;
+  void free(float* p) override;
+  size_t live_allocations() const { return allocs_.size(); }  // test hook
   void read(float* host_dst, const float* src, int64_t n) override;
   void embed(const Tensor& table, std::span<const int32_t> ids, float* out) override;
   void matmul(const Tensor& w, const float* x, float* y, int64_t n) override;

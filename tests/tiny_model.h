@@ -50,6 +50,7 @@ struct TinyModelOpts {
   std::string drop_tensor;      // omit this tensor
   std::string bad_shape;        // give this 2-D tensor a wrong ne[1]
   std::string q4_tensor;        // store this tensor as Q4_0 (needs ne[0] % 32 == 0, e.g. blk.0.ffn_down.weight)
+  int64_t vocab_delta = 0;      // token_embd rows = 261 + delta (tokenizer unchanged)
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
 };
 
@@ -105,7 +106,7 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
     if (name == mo.drop_tensor) return;
     w.add_tensor(name, DType::F32, {n}, bytes(DType::F32, rnd(static_cast<size_t>(n), lo, hi), n));
   };
-  mat("token_embd.weight", E, V);
+  mat("token_embd.weight", E, V + mo.vocab_delta);
   if (zero_output_norm) {
     w.add_tensor("output_norm.weight", DType::F32, {E}, std::vector<uint8_t>(E * 4, 0));
   } else {
