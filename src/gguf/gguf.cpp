@@ -225,8 +225,9 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
   if (const Value* a = f.find("general.alignment")) {
     const int64_t* p = std::get_if<int64_t>(a);
     if (!p) throw Error(std::string("gguf: general.alignment must be an integer, got ") + type_label(*a));
-    if (*p <= 0 || (*p & (*p - 1)) != 0 || *p > (int64_t{1} << 30)) {
-      throw Error("gguf: general.alignment " + std::to_string(*p) + " is not a power of two in [1, 2^30]");
+    // GGUF requires a multiple of 8; smaller values would misalign typed tensor loads.
+    if (*p < 8 || (*p & (*p - 1)) != 0 || *p > (int64_t{1} << 30)) {
+      throw Error("gguf: general.alignment " + std::to_string(*p) + " is not a power of two in [8, 2^30]");
     }
     alignment = static_cast<uint64_t>(*p);
   }

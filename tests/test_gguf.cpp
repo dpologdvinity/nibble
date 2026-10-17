@@ -193,6 +193,22 @@ TEST_CASE("gguf alignment", "[gguf]") {
     w.add_f32("general.alignment", 32.0f);
     expect_error(w.build());
   }
+  SECTION("below 8 rejected, naming the value") {
+    for (uint32_t a : {1u, 2u, 4u}) {
+      GgufWriter w;
+      w.add_tensor("w", DType::F32, {4}, std::vector<uint8_t>(16));
+      REQUIRE_THROWS_WITH(File::parse(w.build(3, a)), ContainsSubstring("general.alignment " + std::to_string(a)));
+    }
+  }
+  SECTION("8 accepted") {
+    GgufWriter w;
+    w.add_tensor("w", DType::F32, {4}, std::vector<uint8_t>(16));
+    w.add_tensor("v", DType::F32, {2}, std::vector<uint8_t>(8));
+    auto b = w.build(3, 8);
+    File f = File::parse(b);
+    REQUIRE(f.get_int("general.alignment") == 8);
+    REQUIRE(f.find_tensor("v")->offset == 16);
+  }
   SECTION("custom valid") {
     GgufWriter w;
     w.add_tensor("w", DType::F32, {4}, std::vector<uint8_t>(16));
