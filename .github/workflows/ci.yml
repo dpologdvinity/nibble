@@ -6,21 +6,21 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
       - run: cmake --build build -j
       - run: ctest --test-dir build -LE e2e --output-on-failure
   sanitize:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=OFF -DNIBBLE_SANITIZE=address,undefined
       - run: cmake --build build -j
       - run: ctest --test-dir build -LE e2e --output-on-failure
   fuzz:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: CXX=clang++ cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF
       - run: cmake --build build-fuzz -j --target fuzz_gguf fuzz_load make_seed
       - run: build-fuzz/make_seed build-fuzz/seed
