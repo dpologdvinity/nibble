@@ -21,10 +21,16 @@ struct ModelParams {
 
 struct GenParams {
   int max_tokens = 256;  // <= 0: return MaxTokens at once without prefilling (append = false still resets n_past to 0)
+  // Sampling order: top-k, then temperature-scaled softmax, then top-p. llama.cpp's
+  // default chain is top-k, top-p, min-p (0.05), temperature, so the same values
+  // select a different nucleus than in llama.cpp.
   float temperature = 0.8f;  // 0 = greedy (argmax, lowest id on ties)
   int top_k = 40;            // <= 0 or >= n_vocab: disabled
   float top_p = 0.95f;       // >= 1: disabled
-  std::optional<uint64_t> seed = std::nullopt;  // nullopt = random (std::random_device)
+  // nullopt = random (std::random_device). Each generate/send call restarts the RNG
+  // from seed, so a seeded multi-turn chat reuses the same stream every turn:
+  // reproducible, but the turns are correlated.
+  std::optional<uint64_t> seed = std::nullopt;
   bool append = false;  // continue after the previous call's context instead of resetting
 };
 
@@ -90,7 +96,9 @@ class Session {
   // nothing) with append = false throws Error("empty prompt"). With append = true it
   // continues generating from the cached context, unless n_past() == 0, which also
   // throws Error("empty prompt").
-  // Invalid sampling params throw Error before any state changes.
+  // Invalid sampling params throw Error before any state changes. Every validation
+  // throw (empty prompt and bad params alike) leaves n_past() unchanged, including
+  // with append = false.
   StopReason generate(std::span<const PromptPart> parts, const GenParams&,
                       const std::function<bool(std::string_view piece)>& on_token);
   // One part with special = true. Unlike the overload above, with append = false

@@ -50,7 +50,11 @@ build/nibble chat -m models/qwen2.5-0.5b-instruct-q4_0.gguf
 | `--temp <f>` | sampling temperature, >= 0; 0 is greedy (default 0.8) |
 | `--top-k <N>` | top-k cutoff; 0 disables (default 40) |
 | `--top-p <f>` | nucleus cutoff in (0, 1] (default 0.95) |
-| `--seed <u64>` | sampler seed (default: random) |
+| `--seed <u64>` | sampler seed (default: random); each `chat` turn restarts the RNG from it, so turns reuse one stream: reproducible but correlated |
+
+Sampling order is top-k, then temperature-scaled softmax, then top-p. llama.cpp's
+default chain is top-k, top-p, min-p (0.05), temperature, so the same flag values
+select a different nucleus there.
 
 Text streams to stdout; a stop reason and timing line go to stderr. Bad flag
 values print usage and exit 2; errors such as a missing model exit 1.
@@ -93,9 +97,9 @@ the prefill last row, and top-1 agreement on >= 90% of positions per prompt
 (near-ties count as agreement). Greedy decoding is reported but not asserted.
 Activation requantization amplifies rounding-level differences: nibble, generic
 llama.cpp and an fp64 oracle with Q8_0 requantization disagree pairwise at about
-0.9966 cosine, so a tighter gate is not attainable. Minimum cosine (capital / code / chat):
+0.9966 cosine, so a tighter gate was not attained by any of the three implementations compared. Minimum cosine (capital / code / chat):
 
-- Q8_0: 0.99950 / 0.99875 / 0.99672
+- Q8_0: 0.99941 / 0.99854 / 0.99616
 - Q4_0: 0.99888 / 0.99858 / 0.99658
 
 ## Roadmap
