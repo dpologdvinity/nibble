@@ -109,13 +109,13 @@ class Session {
   std::unique_ptr<Impl> impl_;
 };
 
-struct ChatTestAccess;
-
 // Multi-turn chat over a Session, formatted with the model's chat template
 // (ChatML for qwen2). The KV cache is kept between turns, so each send prefills
-// only the new turn's tokens. The Chat must not outlive its Session, and the
-// Session must not be used directly while a Chat drives it (that breaks the
-// cached history). Move-only.
+// only the new turn's tokens. The Chat must not outlive its Session. Not
+// thread-safe; the Session's one-active-Session-per-Model rule applies. Do not use
+// the Session directly while a Chat drives it: the next send then throws
+// Error("chat context lost"). To start over (e.g. after ContextFull), construct a
+// new Chat. Move-only.
 class Chat {
  public:
   // Throws Error("no chat template for architecture <a>") if the model has no
@@ -133,14 +133,18 @@ class Chat {
   // turn (including the system prompt) starts the Session fresh; later turns append.
   // GenParams::append is ignored. Once a send returns ContextFull (the turn did not
   // fit, or the reply filled the context), every later send returns ContextFull at
-  // once without calling on_token. Throws Error on a moved-from Chat.
+  // once without calling on_token. Throws Error("chat context lost") if the
+  // Session's cache no longer matches the conversation (it was used directly, or a
+  // forward threw). An exception from on_token propagates; the prompt and the
+  // earlier reply tokens stay cached (the token whose delivery threw does not)
+  // and the conversation continues.
+  // Throws Error on a moved-from Chat.
   StopReason send(std::string_view user, const GenParams&,
                   const std::function<bool(std::string_view piece)>& on_token);
 
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
-  friend struct ChatTestAccess;
 };
 
 }  // namespace nibble

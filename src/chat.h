@@ -2,7 +2,6 @@
 // ChatML formatting for nibble::Chat (declared in nibble/nibble.h).
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "nibble/nibble.h"
@@ -30,14 +29,11 @@ struct Chat::Impl {
   std::string system;
   bool started = false;  // the first turn's prompt has been prefilled
   bool full = false;     // a send returned ContextFull
-  std::vector<std::pair<std::string, bool>> last_parts;  // owned copy, for tests
+  // session.n_past() as the last send left it; -1 once the cache was lost.
+  // Checked at the top of send while started.
+  int64_t expected_past = 0;
 
   Impl(Session& s, std::string sys) : session(s), system(std::move(sys)) {}
-};
-
-// Test hook: the parts the last send passed to Session::generate.
-struct ChatTestAccess {
-  static const std::vector<std::pair<std::string, bool>>& last_parts(const Chat& c) { return c.impl_->last_parts; }
 };
 
 }  // namespace nibble

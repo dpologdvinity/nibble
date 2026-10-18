@@ -68,6 +68,7 @@ struct TinyModelOpts {
   std::string raw_type_tensor;  // store this tensor with unsupported ggml type 12 (Q4_K) and dummy bytes
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
   TinyTokOpts tok;              // tokenizer variant
+  uint32_t context_length = 64; // written as <arch>.context_length
 };
 
 // qwen2: 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by default).
@@ -86,7 +87,7 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   w.add_int(a + "feed_forward_length", GgufWriter::ValueType::U32, FF);
   w.add_int(a + "attention.head_count", GgufWriter::ValueType::U32, mo.heads_kv > 0 ? mo.heads_kv : H);
   w.add_int(a + "attention.head_count_kv", GgufWriter::ValueType::U32, mo.kv_heads_kv > 0 ? mo.kv_heads_kv : KV);
-  w.add_int(a + "context_length", GgufWriter::ValueType::U32, 64);
+  w.add_int(a + "context_length", GgufWriter::ValueType::U32, mo.context_length);
   w.add_f32(a + "attention.layer_norm_rms_epsilon", 1e-6f);
   w.add_f32(a + "rope.freq_base", 10000.0f);
   add_tiny_tokenizer_kvs(w, mo.tok, eos_id);

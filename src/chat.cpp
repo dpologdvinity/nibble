@@ -36,15 +36,26 @@ StopReason Chat::send(std::string_view user, const GenParams& gp,
                       const std::function<bool(std::string_view)>& on_token) {
   if (!impl_) throw Error("use of moved-from Chat");
   Impl& c = *impl_;
+  if (c.started && c.session.n_past() != c.expected_past) throw Error("chat context lost");
   if (c.full) return StopReason::ContextFull;
-  const std::vector<PromptPart> parts = chatml_turn(c.system, user, !c.started);
-  c.last_parts.clear();
-  for (const PromptPart& p : parts) c.last_parts.emplace_back(std::string(p.text), p.special);
+  // Records how this send left the cache, on return or throw. The prompt counts
+  // as sent once prefilled (max_tokens <= 0 and early ContextFull skip that). A
+  // started conversation always has n_past() > 0, so 0 means the Session reset
+  // its cache (a forward threw): the history is gone and the next send throws.
+  auto sync = [&c] {
+    if (c.session.n_prompt_tokens() > 0) c.started = true;
+    if (c.started) c.expected_past = c.session.n_past() > 0 ? c.session.n_past() : -1;
+  };
   GenParams p = gp;
   p.append = c.started;
-  const StopReason r = c.session.generate(parts, p, on_token);
-  // max_tokens <= 0 returns before prefilling; then the turn did not happen.
-  if (c.session.n_prompt_tokens() > 0) c.started = true;
+  StopReason r;
+  try {
+    r = c.session.generate(chatml_turn(c.system, user, !c.started), p, on_token);
+  } catch (...) {  // e.g. on_token threw: the tokens cached so far stay valid
+    sync();
+    throw;
+  }
+  sync();
   if (r == StopReason::ContextFull) c.full = true;
   return r;
 }
