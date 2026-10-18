@@ -4,8 +4,10 @@
 #include <random>
 #include <vector>
 
+#include "data/quant_golden.inc"
 #include "fp16.h"
 #include "quant.h"
+#include "quant_golden_gen.h"
 
 using namespace nibble;
 
@@ -148,4 +150,29 @@ TEST_CASE("unaligned blocks", "[quant]") {
   auto* pw = reinterpret_cast<const BlockQ4_0*>(wb.data() + 1);
   auto* pa = reinterpret_cast<const BlockQ8_0*>(ab.data() + 1);
   REQUIRE(dot_q4_0_q8_0(pw, pa, 1) == dot_q4_0_q8_0(&w, &a, 1));
+}
+
+// ---- Golden vectors from llama.cpp b11715 reference code (tools/quant_vectors) ----
+static uint32_t f32_bits(float f) {
+  uint32_t u;
+  std::memcpy(&u, &f, 4);
+  return u;
+}
+
+TEST_CASE("golden: dot_q8_0_q8_0 bitwise equals ggml_vec_dot_q8_0_q8_0_generic", "[quant][golden]") {
+  for (const auto& c : golden::kDotCases) {
+    CAPTURE(c.seed, c.n);
+    const int nb = c.n / 32;
+    std::vector<BlockQ8_0> w8(static_cast<size_t>(nb)), a8(w8.size());
+    golden::Rng r{c.seed};
+    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(w8.data()), nb);
+    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(a8.data()), nb);
+    std::vector<BlockQ4_0> w4(static_cast<size_t>(nb));
+    golden::fill_q4_0(r, reinterpret_cast<uint8_t*>(w4.data()), nb);
+    uint64_t h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w8.data()), w8.size() * sizeof(BlockQ8_0));
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(a8.data()), a8.size() * sizeof(BlockQ8_0), h);
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w4.data()), w4.size() * sizeof(BlockQ4_0), h);
+    REQUIRE(h == c.input_hash);
+    REQUIRE(f32_bits(dot_q8_0_q8_0(w8.data(), a8.data(), nb)) == c.q8q8_bits);
+  }
 }

@@ -95,7 +95,7 @@ float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks) {
     std::memcpy(&ba, pa + b * sizeof ba, sizeof ba);
     int s = 0;
     for (int j = 0; j < 32; ++j) s += bw.qs[j] * ba.qs[j];
-    sum += static_cast<float>(s) * fp16_to_fp32(bw.d) * fp16_to_fp32(ba.d);
+    sum += static_cast<float>(s) * (fp16_to_fp32(bw.d) * fp16_to_fp32(ba.d));  // ggml generic: sumi*(d_x*d_y)
   }
   return sum;
 }
