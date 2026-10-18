@@ -69,6 +69,7 @@ struct TinyModelOpts {
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
   TinyTokOpts tok;              // tokenizer variant
   uint32_t context_length = 64; // written as <arch>.context_length
+  bool llama_bias = false;      // llama only: also write attn_{q,k,v}.bias in every layer
   bool rope_freqs = false;      // add rope_freqs.weight: F32 {HD/2}, values in [1, 8]
   int bad_rope_freqs = 0;       // with rope_freqs: 1 = wrong ne ({HD/2 + 1}), 2 = F16 instead of F32
   int64_t rope_dim = 0, key_length = 0;  // if > 0, written as <arch>.rope.dimension_count / attention.key_length
@@ -160,9 +161,9 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
     mat(p + "attn_k.weight", E, KV * HD);
     mat(p + "attn_v.weight", E, KV * HD);
     mat(p + "attn_output.weight", H * HD, E);
-    if (mo.arch == "qwen2") vec(p + "attn_q.bias", H * HD, -0.5f, 0.5f);
-    if (mo.arch == "qwen2") vec(p + "attn_k.bias", KV * HD, -0.5f, 0.5f);
-    if (mo.arch == "qwen2") vec(p + "attn_v.bias", KV * HD, -0.5f, 0.5f);
+    if (mo.arch == "qwen2" || mo.llama_bias) vec(p + "attn_q.bias", H * HD, -0.5f, 0.5f);
+    if (mo.arch == "qwen2" || mo.llama_bias) vec(p + "attn_k.bias", KV * HD, -0.5f, 0.5f);
+    if (mo.arch == "qwen2" || mo.llama_bias) vec(p + "attn_v.bias", KV * HD, -0.5f, 0.5f);
     vec(p + "ffn_norm.weight", E, 0.9f, 1.1f);
     mat(p + "ffn_gate.weight", E, FF);
     mat(p + "ffn_up.weight", E, FF);

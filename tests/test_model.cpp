@@ -132,6 +132,33 @@ TEST_CASE("llama bad rope_freqs and head_dim throw", "[model][llama]") {
   CHECK_NOTHROW(load(o));
   o.key_length = 6;
   CHECK_THROWS_WITH(load(o), ContainsSubstring("llama.attention.key_length"));
+  CHECK_THROWS_WITH(load(o), ContainsSubstring("invalid model"));
+}
+
+TEST_CASE("llama file with qkv bias throws", "[model][llama]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  TinyModelOpts o;
+  o.arch = "llama";
+  o.llama_bias = true;
+  CHECK_THROWS_WITH((Loaded(tiny_model_gguf(1, DType::F32, false, 259, o), be)),
+                    ContainsSubstring("unsupported tensor blk.0.attn_q.bias for architecture llama"));
+}
+
+TEST_CASE("qwen2 head_dim keys are checked", "[model]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  TinyModelOpts o;
+  o.rope_dim = 4;
+  o.key_length = 4;
+  CHECK_NOTHROW((Loaded(tiny_model_gguf(1, DType::F32, false, 259, o), be)));
+  o.rope_dim = 8;
+  CHECK_THROWS_WITH((Loaded(tiny_model_gguf(1, DType::F32, false, 259, o), be)),
+                    ContainsSubstring("qwen2.rope.dimension_count"));
+  o.rope_dim = 4;
+  o.key_length = 8;
+  CHECK_THROWS_WITH((Loaded(tiny_model_gguf(1, DType::F32, false, 259, o), be)),
+                    ContainsSubstring("qwen2.attention.key_length"));
 }
 
 TEST_CASE("quantized model matches naive on dequantized weights", "[model][quant]") {

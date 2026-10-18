@@ -36,7 +36,7 @@ LlamaConfig LlamaConfig::from_gguf(const gguf::File& f) {
   if (c.head_dim % 2 != 0) throw Error("invalid model: head_dim " + std::to_string(c.head_dim) + " must be even for rope");
   for (const char* k : {"rope.dimension_count", "attention.key_length"})
     if (f.find(a + k) && f.get_int(a + k) != c.head_dim)
-      throw Error("unsupported model: " + a + k + " = " + std::to_string(f.get_int(a + k)) +
+      throw Error("invalid model: " + a + k + " = " + std::to_string(f.get_int(a + k)) +
                   " but embedding_length / head_count = " + std::to_string(c.head_dim));
   const auto* te = f.find_tensor("token_embd.weight");
   if (!te) throw Error("missing tensor token_embd.weight");

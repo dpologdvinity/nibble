@@ -144,6 +144,11 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
                 static_cast<long long>(c_.n_kv_heads), static_cast<long long>(hd));
   NIBBLE_DCHECK(w_.layers.size() == static_cast<size_t>(c_.n_layers), "layers: %zu bound vs n_layers=%lld",
                 w_.layers.size(), static_cast<long long>(c_.n_layers));
+  if (w_.rope_freqs) {
+    dcheck_vec(*w_.rope_freqs, hd / 2, "rope rope_freqs");
+    NIBBLE_DCHECK(w_.rope_freqs->data && reinterpret_cast<uintptr_t>(w_.rope_freqs->data) % alignof(float) == 0,
+                  "rope rope_freqs: data pointer null or misaligned");
+  }
   dcheck_matmul(be_, w_.token_embd, E, c_.n_vocab, "embed token_embd");
   be_.embed(w_.token_embd, tokens, x_);
   for (int64_t l = 0; l < c_.n_layers; ++l) {

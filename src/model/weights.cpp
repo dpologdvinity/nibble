@@ -33,7 +33,7 @@ Tensor get(const gguf::File& f, const Backend& be, const std::string& name, std:
   const std::string tn = dtype_info(t->type).name;
   if (f32_only ? t->type != DType::F32 : !be.supports(t->type))
     throw Error("unsupported tensor type " + tn + " for " + escape_control(name) +
-                (f32_only ? " — norms and biases must be F32"
+                (f32_only ? " — this tensor must be F32"
                           : " — v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize"));
   return *t;
 }
@@ -59,6 +59,10 @@ Weights Weights::bind(const gguf::File& f, const LlamaConfig& c, const Backend& 
       l.bq = get(f, be, p + "attn_q.bias", {Q}, true);
       l.bk = get(f, be, p + "attn_k.bias", {KV}, true);
       l.bv = get(f, be, p + "attn_v.bias", {KV}, true);
+    } else {
+      for (const char* b : {"attn_q.bias", "attn_k.bias", "attn_v.bias"})
+        if (find(f, p + b))
+          throw Error("unsupported tensor " + escape_control(p + b) + " for architecture " + escape_control(c.arch));
     }
     l.ffn_norm = get(f, be, p + "ffn_norm.weight", {E}, true);
     l.w_gate = get(f, be, p + "ffn_gate.weight", {E, c.n_ff}, false);
