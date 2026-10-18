@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -90,4 +91,26 @@ TEST_CASE("sampler: parameter edges", "[sampler]") {
   REQUIRE_THROWS_AS(Sampler({1.0f, 0, std::nanf(""), 1}, 3), Error);
   REQUIRE_THROWS_WITH(Sampler({1.0f, 0, -0.25f, 1}, 3),
                       Catch::Matchers::ContainsSubstring("-0.25"));
+}
+
+TEST_CASE("sampler: NaN and inf logits", "[sampler]") {
+  const float nan = std::nanf(""), inf = std::numeric_limits<float>::infinity();
+  std::vector<float> m{nan, 1, nan, 3, 2, nan};
+  Sampler g({0.0f, 0, 1.0f, 1}, 6), s({0.8f, 0, 1.0f, 1}, 6), k({0.8f, 2, 0.9f, 1}, 6);
+  for (int i = 0; i < 2000; ++i) {
+    REQUIRE(g.sample(m) == 3);
+    const int32_t a = s.sample(m), b = k.sample(m);
+    REQUIRE((a == 1 || a == 3 || a == 4));
+    REQUIRE((b == 3 || b == 4));
+  }
+  std::vector<float> allnan(6, nan), allneg(6, -inf), one{0, 1, inf, 2, inf, 0};
+  for (float t : {0.0f, 0.8f}) {
+    Sampler x({t, 0, 1.0f, 1}, 6);
+    REQUIRE_THROWS_WITH(x.sample(allnan), Catch::Matchers::ContainsSubstring("all logits are NaN"));
+    REQUIRE_THROWS_WITH(x.sample(allneg), Catch::Matchers::ContainsSubstring("no finite logits"));
+    for (int i = 0; i < 100; ++i) REQUIRE(x.sample(one) == 2);  // lowest-index +inf
+  }
+  std::vector<float> single{0, 1, 2, inf, 0, 1};
+  Sampler y({1.0f, 3, 0.5f, 1}, 6);
+  for (int i = 0; i < 100; ++i) REQUIRE(y.sample(single) == 3);
 }

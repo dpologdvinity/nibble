@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include "nibble/error.h"
@@ -15,6 +16,9 @@ uint64_t splitmix64(uint64_t& x) {
   z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
   return z ^ (z >> 31);
 }
+
+// NaN sorts as -inf so orderings stay total.
+float key(float x) { return std::isnan(x) ? -std::numeric_limits<float>::infinity() : x; }
 
 uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 
@@ -50,18 +54,24 @@ int32_t Sampler::sample(std::span<const float> logits) {
     throw Error("sampler: got " + std::to_string(logits.size()) + " logits, expected " +
                 std::to_string(n_vocab_));
   const auto better = [&](int32_t a, int32_t b) {
-    const float la = logits[static_cast<size_t>(a)], lb = logits[static_cast<size_t>(b)];
+    const float la = key(logits[static_cast<size_t>(a)]), lb = key(logits[static_cast<size_t>(b)]);
     return la > lb || (la == lb && a < b);
   };
   int32_t* idx = idx_.data();
   const size_t n = idx_.size();
 
-  if (params_.temperature == 0.0f) {
-    int32_t best = 0;
-    for (size_t i = 1; i < n; ++i)
-      if (logits[i] > logits[static_cast<size_t>(best)]) best = static_cast<int32_t>(i);
-    return best;
+  // Special values: NaN counts as -inf. If any +inf, the lowest-index +inf wins
+  // (deterministic, no RNG draw). If nothing is above -inf, throw.
+  int32_t best = 0;
+  bool any_non_nan = false;
+  for (size_t i = 0; i < n; ++i) {
+    any_non_nan |= !std::isnan(logits[i]);
+    if (key(logits[i]) > key(logits[static_cast<size_t>(best)])) best = static_cast<int32_t>(i);
   }
+  if (!any_non_nan) throw Error("sampler: all logits are NaN");
+  const float top = key(logits[static_cast<size_t>(best)]);
+  if (top == -std::numeric_limits<float>::infinity()) throw Error("sampler: no finite logits");
+  if (top == std::numeric_limits<float>::infinity() || params_.temperature == 0.0f) return best;
 
   for (size_t i = 0; i < n; ++i) idx[i] = static_cast<int32_t>(i);
   size_t k = n;
@@ -72,10 +82,10 @@ int32_t Sampler::sample(std::span<const float> logits) {
   std::sort(idx, idx + k, better);  // descending probability
 
   const double inv_t = 1.0 / static_cast<double>(params_.temperature);
-  const double mx = static_cast<double>(logits[static_cast<size_t>(idx[0])]);
+  const double mx = static_cast<double>(key(logits[static_cast<size_t>(idx[0])]));
   double sum = 0.0;
   for (size_t i = 0; i < k; ++i) {
-    prob_[i] = std::exp((static_cast<double>(logits[static_cast<size_t>(idx[i])]) - mx) * inv_t);
+    prob_[i] = std::exp((static_cast<double>(key(logits[static_cast<size_t>(idx[i])])) - mx) * inv_t);
     sum += prob_[i];
   }
   for (size_t i = 0; i < k; ++i) prob_[i] /= sum;
