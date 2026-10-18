@@ -4,29 +4,53 @@
 
 namespace nibble {
 
-ChatFormat chat_format_for(std::string_view arch) {
+ChatFormat chat_format_for(std::string_view arch, std::string_view tmpl) {
+  auto has = [&](std::string_view m) { return tmpl.find(m) != std::string_view::npos; };
+  if (has("<|im_start|>")) return ChatFormat::ChatML;
+  if (has("<|start_header_id|>")) return ChatFormat::Llama3;
+  if (has("<|assistant|>")) return ChatFormat::Zephyr;
   if (arch == "qwen2") return ChatFormat::ChatML;
   throw Error("no chat template for architecture " + escape_control(arch));
 }
 
-std::vector<PromptPart> chatml_turn(std::string_view system, std::string_view user, bool first) {
-  if (first)
-    return {{"<|im_start|>system\n", true},
-            {system, false},
-            {"<|im_end|>\n<|im_start|>user\n", true},
-            {user, false},
-            {"<|im_end|>\n<|im_start|>assistant\n", true}};
-  return {{"<|im_end|>\n<|im_start|>user\n", true}, {user, false}, {"<|im_end|>\n<|im_start|>assistant\n", true}};
+std::vector<PromptPart> chat_turn(ChatFormat f, std::string_view system, std::string_view user, bool first) {
+  switch (f) {
+    case ChatFormat::ChatML:
+      if (first)
+        return {{"<|im_start|>system\n", true},
+                {system, false},
+                {"<|im_end|>\n<|im_start|>user\n", true},
+                {user, false},
+                {"<|im_end|>\n<|im_start|>assistant\n", true}};
+      return {{"<|im_end|>\n<|im_start|>user\n", true}, {user, false}, {"<|im_end|>\n<|im_start|>assistant\n", true}};
+    case ChatFormat::Llama3:
+      if (first)
+        return {{"<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n", true},
+                {system, false},
+                {"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n", true},
+                {user, false},
+                {"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", true}};
+      return {{"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n", true},
+              {user, false},
+              {"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", true}};
+    case ChatFormat::Zephyr:
+      if (first && !system.empty())
+        return {{"<|system|>\n", true}, {system, false}, {"</s>\n<|user|>\n", true}, {user, false}, {"</s>\n<|assistant|>\n", true}};
+      if (first) return {{"<|user|>\n", true}, {user, false}, {"</s>\n<|assistant|>\n", true}};
+      return {{"</s>\n<|user|>\n", true}, {user, false}, {"</s>\n<|assistant|>\n", true}};
+  }
+  throw Error("bad chat format");
 }
 
 namespace {
-std::string default_system(ChatFormat) { return std::string(kQwenDefaultSystem); }
+// Only Qwen has a default system prompt; the Llama 3 and Zephyr ones are empty.
+std::string default_system(ChatFormat f) { return f == ChatFormat::ChatML ? std::string(kQwenDefaultSystem) : std::string(); }
 }  // namespace
 
 Chat::Chat(Session& s, std::string system_prompt) {
-  const ChatFormat fmt = chat_format_for(s.architecture());
+  const ChatFormat fmt = chat_format_for(s.architecture(), s.chat_template());
   if (system_prompt.empty()) system_prompt = default_system(fmt);
-  impl_ = std::make_unique<Impl>(s, std::move(system_prompt));
+  impl_ = std::make_unique<Impl>(s, fmt, std::move(system_prompt));
 }
 Chat::Chat(Chat&&) noexcept = default;
 Chat& Chat::operator=(Chat&&) noexcept = default;
@@ -50,7 +74,7 @@ StopReason Chat::send(std::string_view user, const GenParams& gp,
   p.append = c.started;
   StopReason r;
   try {
-    r = c.session.generate(chatml_turn(c.system, user, !c.started), p, on_token);
+    r = c.session.generate(chat_turn(c.format, c.system, user, !c.started), p, on_token);
   } catch (...) {  // e.g. on_token threw: the tokens cached so far stay valid
     sync();
     throw;

@@ -76,7 +76,8 @@ class Session {
   Session& operator=(const Session&) = delete;
 
   // Encodes the parts (in order, as one string: adjacent plain text is tokenized together, so
-  // "a" + "b" equals "ab") and samples with GenParams. append = false starts
+  // "a" + "b" equals "ab"; the exception is that a special token's text never spans
+  // parts, so Control text split across two parts stays plain) and samples with GenParams. append = false starts
   // at position 0 (n_past() becomes 0); append = true prefills the new tokens at
   // n_past(). Every sampled token except EOS is forwarded into the KV cache, so
   // after any return (not a throw)
@@ -118,12 +119,13 @@ class Session {
  private:
   friend class Chat;
   const std::string& architecture() const;  // of the Session's Model
+  std::string chat_template() const;        // tokenizer.chat_template, empty if absent
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
 
 // Multi-turn chat over a Session, formatted with the model's chat template
-// (ChatML for qwen2). The KV cache is kept between turns, so each send prefills
+// (ChatML, Llama 3 or Zephyr, chosen from the model's tokenizer.chat_template). The KV cache is kept between turns, so each send prefills
 // only the new turn's tokens. The Chat must not outlive its Session. Not
 // thread-safe; the Session's one-active-Session-per-Model rule applies. Do not use
 // the Session directly while a Chat drives it: the next send then throws
@@ -133,7 +135,8 @@ class Chat {
  public:
   // Throws Error("no chat template for architecture <a>") if the model has no
   // known chat format. An empty system prompt selects the model's default
-  // (Qwen: "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.").
+  // (Qwen: "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.";
+  // Llama 3: empty; Zephyr: no system block).
   explicit Chat(Session&, std::string system_prompt = {});
   Chat(Chat&&) noexcept;
   Chat& operator=(Chat&&) noexcept;

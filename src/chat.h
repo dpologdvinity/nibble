@@ -8,24 +8,27 @@
 
 namespace nibble {
 
-enum class ChatFormat { ChatML };
+enum class ChatFormat { ChatML, Llama3, Zephyr };
 
-// ChatML for "qwen2"; otherwise throws Error("no chat template for architecture <a>")
-// with <a> escaped by escape_control.
-ChatFormat chat_format_for(std::string_view arch);
+// Picked from markers in the model's chat template ("<|im_start|>" ChatML,
+// "<|start_header_id|>" Llama3, "<|assistant|>" Zephyr), else "qwen2" gives ChatML;
+// otherwise throws Error("no chat template for architecture <a>") with <a> escaped.
+ChatFormat chat_format_for(std::string_view arch, std::string_view chat_template);
 
 // Qwen's default system prompt, used when Chat gets an empty one.
 inline constexpr std::string_view kQwenDefaultSystem =
     "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.";
 
-// The prompt parts of one ChatML turn. The first turn opens with the system
-// message; later turns open with "<|im_end|>\n", closing the previous assistant
-// reply (its end token is never forwarded into the cache). Markup parts are
-// special; system and user text are not. The views point into the arguments.
-std::vector<PromptPart> chatml_turn(std::string_view system, std::string_view user, bool first);
+// The prompt parts of one chat turn. The first turn opens with the system
+// message (Zephyr omits it when empty, as its template does); later turns open
+// with the end-of-turn markup, closing the previous assistant reply (its end
+// token is never forwarded into the cache). Markup parts are special; system and
+// user text are not. BOS is never included. The views point into the arguments.
+std::vector<PromptPart> chat_turn(ChatFormat, std::string_view system, std::string_view user, bool first);
 
 struct Chat::Impl {
   Session& session;
+  ChatFormat format;
   std::string system;
   bool started = false;  // the first turn's prompt has been prefilled
   bool full = false;     // a send returned ContextFull
@@ -33,7 +36,7 @@ struct Chat::Impl {
   // Checked at the top of send while started.
   int64_t expected_past = 0;
 
-  Impl(Session& s, std::string sys) : session(s), system(std::move(sys)) {}
+  Impl(Session& s, ChatFormat f, std::string sys) : session(s), format(f), system(std::move(sys)) {}
 };
 
 }  // namespace nibble

@@ -19,6 +19,7 @@ struct TinyTokOpts {
   // Appends "<|im_start|>", "<|im_end|>" as Control tokens after `extra`. "<|im_end|>"
   // is EOG by name (Tokenizer::is_eog), as for Qwen; eos_token_id is unchanged.
   bool chatml = false;
+  std::vector<std::string> control;  // extra Control tokens after chatml's (non-spm only)
   int64_t bos = -1;      // >= 0: write tokenizer.ggml.bos_token_id (U32)
   int add_bos = -1;      // 0/1: write tokenizer.ggml.add_bos_token (Bool); -1: absent
   bool bos_as_string = false;  // write bos_token_id as a string (bad type)
@@ -57,7 +58,7 @@ inline std::vector<TinySpmTok> tiny_spm_vocab() {
 
 inline int64_t tiny_tok_vocab(const TinyTokOpts& o) {
   if (o.spm) return static_cast<int64_t>(tiny_spm_vocab().size());
-  return 261 + static_cast<int64_t>(o.extra.size()) + (o.chatml ? 2 : 0);
+  return 261 + static_cast<int64_t>(o.extra.size()) + (o.chatml ? 2 : 0) + static_cast<int64_t>(o.control.size());
 }
 
 inline void add_tiny_spm_kvs(GgufWriter& w, const TinyTokOpts& o) {
@@ -106,6 +107,10 @@ inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t 
     toks.insert(toks.end(), {"<|im_start|>", "<|im_end|>"});
     types.insert(types.end(), {3, 3});
   }
+  for (const auto& c : o.control) {
+    toks.push_back(c);
+    types.push_back(3);
+  }
   if (o.drop_type) types.pop_back();
   w.add_string("tokenizer.ggml.model", o.model);
   w.add_string("tokenizer.ggml.pre", o.pre);
@@ -136,6 +141,7 @@ struct TinyModelOpts {
   std::string raw_type_tensor;  // store this tensor with unsupported ggml type 12 (Q4_K) and dummy bytes
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
   TinyTokOpts tok;              // tokenizer variant
+  std::string chat_template;    // non-empty: written as tokenizer.chat_template
   uint32_t context_length = 64; // written as <arch>.context_length
   bool llama_bias = false;      // llama only: also write attn_{q,k,v}.bias in every layer
   bool rope_freqs = false;      // add rope_freqs.weight: F32 {HD/2}, values in [1, 8]
@@ -165,6 +171,7 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   if (mo.rope_dim > 0) w.add_int(a + "rope.dimension_count", GgufWriter::ValueType::U32, mo.rope_dim);
   if (mo.key_length > 0) w.add_int(a + "attention.key_length", GgufWriter::ValueType::U32, mo.key_length);
   add_tiny_tokenizer_kvs(w, mo.tok, eos_id);
+  if (!mo.chat_template.empty()) w.add_string("tokenizer.chat_template", mo.chat_template);
 
   std::mt19937 g(seed);
   auto rnd = [&](size_t n, float lo, float hi) {

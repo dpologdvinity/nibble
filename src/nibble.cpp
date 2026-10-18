@@ -123,6 +123,10 @@ int64_t Session::n_prompt_tokens() const { return impl_->n_prompt; }
 int64_t Session::n_generated() const { return impl_->n_gen; }
 int64_t Session::n_past() const { return impl_->n_past; }
 const std::string& Session::architecture() const { return impl_->m.cfg.arch; }
+std::string Session::chat_template() const {
+  const gguf::File& f = impl_->m.file;
+  return f.find("tokenizer.chat_template") ? f.get_string("tokenizer.chat_template") : std::string();
+}
 
 StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams& gp,
                               const std::function<bool(std::string_view)>& on_token) {
