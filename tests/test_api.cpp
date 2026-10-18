@@ -54,6 +54,7 @@ TEST_CASE("api: context full", "[api]") {
   Session s(m);
   CHECK(s.generate("abc", {.max_tokens = 100, .temperature = 0}, [](std::string_view) { return true; }) == StopReason::ContextFull);
   CHECK(s.n_prompt_tokens() + s.n_generated() == 8);  // ContextFull fires exactly at n_ctx
+  CHECK(s.n_past() == 8);                              // the last delivered token is cached too
 }
 
 TEST_CASE("api: errors", "[api]") {
@@ -100,7 +101,8 @@ TEST_CASE("api: model is movable", "[api]") {
   Model a = Model::load(f.path.string(), {.n_threads = 2});
   Model b = std::move(a);
   Session s(b);
-  CHECK(s.generate("abc", {.max_tokens = 2}, [](std::string_view) { return true; }) == StopReason::MaxTokens);
+  CHECK(s.generate("abc", {.max_tokens = 2, .temperature = 0}, [](std::string_view) { return true; }) ==
+        StopReason::MaxTokens);
 }
 
 TEST_CASE("api: moved-from model throws", "[api]") {
@@ -126,9 +128,6 @@ TEST_CASE("api: vocab size mismatch rejected at load", "[api]") {
 }
 
 TEST_CASE("api: huge n_ctx throws Error", "[api]") {
-#ifdef __SANITIZE_ADDRESS__  // ASan aborts on multi-TB allocations instead of failing them
-  SKIP("multi-TB allocation aborts under ASan");
-#endif
   TmpModel f(tiny_model_gguf(1));
   CHECK_THROWS_WITH(Model::load(f.path.string(), {.n_ctx = 1000000000000LL, .n_threads = 1}),
                     ContainsSubstring("n_ctx"));
@@ -191,20 +190,23 @@ TEST_CASE("api: append continues", "[api]") {
   GenParams more_append = more;
   more_append.append = true;
 
-  Session fresh(m);
-  const PromptPart abcd[] = {{"abcd", true}};
-  StopReason r_fresh;
-  const std::string want = run_text(fresh, abcd, more, &r_fresh);
-  const int64_t want_past = fresh.n_past();
-  const int64_t want_gen = fresh.n_generated();
-  fresh.generate(abcd, {.max_tokens = 0}, keep_going);  // max_tokens 0 leaves the cache alone
-  CHECK(fresh.n_past() == want_past);
-
   Session s(m);
   const PromptPart ab[] = {{"ab", true}};
   const PromptPart cd[] = {{"cd", true}};
-  run_text(s, ab, one);
-  CHECK(s.n_past() == 2);  // the token that ended the call is not in the cache
+  const std::string x = run_text(s, ab, one);
+  CHECK(s.n_past() == 3);  // the token delivered at MaxTokens is in the cache
+
+  // Reference: "ab" + the delivered token + "cd", prefilled fresh.
+  Session fresh(m);
+  const PromptPart ref[] = {{"ab", true}, {x, true}, {"cd", true}};
+  StopReason r_fresh;
+  const std::string want = run_text(fresh, ref, more, &r_fresh);
+  REQUIRE(fresh.n_prompt_tokens() == 5);  // x re-encodes to the single delivered token
+  const int64_t want_past = fresh.n_past();
+  const int64_t want_gen = fresh.n_generated();
+  fresh.generate(ref, {.max_tokens = 0}, keep_going);  // append = false: resets, prefills nothing
+  CHECK(fresh.n_past() == 0);
+
   StopReason r;
   const std::string got = run_text(s, cd, more_append, &r);
   CHECK(s.n_prompt_tokens() == 2);
@@ -220,11 +222,23 @@ TEST_CASE("api: append with no new tokens continues from the cache", "[api]") {
   Session s(m);
   const PromptPart abc[] = {{"abc", true}};
   const PromptPart empty[] = {{"", true}};
-  const std::string first = run_text(s, abc, {.max_tokens = 1, .temperature = 0});
-  const std::string again = run_text(s, std::span<const PromptPart>(), {.max_tokens = 1, .temperature = 0, .append = true});
-  CHECK(again == first);  // same logits, greedy: same token again
-  CHECK(s.n_past() == 3);
-  CHECK(run_text(s, empty, {.max_tokens = 1, .temperature = 0, .append = true}) == first);
+  const GenParams one{.max_tokens = 1, .temperature = 0};
+  const GenParams one_append{.max_tokens = 1, .temperature = 0, .append = true};
+  const std::string first = run_text(s, abc, one);
+  CHECK(s.n_past() == 4);
+  const std::string second = run_text(s, std::span<const PromptPart>(), one_append);
+  CHECK(s.n_past() == 5);
+  CHECK(s.n_prompt_tokens() == 0);
+  const std::string third = run_text(s, empty, one_append);
+  CHECK(s.n_past() == 6);
+  // Same as prefilling the delivered text fresh.
+  Session ref(m);
+  const PromptPart p1[] = {{"abc", true}, {first, true}};
+  CHECK(run_text(ref, p1, one) == second);
+  REQUIRE(ref.n_prompt_tokens() == 4);
+  const PromptPart p2[] = {{"abc", true}, {first, true}, {second, true}};
+  CHECK(run_text(ref, p2, one) == third);
+  REQUIRE(ref.n_prompt_tokens() == 5);
   CHECK_THROWS_WITH(s.generate(empty, {.temperature = 0}, keep_going), ContainsSubstring("empty prompt"));
   CHECK_THROWS_WITH(s.generate(std::span<const PromptPart>(), {.temperature = 0}, keep_going),
                     ContainsSubstring("empty prompt"));
@@ -239,24 +253,28 @@ TEST_CASE("api: turn longer than remaining context", "[api]") {
   Session s(m);
   const PromptPart abc[] = {{"abc", true}};
   run_text(s, abc, {.max_tokens = 1, .temperature = 0});
-  REQUIRE(s.n_past() == 3);
+  REQUIRE(s.n_past() == 4);  // "abc" + the delivered token
   int calls = 0;
   auto count = [&](std::string_view) { ++calls; return true; };
-  const PromptPart five[] = {{"abcde", true}};  // 3 + 5 >= 8
-  CHECK(s.generate(five, {.temperature = 0, .append = true}, count) == StopReason::ContextFull);
-  CHECK(s.n_past() == 3);
+  const PromptPart four[] = {{"abcd", true}};  // 4 + 4 >= 8
+  CHECK(s.generate(four, {.temperature = 0, .append = true}, count) == StopReason::ContextFull);
+  CHECK(s.n_past() == 4);  // append = true: unchanged
   CHECK(calls == 0);
   CHECK(s.n_prompt_tokens() == 0);
   CHECK(s.n_generated() == 0);
-  const PromptPart four[] = {{"abcd", true}};  // 3 + 4 < 8 fits
-  const StopReason r4 = s.generate(four, {.max_tokens = 5, .temperature = 0, .append = true}, keep_going);
-  CHECK(s.n_prompt_tokens() == 4);
-  CHECK(s.n_past() == 7);
-  if (r4 != StopReason::Eos) CHECK(r4 == StopReason::ContextFull);  // 7 cached + 1 sampled == n_ctx
-  // Fresh parts prompt with n_ctx tokens: ContextFull, no throw, cache untouched.
+  const StopReason r3 = s.generate(abc, {.max_tokens = 5, .temperature = 0, .append = true}, keep_going);  // 4 + 3 < 8
+  CHECK(s.n_prompt_tokens() == 3);
+  if (r3 != StopReason::Eos) {
+    CHECK(r3 == StopReason::ContextFull);  // 7 cached + 1 sampled == n_ctx
+    CHECK(s.n_past() == 8);                // the sampled token used the last free slot
+    // Full cache: appending nothing is still ContextFull.
+    CHECK(s.generate(std::span<const PromptPart>(), {.temperature = 0, .append = true}, count) ==
+          StopReason::ContextFull);
+  }
+  // Fresh parts prompt with n_ctx tokens: ContextFull, no throw, nothing prefilled, cache reset.
   const PromptPart eight[] = {{"abcdefgh", true}};
   CHECK(s.generate(eight, {.temperature = 0}, count) == StopReason::ContextFull);
-  CHECK(s.n_past() == 7);
+  CHECK(s.n_past() == 0);
   CHECK(calls == 0);
   // The string overload keeps throwing on a fresh prompt that does not fit.
   CHECK_THROWS_AS(s.generate("abcdefgh", {.temperature = 0}, count), Error);
@@ -349,6 +367,9 @@ TEST_CASE("api: vocab check runs before the tokenizer is built", "[api]") {
   mo.tok.merges = {"bad"};  // would fail tokenizer construction
   TmpModel f(tiny_model_gguf(1, nibble::DType::F32, false, 259, mo));
   CHECK_THROWS_WITH(Model::load(f.path.string(), {.n_threads = 1}), ContainsSubstring("tokenizer has 261 tokens"));
+  // n_ctx is checked against context_length right after the config, before the tokenizer.
+  CHECK_THROWS_WITH(Model::load(f.path.string(), {.n_ctx = 65, .n_threads = 1}),
+                    ContainsSubstring("exceeds the model's context_length"));
 }
 
 TEST_CASE("api: load errors escape control bytes", "[api]") {
@@ -372,4 +393,65 @@ TEST_CASE("api: load errors escape control bytes", "[api]") {
     CHECK(msg.find("\\x1b") != std::string::npos);
     CHECK(msg.find('\x1b') == std::string::npos);
   }
+}
+
+TEST_CASE("api: delivered tokens are cached after MaxTokens and Cancelled", "[api]") {
+  TmpModel f(tiny_model_gguf(1));
+  Model m = Model::load(f.path.string(), {.n_threads = 2});
+  const PromptPart abc[] = {{"abc", true}};
+  const PromptPart de[] = {{"de", true}};
+  const GenParams next{.max_tokens = 4, .temperature = 0, .append = true};
+  const GenParams fresh_gp{.max_tokens = 4, .temperature = 0};
+
+  // The random tiny model may emit bytes that are not valid UTF-8 (delivered as
+  // U+FFFD), which do not re-encode to the same tokens. Use the first prompt whose
+  // delivered text is exactly the tokens' bytes and re-encodes to 3 tokens; with
+  // this vocab (bytes + "he", "hel", "Ġw") that pins the same token ids.
+  bool compared = false;
+  std::vector<std::string> prompts;
+  for (char x = 'a'; x <= 'z'; ++x)
+    for (char y = 'a'; y <= 'z'; ++y) prompts.push_back({x, y});
+  Session s(m), ref(m);
+  for (const std::string& prompt : prompts) {
+    const PromptPart pp[] = {{prompt, true}};
+    StopReason r;
+    const std::string t = run_text(s, pp, {.max_tokens = 3, .temperature = 0}, &r);
+    if (r != StopReason::MaxTokens || t.find("\xEF\xBF\xBD") != std::string::npos) continue;  // U+FFFD
+    CHECK(s.n_past() == s.n_prompt_tokens() + s.n_generated());
+    const int64_t n_prompt = s.n_prompt_tokens();
+    const PromptPart full[] = {{prompt, true}, {t, true}, {"de", true}};
+    const std::string want = run_text(ref, full, fresh_gp);
+    if (ref.n_prompt_tokens() != n_prompt + 3 + 2) continue;  // t does not round-trip
+    CHECK(run_text(s, de, next) == want);
+    CHECK(ref.n_past() == s.n_past());
+    compared = true;
+    break;
+  }
+  REQUIRE(compared);
+
+  // Cancelled: the cancelled (delivered) token is cached as well.
+  Session c(m);
+  std::string seen;
+  CHECK(c.generate(abc, {.temperature = 0}, [&](std::string_view p) { seen += p; return false; }) ==
+        StopReason::Cancelled);
+  CHECK(c.n_past() == c.n_prompt_tokens() + c.n_generated());
+  const std::string got_c = run_text(c, de, next);
+  Session ref_c(m);
+  const PromptPart full_c[] = {{"abc", true}, {seen, true}, {"de", true}};
+  CHECK(run_text(ref_c, full_c, fresh_gp) == got_c);
+  CHECK(ref_c.n_past() == c.n_past());
+}
+
+TEST_CASE("api: append = false resets n_past on early returns", "[api]") {
+  TmpModel f(tiny_model_gguf(1));
+  Model m = Model::load(f.path.string(), {.n_ctx = 8, .n_threads = 1});
+  Session s(m);
+  const PromptPart abc[] = {{"abc", true}};
+  run_text(s, abc, {.max_tokens = 1, .temperature = 0});
+  REQUIRE(s.n_past() == 4);
+  // Invalid sampler params throw before any state change.
+  CHECK_THROWS_AS(s.generate(abc, {.temperature = -1.0f}, keep_going), Error);
+  CHECK(s.n_past() == 4);
+  CHECK(s.generate(abc, {.max_tokens = 0}, keep_going) == StopReason::MaxTokens);
+  CHECK(s.n_past() == 0);
 }

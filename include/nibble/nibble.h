@@ -20,7 +20,7 @@ struct ModelParams {
 };
 
 struct GenParams {
-  int max_tokens = 256;  // <= 0: return MaxTokens at once, without prefilling
+  int max_tokens = 256;  // <= 0: return MaxTokens at once without prefilling (append = false still resets n_past to 0)
   float temperature = 0.8f;  // 0 = greedy (argmax, lowest id on ties)
   int top_k = 40;            // <= 0 or >= n_vocab: disabled
   float top_p = 0.95f;       // >= 1: disabled
@@ -68,20 +68,27 @@ class Session {
   Session& operator=(const Session&) = delete;
 
   // Encodes the parts (in order) and samples with GenParams. append = false starts
-  // at position 0; append = true prefills the new tokens at n_past(). The token that
-  // ends a call (EOS, the cancelled token, the last token at MaxTokens/ContextFull)
-  // is never forwarded, so it is not in the cache: callers re-supply any closing
-  // markup. on_token receives valid UTF-8 pieces; return false to cancel (held
-  // partial UTF-8 bytes are then dropped, not delivered).
+  // at position 0 (n_past() becomes 0); append = true prefills the new tokens at
+  // n_past(). Every sampled token except EOS is forwarded into the KV cache, so
+  // after any return (not a throw)
+  //   n_past() == start + n_prompt_tokens() + n_generated().
+  // Only EOS is never forwarded (it is not delivered either): callers re-supply any
+  // closing markup. on_token receives valid UTF-8 pieces; return false to cancel (held
+  // partial UTF-8 bytes are then dropped, not delivered; their token is cached).
   //
-  // Returns without forwarding anything, leaving n_past() unchanged, when
+  // Returns without prefilling or sampling when
   //  - max_tokens <= 0 (MaxTokens), or
   //  - the new tokens do not fit: start + n_new >= n_ctx(), where start is n_past()
   //    if append else 0 (ContextFull; no throw, in chat this is expected).
+  // In both cases n_past() is unchanged for append = true and 0 for append = false.
   // Otherwise ContextFull is returned once start + n_prompt_tokens() + n_generated()
-  // == n_ctx(). Throws Error("empty prompt") when there is nothing to generate from:
-  // zero new tokens with append = false, or with append = true and n_past() == 0.
-  // With append = true and zero new tokens, generation continues from the cache.
+  // == n_ctx() (the cache is then full).
+  //
+  // Empty input: zero new tokens (an empty parts list, or parts that encode to
+  // nothing) with append = false throws Error("empty prompt"). With append = true it
+  // continues generating from the cached context, unless n_past() == 0, which also
+  // throws Error("empty prompt").
+  // Invalid sampling params throw Error before any state changes.
   StopReason generate(std::span<const PromptPart> parts, const GenParams&,
                       const std::function<bool(std::string_view piece)>& on_token);
   // One part with special = true. Unlike the overload above, with append = false

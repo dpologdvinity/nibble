@@ -4,6 +4,7 @@
 #include <new>
 #include <random>
 #include <span>
+#include <system_error>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -34,14 +35,24 @@ const gguf::File& check_vocab_matches_embd(const gguf::File& f) {
   return f;
 }
 
+// Builds the config and checks the requested n_ctx against context_length before
+// the tokenizer, weights and backend are built.
+model::LlamaConfig load_config(const gguf::File& f, const ModelParams& p) {
+  model::LlamaConfig c = model::LlamaConfig::from_gguf(f);
+  if (p.n_ctx > c.n_ctx_train)
+    throw Error("n_ctx " + std::to_string(p.n_ctx) + " exceeds the model's context_length " +
+                std::to_string(c.n_ctx_train));
+  return c;
+}
+
 }  // namespace
 
 // Members are in dependency order; destruction runs in reverse
 // (Weights before File, backend before pool).
 struct Model::Impl {
   gguf::File file;
-  tok::Tokenizer tokenizer;
   model::LlamaConfig cfg;
+  tok::Tokenizer tokenizer;
   ThreadPool pool;
   cpu::CpuBackend backend;
   model::Weights weights;
@@ -49,16 +60,13 @@ struct Model::Impl {
 
   Impl(const std::string& path, const ModelParams& p)
       : file(gguf::File::open(path)),
+        cfg(load_config(file, p)),
         tokenizer(tok::Tokenizer::from_gguf(check_vocab_matches_embd(file))),
-        cfg(model::LlamaConfig::from_gguf(file)),
         pool(p.n_threads > 0 ? p.n_threads
                              : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()))),
         backend(pool),
         weights(model::Weights::bind(file, cfg, backend)),
         n_ctx(p.n_ctx > 0 ? p.n_ctx : std::min<int64_t>(4096, cfg.n_ctx_train)) {
-    if (p.n_ctx > cfg.n_ctx_train)
-      throw Error("n_ctx " + std::to_string(p.n_ctx) + " exceeds the model's context_length " +
-                  std::to_string(cfg.n_ctx_train));
     if (n_ctx <= 0) throw Error("invalid context length " + std::to_string(n_ctx));
   }
 };
@@ -123,11 +131,17 @@ StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams&
   if (n_new == 0 && start == 0) throw Error("empty prompt");
   // Built before any state changes, so invalid params throw with the cache intact.
   // Allocates its n_vocab buffers here, outside the per-token loop.
-  const uint64_t seed = gp.seed ? *gp.seed : [] {
-    std::random_device rd;
-    return (static_cast<uint64_t>(rd()) << 32) ^ rd();
-  }();
+  uint64_t seed = gp.seed.value_or(0);
+  if (!gp.seed && gp.temperature > 0.0f) {  // the seed only matters when sampling
+    try {
+      std::random_device rd;
+      seed = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+    } catch (const std::system_error& e) {
+      throw Error(std::string("cannot seed the sampler: random_device failed: ") + e.what());
+    }
+  }
   Sampler sampler({gp.temperature, gp.top_k, gp.top_p, seed}, m.cfg.n_vocab);
+  if (!gp.append) n_past = 0;
   if (gp.max_tokens <= 0) return StopReason::MaxTokens;
   if (start + n_new >= m.n_ctx) return StopReason::ContextFull;
 
@@ -144,23 +158,25 @@ StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams&
     if (!tail.empty()) on_token(tail);  // already stopping: ignore return value
     return r;
   };
+  // Invariant: n_past < n_ctx whenever a token is sampled, so every sampled
+  // non-EOS token is forwarded (cached) before the next stop check.
   while (true) {
     const int32_t next = sampler.sample(logits);
-    if (m.tokenizer.is_eog(next)) return finish(StopReason::Eos);
+    if (m.tokenizer.is_eog(next)) return finish(StopReason::Eos);  // EOS is never forwarded
     std::string piece = streamer.push(m.tokenizer.decode_token(next));
     ++n_gen;
-    if (!piece.empty() && !on_token(piece)) {
-      (void)streamer.flush();  // drop held bytes: the caller asked to stop
-      return StopReason::Cancelled;
-    }
-    if (n_gen >= gp.max_tokens) return finish(StopReason::MaxTokens);
-    // Total tokens (cached + this one) may not exceed n_ctx; `next` is not forwarded.
-    if (n_past + 1 >= m.n_ctx) return finish(StopReason::ContextFull);
+    const bool cancel = !piece.empty() && !on_token(piece);
     const int32_t one[1] = {next};
     const int64_t pos = n_past;
     n_past = 0;
     tf.forward(std::span<const int32_t>(one, 1), pos, logits.data());
     n_past = pos + 1;
+    if (cancel) {
+      (void)streamer.flush();  // drop held bytes: the caller asked to stop
+      return StopReason::Cancelled;
+    }
+    if (n_gen >= gp.max_tokens) return finish(StopReason::MaxTokens);
+    if (n_past >= m.n_ctx) return finish(StopReason::ContextFull);  // total tokens == n_ctx
   }
 }
 
