@@ -1,11 +1,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstring>
 #include <random>
 #include <vector>
 
 #include "backend/cpu/cpu_backend.h"
 #include "backend/cpu/ref_ops.h"
 #include "fp16.h"
+#include "quant_test_util.h"
 #include "nibble/error.h"
 
 using namespace nibble;
@@ -70,13 +72,14 @@ TEST_CASE("cpu backend supports", "[cpu_backend]") {
   cpu::CpuBackend be(pool);
   CHECK(be.supports(DType::F32));
   CHECK(be.supports(DType::F16));
-  CHECK_FALSE(be.supports(DType::Q4_0));
+  CHECK(be.supports(DType::Q4_0));
+  CHECK(be.supports(DType::Q8_0));
 }
 
 TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
-  be.reserve(64, 6);
+  be.reserve({64, 6, 1, 32});
   const size_t cap = be.scratch_capacity();
   std::mt19937 g(3);
   const int64_t H = 6, KV = 2, D = 16;
@@ -110,4 +113,70 @@ TEST_CASE("cpu backend alloc rejects bad sizes", "[cpu_backend]") {
   CHECK_THROWS_AS(be.alloc(INT64_MAX / 2), Error);
   CHECK_THROWS_AS(be.alloc(INT64_MAX), Error);
   CHECK(be.live_allocations() == 0);
+}
+
+namespace {
+Tensor q_tensor(DType t, const std::vector<uint8_t>& bytes, int64_t in, int64_t out) {
+  Tensor w;
+  w.type = t;
+  w.n_dims = 2;
+  w.ne = {in, out, 1, 1};
+  w.data = bytes.data();
+  return w;
+}
+}  // namespace
+
+TEST_CASE("cpu backend quantized matmul equals ref_ops bitwise", "[cpu_backend][quant]") {
+  ThreadPool pool(4);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(5);
+  const int64_t in = 96, out = 37, n = 3;
+  be.reserve({64, 4, n, in});
+  for (DType t : {DType::Q8_0, DType::Q4_0}) {
+    auto wb = test_quantize_rows(t, rnd(static_cast<size_t>(in * out), g), in);
+    Tensor w = q_tensor(t, wb, in, out);
+    auto x = rnd(static_cast<size_t>(n * in), g);
+    std::vector<BlockQ8_0> xq(static_cast<size_t>(n * in / 32));
+    cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
+    std::vector<float> ref(static_cast<size_t>(n * out)), got(ref.size());
+    cpu::matmul_rows(w, x.data(), ref.data(), n, 0, out, xq.data());
+    be.matmul(w, x.data(), got.data(), n);
+    CHECK(std::memcmp(ref.data(), got.data(), ref.size() * sizeof(float)) == 0);
+  }
+}
+
+TEST_CASE("cpu backend quantized embed dequantizes the row", "[cpu_backend][quant]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(6);
+  for (DType t : {DType::Q8_0, DType::Q4_0}) {
+    auto wb = test_quantize_rows(t, rnd(64 * 5, g), 64);
+    Tensor tab = q_tensor(t, wb, 64, 5);
+    std::vector<int32_t> ids = {3, 0};
+    std::vector<float> got(128), want(64);
+    be.embed(tab, ids, got.data());
+    const size_t rb = 64 / 32 * (t == DType::Q4_0 ? 18 : 34);
+    dequantize_row(t, wb.data() + 3 * rb, want.data(), 64);
+    CHECK(std::memcmp(got.data(), want.data(), 64 * sizeof(float)) == 0);
+    dequantize_row(t, wb.data(), want.data(), 64);
+    CHECK(std::memcmp(got.data() + 64, want.data(), 64 * sizeof(float)) == 0);
+  }
+}
+
+TEST_CASE("cpu backend reserve prevents quantized matmul allocation", "[cpu_backend][quant]") {
+  ThreadPool pool(4);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(8);
+  const int64_t in = 64, out = 24;
+  be.reserve({64, 4, 4, in});
+  auto wb = test_quantize_rows(DType::Q4_0, rnd(static_cast<size_t>(in * out), g), in);
+  Tensor w = q_tensor(DType::Q4_0, wb, in, out);
+  auto x = rnd(static_cast<size_t>(in), g);
+  float* y = be.alloc(out);
+  const size_t live = be.live_allocations(), cap = be.quant_scratch_capacity();
+  for (int i = 0; i < 64; ++i) {
+    be.matmul(w, x.data(), y, 1);
+    REQUIRE(be.live_allocations() == live);
+    REQUIRE(be.quant_scratch_capacity() == cap);
+  }
 }

@@ -9,7 +9,7 @@
 namespace nibble::cpu {
 
 namespace {
-[[noreturn]] void bad_type() { throw Error("cpu backend: unsupported weight dtype (only F32/F16)"); }
+[[noreturn]] void bad_type() { throw Error("cpu backend: unsupported weight dtype (only F32/F16/Q8_0/Q4_0)"); }
 
 inline const uint16_t* as_f16(const Tensor& t) { return static_cast<const uint16_t*>(t.data); }
 inline const float* as_f32(const Tensor& t) { return static_cast<const float*>(t.data); }
@@ -39,15 +39,35 @@ void embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
     } else if (table.type == DType::F16) {
       const uint16_t* r = as_f16(table) + id * d;
       for (int64_t k = 0; k < d; ++k) o[k] = fp16_to_fp32(r[k]);
+    } else if (table.type == DType::Q8_0 || table.type == DType::Q4_0) {
+      dequantize_row(table.type, static_cast<const uint8_t*>(table.data) + id * table.row_bytes(), o, d);
     } else {
       bad_type();
     }
   }
 }
 
-void matmul_rows(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
+void quantize_rows_q8_0(const float* x, BlockQ8_0* y, int64_t n, int64_t width) {
+  const int64_t nb = width / kQK;
+  for (int64_t t = 0; t < n; ++t) quantize_row_q8_0(x + t * width, y + t * nb, width);
+}
+
+void matmul_rows(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end,
+                 const BlockQ8_0* xq) {
   const int64_t in = w.ne[0], out = w.rows();
-  if (w.type != DType::F32 && w.type != DType::F16) bad_type();
+  const bool quant = w.type == DType::Q8_0 || w.type == DType::Q4_0;
+  if (w.type != DType::F32 && w.type != DType::F16 && !quant) bad_type();
+  if (quant) {
+    if (n > 0 && !xq) throw Error("matmul: quantized weight needs quantized activations");
+    const int64_t nb = in / kQK, rb = w.row_bytes();
+    for (int64_t t = 0; t < n; ++t)
+      for (int64_t r = row_begin; r < row_end; ++r) {
+        const uint8_t* wr = static_cast<const uint8_t*>(w.data) + r * rb;
+        y[t * out + r] = w.type == DType::Q8_0 ? dot_q8_0_q8_0(reinterpret_cast<const BlockQ8_0*>(wr), xq + t * nb, nb)
+                                               : dot_q4_0_q8_0(reinterpret_cast<const BlockQ4_0*>(wr), xq + t * nb, nb);
+      }
+    return;
+  }
   for (int64_t t = 0; t < n; ++t) {
     const float* xt = x + t * in;
     for (int64_t r = row_begin; r < row_end; ++r) {

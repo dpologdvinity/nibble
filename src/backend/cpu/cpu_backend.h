@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "backend/backend.h"
+#include "quant.h"
 #include "thread_pool.h"
 
 namespace nibble::cpu {
@@ -14,9 +15,12 @@ class CpuBackend final : public Backend {
   CpuBackend(const CpuBackend&) = delete;
   CpuBackend& operator=(const CpuBackend&) = delete;
 
-  bool supports(DType t) const override { return t == DType::F32 || t == DType::F16; }
-  void reserve(int64_t n_ctx, int64_t n_heads) override;
+  bool supports(DType t) const override {
+    return t == DType::F32 || t == DType::F16 || t == DType::Q8_0 || t == DType::Q4_0;
+  }
+  void reserve(const ReserveParams&) override;
   size_t scratch_capacity() const { return scratch_.size(); }  // test hook
+  size_t quant_scratch_capacity() const { return xq_.size(); }  // test hook (blocks)
   float* alloc(int64_t n_floats) override;
   void free(float* p) override;
   size_t live_allocations() const { return allocs_.size(); }  // test hook
@@ -39,6 +43,10 @@ class CpuBackend final : public Backend {
   // so slots are never shared). Sized by reserve(); attention() only grows it if called
   // beyond the reserved size, which is outside the no-allocation guarantee.
   std::vector<float> scratch_;
+  // Q8_0-quantized activations for Q-weight matmul, written once by the calling thread; workers
+  // only read it. Sized by reserve() to max_rows * max_width / 32 blocks; matmul() only grows it
+  // if called beyond that, which is outside the no-allocation guarantee (like attention).
+  std::vector<BlockQ8_0> xq_;
 };
 
 }  // namespace nibble::cpu

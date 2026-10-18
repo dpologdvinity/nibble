@@ -7,6 +7,7 @@
 
 #include "fp16.h"
 #include "gguf_writer.h"
+#include "quant_test_util.h"
 #include "tokenizer/unicode.h"
 
 struct TinyTokOpts {
@@ -52,6 +53,8 @@ struct TinyModelOpts {
   std::string q4_tensor;        // store this tensor as Q4_0 (needs ne[0] % 32 == 0, e.g. blk.0.ffn_down.weight)
   int64_t vocab_delta = 0;      // token_embd rows = 261 + delta (tokenizer unchanged)
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
+  bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
+  std::string raw_type_tensor;  // store this tensor with unsupported ggml type 12 (Q4_K) and dummy bytes
 };
 
 // qwen2: 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab 261.
@@ -59,7 +62,8 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
                                             bool zero_output_norm = false, int32_t eos_id = 259,
                                             const TinyModelOpts& mo = {}) {
   using nibble::DType;
-  constexpr int64_t E = 16, H = 4, KV = 2, HD = 4, FF = 32, V = 261, L = 2;
+  constexpr int64_t H = 4, KV = 2, V = 261, L = 2;
+  const int64_t E = mo.quant_dims ? 32 : 16, HD = E / H, FF = mo.quant_dims ? 64 : 32;
   GgufWriter w;
   w.add_string("general.architecture", mo.arch);
   const std::string a = mo.arch + ".";
@@ -91,14 +95,16 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
         b.push_back(static_cast<uint8_t>(h));
         b.push_back(static_cast<uint8_t>(h >> 8));
       }
-    } else {  // Q4_0: contents are irrelevant (only used to test rejection)
-      b.assign(v.size() / static_cast<size_t>(ne0) * static_cast<size_t>(ne0 / 32) * 18, 0);
+    } else if (t == DType::Q4_0 || t == DType::Q8_0) {
+      b = test_quantize_rows(t, v, ne0);
+    } else {  // unsupported type: contents are irrelevant (only used to test rejection)
+      b.assign(144, 0);
     }
     return b;
   };
   auto mat = [&](const std::string& name, int64_t in, int64_t out) {
     if (name == mo.drop_tensor) return;
-    DType t = name == mo.q4_tensor ? DType::Q4_0 : wtype;
+    DType t = name == mo.q4_tensor ? DType::Q4_0 : name == mo.raw_type_tensor ? static_cast<DType>(12) : wtype;
     int64_t o = name == mo.bad_shape ? out + 1 : out;
     w.add_tensor(name, t, {in, o}, bytes(t, rnd(static_cast<size_t>(in * o), -0.5f, 0.5f), in));
   };

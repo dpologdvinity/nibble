@@ -33,7 +33,7 @@ Tensor get(const gguf::File& f, const Backend& be, const std::string& name, std:
   if (f32_only ? t->type != DType::F32 : !be.supports(t->type))
     throw Error("unsupported tensor type " + tn + " for " + name +
                 (f32_only ? " — norms and biases must be F32"
-                          : " — not supported by the CPU backend yet; v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize"));
+                          : " — v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize"));
   return *t;
 }
 

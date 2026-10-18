@@ -12,6 +12,12 @@ struct RopeParams {
   const float* freq_factors;  // nullptr or head_dim/2 floats (host)
 };
 
+// Sizes the backend preallocates in reserve(). max_rows = the most rows any op sees at once (the
+// model's max_batch); max_width = the largest matmul input width, max(n_embd, n_heads*head_dim, n_ff).
+struct ReserveParams {
+  int64_t n_ctx, n_heads, max_rows, max_width;
+};
+
 // Activations are allocated and touched only through the backend (a CUDA backend
 // will hand out device pointers), so model code never dereferences them.
 //
@@ -24,9 +30,10 @@ class Backend {
  public:
   virtual ~Backend() = default;
   virtual bool supports(DType weight_type) const = 0;
-  // Called once by the model before generation. Afterwards, ops with pos0 + n <= n_ctx and
-  // n_heads <= the reserved head count must not allocate.
-  virtual void reserve(int64_t n_ctx, int64_t n_heads) = 0;
+  // Called once by the model before generation. Afterwards, ops with pos0 + n <= n_ctx,
+  // n_heads <= the reserved head count, n <= max_rows and matmul input width <= max_width
+  // must not allocate.
+  virtual void reserve(const ReserveParams&) = 0;
   // Throws nibble::Error if n_floats < 0 or the allocation fails. Memory is zeroed.
   virtual float* alloc(int64_t n_floats) = 0;
   // Releases a block from alloc(). free(nullptr) is a no-op; freeing a pointer this

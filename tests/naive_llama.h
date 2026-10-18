@@ -7,6 +7,7 @@
 
 #include "fp16.h"
 #include "gguf/gguf.h"
+#include "quant.h"
 
 namespace naive {
 
@@ -16,6 +17,12 @@ inline std::vector<double> load(const nibble::gguf::File& f, const std::string& 
   int64_t n = 1;
   for (int i = 0; i < ti->tensor.n_dims; ++i) n *= ti->tensor.ne[static_cast<size_t>(i)];
   std::vector<double> v(static_cast<size_t>(n));
+  if (ti->tensor.type == nibble::DType::Q4_0 || ti->tensor.type == nibble::DType::Q8_0) {
+    std::vector<float> tmp(static_cast<size_t>(n));
+    nibble::dequantize_row(ti->tensor.type, ti->tensor.data, tmp.data(), n);
+    for (size_t i = 0; i < tmp.size(); ++i) v[i] = tmp[i];
+    return v;
+  }
   for (int64_t i = 0; i < n; ++i) {
     if (ti->tensor.type == nibble::DType::F32) {
       v[static_cast<size_t>(i)] = static_cast<const float*>(ti->tensor.data)[i];

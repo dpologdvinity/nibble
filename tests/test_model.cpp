@@ -82,6 +82,34 @@ TEST_CASE("model matches naive reference", "[model]") {
   }
 }
 
+TEST_CASE("quantized model matches naive on dequantized weights", "[model][quant]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  TinyModelOpts o;
+  o.quant_dims = true;
+  for (DType ty : {DType::Q8_0, DType::Q4_0}) {
+    Loaded m(tiny_model_gguf(7, ty, false, 259, o), be);
+    auto ref = naive::naive_logits(m.file, kToks);
+    auto got = run(m, be, kToks, 512, false);
+    double dot = 0, na = 0, nb = 0;
+    size_t ag = 0, ar = 0;
+    for (size_t i = 0; i < got.size(); ++i) {
+      dot += double(got[i]) * ref[i];
+      na += double(got[i]) * got[i];
+      nb += double(ref[i]) * ref[i];
+      if (got[i] > got[ag]) ag = i;
+      if (ref[i] > ref[ar]) ar = i;
+    }
+    const double cosv = dot / std::sqrt(na * nb);
+    UNSCOPED_INFO("cosine " << cosv);
+    WARN("tiny " << (ty == DType::Q8_0 ? "Q8_0" : "Q4_0") << " cosine vs naive = " << cosv);
+    CHECK(cosv >= 0.999);
+    CHECK(ag == ar);
+    auto batch = run(m, be, kToks, 512, false);
+    CHECK(bitwise_equal(run(m, be, kToks, 512, true), batch));
+  }
+}
+
 TEST_CASE("incremental and chunked prefill equal batch", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -127,8 +155,8 @@ TEST_CASE("model rejects bad files", "[model]") {
   }
   SECTION("unsupported dtype") {
     TinyModelOpts o;
-    o.q4_tensor = "blk.0.ffn_down.weight";
-    CHECK_THROWS_WITH(load(o), ContainsSubstring("Q4_0"));
+    o.raw_type_tensor = "blk.0.ffn_down.weight";
+    CHECK_THROWS_WITH(load(o), ContainsSubstring("12"));
     CHECK_THROWS_WITH(load(o), ContainsSubstring("blk.0.ffn_down.weight"));
   }
 }

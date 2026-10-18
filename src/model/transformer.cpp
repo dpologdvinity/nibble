@@ -53,7 +53,7 @@ Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, in
     : c_(c), w_(w), be_(be), n_ctx_(n_ctx), max_batch_(max_batch) {
   if (n_ctx <= 0 || max_batch <= 0) throw Error("n_ctx and max_batch must be positive");
   try {
-    be.reserve(n_ctx, c.n_heads);
+    be.reserve({n_ctx, c.n_heads, max_batch, std::max({c.n_embd, c.n_heads * c.head_dim, c.n_ff})});
   } catch (const Error& e) {
     throw Error(std::string("cannot allocate attention scratch for n_ctx=") + std::to_string(n_ctx) +
                 "; try a smaller n_ctx (-c): " + e.what());

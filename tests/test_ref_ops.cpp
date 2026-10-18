@@ -4,7 +4,11 @@
 #include <vector>
 
 #include "backend/cpu/ref_ops.h"
+#include <random>
+
 #include "fp16.h"
+#include "quant.h"
+#include "quant_test_util.h"
 
 using namespace nibble;
 using Catch::Approx;
@@ -116,4 +120,35 @@ TEST_CASE("ref softmax overflow-safe", "[ref]") {
   cpu::softmax_inplace(x.data(), 2);
   CHECK(x[0] == rel(0.5));
   CHECK(x[1] == rel(0.5));
+}
+
+// Pins the llama.cpp method: weights . dequant(quantize_q8_0(x)), not plain F32 x.
+TEST_CASE("ref quantized matmul uses q8_0 activations", "[ref][quant]") {
+  std::mt19937 g(9);
+  std::uniform_real_distribution<float> d(-1.f, 1.f);
+  const int64_t in = 96, out = 7, n = 2;
+  std::vector<float> wf(static_cast<size_t>(in * out)), x(static_cast<size_t>(in * n));
+  for (auto& v : wf) v = d(g);
+  for (auto& v : x) v = d(g);
+  for (DType t : {DType::Q8_0, DType::Q4_0}) {
+    auto wb = test_quantize_rows(t, wf, in);
+    Tensor w;
+    w.type = t;
+    w.n_dims = 2;
+    w.ne = {in, out, 1, 1};
+    w.data = wb.data();
+    std::vector<BlockQ8_0> xq(static_cast<size_t>(n * in / 32));
+    cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
+    std::vector<float> y(static_cast<size_t>(n * out));
+    cpu::matmul_rows(w, x.data(), y.data(), n, 0, out, xq.data());
+    std::vector<float> wd(static_cast<size_t>(in * out)), xd(static_cast<size_t>(in * n));
+    dequantize_row(t, wb.data(), wd.data(), in * out);
+    dequantize_row(DType::Q8_0, xq.data(), xd.data(), in * n);
+    for (int64_t tt = 0; tt < n; ++tt)
+      for (int64_t r = 0; r < out; ++r) {
+        double acc = 0;
+        for (int64_t k = 0; k < in; ++k) acc += double(wd[r * in + k]) * xd[tt * in + k];
+        CHECK(y[tt * out + r] == Approx(acc).epsilon(1e-5).margin(1e-6));
+      }
+  }
 }

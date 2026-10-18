@@ -14,8 +14,14 @@ namespace nibble::cpu {
 
 CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool) {}
 
-void CpuBackend::reserve(int64_t n_ctx, int64_t n_heads) {
-  uint64_t need;
+void CpuBackend::reserve(const ReserveParams& rp) {
+  const int64_t n_ctx = rp.n_ctx, n_heads = rp.n_heads;
+  uint64_t need, xq_need;
+  if (rp.max_rows < 0 || rp.max_width < 0 ||
+      __builtin_mul_overflow(static_cast<uint64_t>(rp.max_rows), static_cast<uint64_t>(rp.max_width) / kQK, &xq_need) ||
+      xq_need > std::numeric_limits<size_t>::max() / sizeof(BlockQ8_0))
+    throw Error("reserve: activation scratch for max_rows=" + std::to_string(rp.max_rows) +
+                " max_width=" + std::to_string(rp.max_width) + " is too large");
   if (n_ctx < 0 || n_heads < 0 || __builtin_mul_overflow(static_cast<uint64_t>(n_ctx), static_cast<uint64_t>(n_heads), &need) ||
       need > std::numeric_limits<size_t>::max() / sizeof(float))
     throw Error("reserve: attention scratch for n_ctx=" + std::to_string(n_ctx) + " n_heads=" + std::to_string(n_heads) +
@@ -25,6 +31,14 @@ void CpuBackend::reserve(int64_t n_ctx, int64_t n_heads) {
       scratch_.resize(static_cast<size_t>(need));
     } catch (const std::exception&) {
       throw Error("reserve: cannot allocate " + std::to_string(need * sizeof(float)) + " bytes of attention scratch");
+    }
+  }
+  if (xq_.size() < xq_need) {
+    try {
+      xq_.resize(static_cast<size_t>(xq_need));
+    } catch (const std::exception&) {
+      throw Error("reserve: cannot allocate " + std::to_string(xq_need * sizeof(BlockQ8_0)) +
+                  " bytes of activation scratch");
     }
   }
 }
@@ -83,8 +97,17 @@ void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
                 static_cast<void*>(y), w.data, static_cast<long long>(n));
   // Unsupported dtype throws here on the calling thread (pool tasks must not throw);
   // Task 9 gates on supports() at load time so the hot path never sees one.
-  if (!supports(w.type)) cpu::matmul_rows(w, x, y, 0, 0, 0);  // n=0: only the dtype check runs
-  pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { cpu::matmul_rows(w, x, y, n, b, e); });
+  if (!supports(w.type)) cpu::matmul_rows(w, x, y, 0, 0, 0, nullptr);  // n=0: only the dtype check runs
+  const BlockQ8_0* xq = nullptr;
+  if (w.type == DType::Q8_0 || w.type == DType::Q4_0) {
+    NIBBLE_DCHECK(w.ne[0] % kQK == 0, "matmul: quantized weight ne0=%lld not a multiple of 32",
+                  static_cast<long long>(w.ne[0]));
+    const size_t need = static_cast<size_t>(n * (w.ne[0] / kQK));
+    if (xq_.size() < need) xq_.resize(need);  // beyond reserve(): outside the no-allocation guarantee
+    cpu::quantize_rows_q8_0(x, xq_.data(), n, w.ne[0]);
+    xq = xq_.data();
+  }
+  pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { cpu::matmul_rows(w, x, y, n, b, e, xq); });
 }
 
 void CpuBackend::rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) {
