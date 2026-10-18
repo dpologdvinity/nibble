@@ -376,3 +376,27 @@ TEST_CASE("gguf u64 array element above INT64_MAX rejected", "[gguf]") {
   w.add_raw_kv(raw_array_kv<uint64_t>("big", ValueType::U64, {1, uint64_t{INT64_MAX} + 1}));
   REQUIRE_THROWS_WITH(File::parse(w.build()), ContainsSubstring("9223372036854775808"));
 }
+
+TEST_CASE("gguf error messages escape control bytes", "[gguf]") {
+  auto check = [](const std::vector<uint8_t>& b) {
+    try {
+      (void)File::parse(b);
+      FAIL("expected Error");
+    } catch (const nibble::Error& e) {
+      const std::string msg = e.what();
+      CHECK(msg.find("\\x1b") != std::string::npos);
+      CHECK(msg.find('\x1b') == std::string::npos);
+    }
+  };
+  SECTION("tensor name") {
+    GgufWriter w;
+    w.add_tensor("w\x1b[31m", DType::F32, {}, std::vector<uint8_t>(4, 1));  // n_dims 0
+    check(w.build());
+  }
+  SECTION("key") {
+    GgufWriter w;
+    w.add_string("k\x1b[0m", "a");
+    w.add_string("k\x1b[0m", "b");  // duplicate
+    check(w.build());
+  }
+}

@@ -6,6 +6,7 @@
 #include <new>
 
 #include "nibble/error.h"
+#include "util/escape.h"
 
 namespace nibble::gguf {
 namespace {
@@ -72,7 +73,7 @@ size_t scalar_size(ValueType t) {
 ValueType read_value_type(Reader& r, const std::string& key) {
   uint32_t t = r.read<uint32_t>("value type");
   if (t > static_cast<uint32_t>(ValueType::F64)) {
-    throw Error("gguf: key '" + key + "' has unknown value type " + std::to_string(t));
+    throw Error("gguf: key '" + escape_control(key) + "' has unknown value type " + std::to_string(t));
   }
   return static_cast<ValueType>(t);
 }
@@ -91,13 +92,13 @@ void read_scalar(Reader& r, ValueType t, const std::string& key, int64_t& i, dou
     case ValueType::I64: i = r.read<int64_t>("i64"); break;
     case ValueType::U64: {
       uint64_t v = r.read<uint64_t>("u64");
-      if (v > kMaxI64) throw Error("gguf: key '" + key + "' u64 value " + std::to_string(v) + " exceeds int64 range");
+      if (v > kMaxI64) throw Error("gguf: key '" + escape_control(key) + "' u64 value " + std::to_string(v) + " exceeds int64 range");
       i = static_cast<int64_t>(v);
       break;
     }
     case ValueType::F32: f = r.read<float>("f32"); is_float = true; break;
     case ValueType::F64: f = r.read<double>("f64"); is_float = true; break;
-    default: throw Error("gguf: key '" + key + "' internal: not a scalar type");
+    default: throw Error("gguf: key '" + escape_control(key) + "' internal: not a scalar type");
   }
 }
 
@@ -113,12 +114,12 @@ struct detail::ArrayAccess {
 Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
   Array a;
   a.elem_type_ = read_value_type(r, key);
-  if (a.elem_type_ == ValueType::Array) throw Error("gguf: key '" + key + "' is a nested array (unsupported)");
+  if (a.elem_type_ == ValueType::Array) throw Error("gguf: key '" + escape_control(key) + "' is a nested array (unsupported)");
   uint64_t count = r.read<uint64_t>("array count");
   uint64_t min_elem = a.elem_type_ == ValueType::String ? 8 : scalar_size(a.elem_type_);
   uint64_t need;
   if (__builtin_mul_overflow(count, min_elem, &need) || need > r.remaining()) {
-    throw Error("gguf: key '" + key + "' array count " + std::to_string(count) + " exceeds file size");
+    throw Error("gguf: key '" + escape_control(key) + "' array count " + std::to_string(count) + " exceeds file size");
   }
   const size_t n = static_cast<size_t>(count);
   a.count_ = n;
@@ -135,7 +136,7 @@ Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
         uint64_t v;
         std::memcpy(&v, r.here() + k * 8, 8);
         if (v > kMaxI64) {
-          throw Error("gguf: key '" + key + "' u64 element " + std::to_string(k) + " value " + std::to_string(v) +
+          throw Error("gguf: key '" + escape_control(key) + "' u64 element " + std::to_string(k) + " value " + std::to_string(v) +
                       " exceeds int64 range");
         }
       }
@@ -217,7 +218,7 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     std::string key = r.read_string("key");
     ValueType t = read_value_type(r, key);
     Value v = read_value(r, t, key);
-    if (!f.kv_index_.emplace(key, f.metadata_.size()).second) throw Error("gguf: duplicate key '" + key + "'");
+    if (!f.kv_index_.emplace(key, f.metadata_.size()).second) throw Error("gguf: duplicate key '" + escape_control(key) + "'");
     f.metadata_.emplace_back(std::move(key), std::move(v));
   }
 
@@ -239,13 +240,13 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     const std::string& name = ti.name;
     uint32_t n_dims = r.read<uint32_t>("tensor n_dims");
     if (n_dims < 1 || n_dims > 4) {
-      throw Error("gguf: tensor '" + name + "' has n_dims " + std::to_string(n_dims) + " (must be 1..4)");
+      throw Error("gguf: tensor '" + escape_control(name) + "' has n_dims " + std::to_string(n_dims) + " (must be 1..4)");
     }
     ti.tensor.n_dims = static_cast<int>(n_dims);
     for (uint32_t d = 0; d < n_dims; ++d) {
       uint64_t dim = r.read<uint64_t>("tensor dimension");
       if (dim == 0 || dim > kMaxI64) {
-        throw Error("gguf: tensor '" + name + "' has invalid dimension " + std::to_string(dim));
+        throw Error("gguf: tensor '" + escape_control(name) + "' has invalid dimension " + std::to_string(dim));
       }
       ti.tensor.ne[d] = static_cast<int64_t>(dim);
     }
@@ -256,37 +257,37 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
       case 0: case 1: case 2: case 8: ti.tensor.type = static_cast<DType>(ggml_type); break;
       default:
         throw Error("gguf: unsupported tensor type " + std::string(ggml_type_name(ggml_type)) + " (" +
-                    std::to_string(ggml_type) + ") for " + name +
+                    std::to_string(ggml_type) + ") for " + escape_control(name) +
                     " \xe2\x80\x94 v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize");
     }
     const DTypeInfo& info = dtype_info(ti.tensor.type);
     if (ti.tensor.ne[0] % info.block_size != 0) {
-      throw Error("gguf: tensor '" + name + "' ne[0]=" + std::to_string(ti.tensor.ne[0]) + " is not a multiple of " +
+      throw Error("gguf: tensor '" + escape_control(name) + "' ne[0]=" + std::to_string(ti.tensor.ne[0]) + " is not a multiple of " +
                   info.name + " block size " + std::to_string(info.block_size));
     }
     uint64_t elems = 1;
     for (int d = 0; d < 4; ++d) {
       if (__builtin_mul_overflow(elems, static_cast<uint64_t>(ti.tensor.ne[d]), &elems) || elems > kMaxI64) {
-        throw Error("gguf: tensor '" + name + "' element count overflows");
+        throw Error("gguf: tensor '" + escape_control(name) + "' element count overflows");
       }
     }
     uint64_t row_bytes;
     if (__builtin_mul_overflow(static_cast<uint64_t>(ti.tensor.ne[0] / info.block_size),
                                static_cast<uint64_t>(info.block_bytes), &row_bytes) ||
         row_bytes > kMaxI64) {
-      throw Error("gguf: tensor '" + name + "' row byte size overflows");
+      throw Error("gguf: tensor '" + escape_control(name) + "' row byte size overflows");
     }
     uint64_t rows = static_cast<uint64_t>(ti.tensor.ne[1]) * static_cast<uint64_t>(ti.tensor.ne[2]) *
                     static_cast<uint64_t>(ti.tensor.ne[3]);  // <= elems, no overflow
     if (__builtin_mul_overflow(row_bytes, rows, &ti.nbytes) || ti.nbytes > kMaxI64) {
-      throw Error("gguf: tensor '" + name + "' byte size overflows");
+      throw Error("gguf: tensor '" + escape_control(name) + "' byte size overflows");
     }
     if (ti.offset % alignment != 0) {
-      throw Error("gguf: tensor '" + name + "' offset " + std::to_string(ti.offset) + " is not a multiple of alignment " +
+      throw Error("gguf: tensor '" + escape_control(name) + "' offset " + std::to_string(ti.offset) + " is not a multiple of alignment " +
                   std::to_string(alignment));
     }
     if (!f.tensor_index_.emplace(name, f.tensors_.size()).second) {
-      throw Error("gguf: duplicate tensor '" + name + "'");
+      throw Error("gguf: duplicate tensor '" + escape_control(name) + "'");
     }
     f.tensors_.push_back(std::move(ti));
   }
@@ -296,7 +297,7 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     uint64_t end;
     uint64_t avail = data_start <= bytes.size() ? bytes.size() - data_start : 0;
     if (__builtin_add_overflow(ti.offset, ti.nbytes, &end) || end > avail) {
-      throw Error("gguf: tensor '" + ti.name + "' (offset " + std::to_string(ti.offset) + ", " +
+      throw Error("gguf: tensor '" + escape_control(ti.name) + "' (offset " + std::to_string(ti.offset) + ", " +
                   std::to_string(ti.nbytes) + " bytes) extends past end of file");
     }
     ti.tensor.data = bytes.data() + data_start + ti.offset;
@@ -312,11 +313,11 @@ const Value* File::find(std::string_view key) const {
 namespace {
 const Value& require(const File& f, std::string_view key) {
   const Value* v = f.find(key);
-  if (!v) throw Error("gguf: missing metadata key '" + std::string(key) + "'");
+  if (!v) throw Error("gguf: missing metadata key '" + escape_control(key) + "'");
   return *v;
 }
 [[noreturn]] void wrong_type(std::string_view key, const char* want, const Value& v) {
-  throw Error("gguf: key '" + std::string(key) + "' expected " + want + ", got " + type_label(v));
+  throw Error("gguf: key '" + escape_control(key) + "' expected " + want + ", got " + type_label(v));
 }
 }  // namespace
 

@@ -2,9 +2,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "escape.h"
+#include "util/escape.h"
 
-using nibble::cli::escape_control;
+using nibble::escape_control;
 
 TEST_CASE("cli escape_control neutralizes terminal control bytes", "[cli]") {
   const std::string out = escape_control("\x1b[31mred\x1b[0m");

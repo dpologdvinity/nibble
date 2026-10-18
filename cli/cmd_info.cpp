@@ -5,10 +5,10 @@
 #include <variant>
 
 #include "commands.h"
-#include "escape.h"
 #include "gguf/gguf.h"
 #include "nibble/error.h"
 #include "tensor.h"
+#include "util/escape.h"
 
 namespace nibble::cli {
 namespace {

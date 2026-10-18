@@ -4,6 +4,7 @@
 #include <string>
 
 #include "nibble/error.h"
+#include "util/escape.h"
 
 namespace nibble::model {
 namespace {
@@ -22,16 +23,16 @@ const Tensor* find(const gguf::File& f, const std::string& name) {
 Tensor get(const gguf::File& f, const Backend& be, const std::string& name, std::initializer_list<int64_t> ne,
            bool f32_only) {
   const Tensor* t = find(f, name);
-  if (!t) throw Error("missing tensor " + name);
+  if (!t) throw Error("missing tensor " + escape_control(name));
   bool ok = t->n_dims == static_cast<int>(ne.size());
   int i = 0;
   for (int64_t d : ne) ok = ok && t->ne[static_cast<size_t>(i++)] == d;
   if (!ok)
-    throw Error("tensor " + name + ": expected " + shape_str(std::data(ne), static_cast<int>(ne.size())) + ", got " +
+    throw Error("tensor " + escape_control(name) + ": expected " + shape_str(std::data(ne), static_cast<int>(ne.size())) + ", got " +
                 shape_str(t->ne.data(), t->n_dims));
   const std::string tn = dtype_info(t->type).name;
   if (f32_only ? t->type != DType::F32 : !be.supports(t->type))
-    throw Error("unsupported tensor type " + tn + " for " + name +
+    throw Error("unsupported tensor type " + tn + " for " + escape_control(name) +
                 (f32_only ? " — norms and biases must be F32"
                           : " — v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize"));
   return *t;

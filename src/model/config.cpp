@@ -1,13 +1,14 @@
 #include "model/config.h"
 
 #include "nibble/error.h"
+#include "util/escape.h"
 
 namespace nibble::model {
 
 LlamaConfig LlamaConfig::from_gguf(const gguf::File& f) {
   LlamaConfig c;
   c.arch = f.get_string("general.architecture");
-  if (c.arch != "qwen2") throw Error("unsupported architecture '" + c.arch + "' (supported: qwen2)");
+  if (c.arch != "qwen2") throw Error("unsupported architecture '" + escape_control(c.arch) + "' (supported: qwen2)");
   const std::string a = c.arch + ".";
   c.n_layers = f.get_int(a + "block_count");
   c.n_embd = f.get_int(a + "embedding_length");

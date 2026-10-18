@@ -4,6 +4,7 @@
 #include <queue>
 
 #include "nibble/error.h"
+#include "util/escape.h"
 #include "tokenizer/pretokenize.h"
 #include "tokenizer/unicode.h"
 
@@ -30,9 +31,9 @@ struct BigramCmp {
 
 Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   const std::string model = f.get_string("tokenizer.ggml.model");
-  if (model != "gpt2") throw Error("unsupported tokenizer model: '" + model + "' (only 'gpt2')");
+  if (model != "gpt2") throw Error("unsupported tokenizer model: '" + escape_control(model) + "' (only 'gpt2')");
   const std::string pre = f.get_string("tokenizer.ggml.pre");
-  if (pre != "qwen2") throw Error("unsupported tokenizer pre-tokenizer: '" + pre + "' (only 'qwen2')");
+  if (pre != "qwen2") throw Error("unsupported tokenizer pre-tokenizer: '" + escape_control(pre) + "' (only 'qwen2')");
 
   const auto& toks = f.get_array("tokenizer.ggml.tokens");
   const auto& types = f.get_array("tokenizer.ggml.token_type");
@@ -61,9 +62,9 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   for (size_t k = 0; k < merges.size(); ++k) {
     const std::string m(merges.str_at(k));
     size_t sp = m.find(' ', 1);  // same as llama.cpp: first space after position 0
-    if (sp == std::string::npos) throw Error("malformed merge (no space): '" + m + "'");
+    if (sp == std::string::npos) throw Error("malformed merge (no space): '" + escape_control(m) + "'");
     for (const std::string& part : {m.substr(0, sp), m.substr(sp + 1)})
-      if (!t.ids_.count(part)) throw Error("merge '" + m + "' references token not in vocab: '" + part + "'");
+      if (!t.ids_.count(part)) throw Error("merge '" + escape_control(m) + "' references token not in vocab: '" + escape_control(part) + "'");
     t.ranks_.emplace(m, static_cast<int32_t>(k));
   }
 
@@ -161,7 +162,7 @@ void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out)
     }
     for (int k = 0; k >= 0 && !syms.empty(); k = syms[k].next) {
       auto it = ids_.find(w.substr(syms[k].off, syms[k].len));
-      if (it == ids_.end()) throw Error("symbol not in vocab: '" + w.substr(syms[k].off, syms[k].len) + "'");
+      if (it == ids_.end()) throw Error("symbol not in vocab: '" + escape_control(w.substr(syms[k].off, syms[k].len)) + "'");
       out.push_back(it->second);
     }
   }
