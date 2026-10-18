@@ -7,6 +7,8 @@ case "$NAME" in
   qwen2.5-0.5b-f16) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-fp16.gguf" ;;
   qwen2.5-0.5b-q8_0) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-q8_0.gguf" ;;
   qwen2.5-0.5b-q4_0) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-q4_0.gguf" ;;
+  llama32-1b-f16) GGUF="$ROOT/models/llama-3.2-1b-instruct-f16.gguf" ;;
+  tinyllama-1.1b-f16) GGUF="$ROOT/models/tinyllama-1.1b-chat-f16.gguf" ;;
   *) GGUF="$ROOT/models/$NAME.gguf" ;;
 esac
 [ -f "$GGUF" ] || { echo "missing model $GGUF" >&2; exit 1; }
@@ -23,7 +25,13 @@ esac
 OUT="$ROOT/models/golden/$NAME"
 mkdir -p "$OUT"
 "$REF" tokenize "$GGUF" "$ROOT/tests/tokenizer/corpus.txt" "$OUT/tokenize.txt"
+CHAT=chat   # chat prompt per model family; the output is always chat.bin
+case "$NAME" in
+  llama32-1b-*) CHAT=chat_llama3 ;;
+  tinyllama-*) CHAT=chat_zephyr ;;
+esac
 for p in capital code chat; do
-  "$REF" logits "$GGUF" "$ROOT/tests/e2e/prompts/$p.txt" 64 "$OUT/$p.bin" ${KV[@]+"${KV[@]}"}
+  src=$p; [ "$p" = chat ] && src=$CHAT
+  "$REF" logits "$GGUF" "$ROOT/tests/e2e/prompts/$src.txt" 64 "$OUT/$p.bin" ${KV[@]+"${KV[@]}"}
 done
 ls -l "$OUT"

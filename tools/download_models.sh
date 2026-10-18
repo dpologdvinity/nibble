@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Usage: tools/download_models.sh [name...]   (no args = all known models)
+# Llama 3.2 / TinyLlama are converted from HF safetensors instead: tools/convert_hf.sh <llama32-1b|tinyllama-1.1b>
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

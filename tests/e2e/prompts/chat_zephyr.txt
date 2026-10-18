@@ -1,0 +1,5 @@
+<|system|>
+You are a helpful assistant.</s>
+<|user|>
+Name three primary colors.</s>
+<|assistant|>
