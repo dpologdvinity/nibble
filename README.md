@@ -8,8 +8,9 @@ pthreads.
 
 ## Status
 
-Milestones M0–M3 are done: Qwen2.5 models in F16 run on the CPU with scalar
-reference kernels. This is a scalar baseline; optimization comes in M6.
+Milestones M0–M4 are done: Qwen2.5 models in F16, Q8_0 and Q4_0 run on the CPU
+with scalar reference kernels, with a sampler and a multi-turn `nibble chat`.
+This is a scalar baseline; optimization comes in M6.
 
 ## Build
 
@@ -23,6 +24,7 @@ Requires CMake ≥ 3.25 and g++ 13 or clang 18. Catch2 is fetched at configure t
 
 ```sh
 tools/download_models.sh   # downloads qwen2.5-0.5b-instruct-fp16.gguf into models/
+tools/make_quants.sh       # makes the Q8_0 and Q4_0 models from it (needs the llama.cpp build)
 ```
 
 ## Usage
@@ -30,6 +32,7 @@ tools/download_models.sh   # downloads qwen2.5-0.5b-instruct-fp16.gguf into mode
 ```sh
 build/nibble info models/qwen2.5-0.5b-instruct-fp16.gguf
 build/nibble run -m models/qwen2.5-0.5b-instruct-fp16.gguf -p "The capital of France is" -n 32
+build/nibble chat -m models/qwen2.5-0.5b-instruct-q4_0.gguf
 ```
 
 `nibble info <model.gguf>` prints the GGUF metadata and tensor table.
@@ -44,8 +47,19 @@ build/nibble run -m models/qwen2.5-0.5b-instruct-fp16.gguf -p "The capital of Fr
 | `-n <N>` | maximum tokens to generate (default 256) |
 | `-t <N>` | worker threads (default: hardware concurrency) |
 | `-c <N>` | context length (default: min(4096, model context)) |
+| `--temp <f>` | sampling temperature, >= 0; 0 is greedy (default 0.8) |
+| `--top-k <N>` | top-k cutoff; 0 disables (default 40) |
+| `--top-p <f>` | nucleus cutoff in (0, 1] (default 0.95) |
+| `--seed <u64>` | sampler seed (default: random) |
 
-Decoding is greedy. Text streams to stdout; a stop reason and timing line go to stderr.
+Text streams to stdout; a stop reason and timing line go to stderr. Bad flag
+values print usage and exit 2; errors such as a missing model exit 1.
+
+`nibble chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N]` plus the
+sampling flags reads one user message per stdin line and streams each reply to
+stdout (`-n` is per reply, default 512). Blank lines are skipped. Qwen2 models
+only (ChatML). It prompts with `> ` on stderr only when stdin is a terminal,
+stops at EOF, and on a full context prints `[context full]` and exits 0.
 
 ## Tests
 

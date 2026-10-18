@@ -45,6 +45,12 @@ int main(int argc, char** argv) {
   }
   write_file(dir + "/tiny.gguf", tiny_model_gguf(1));
   {
+    TinyModelOpts mo;  // ChatML tokens + room for two short turns, for `nibble chat`
+    mo.tok.chatml = true;
+    mo.context_length = 256;
+    write_file(dir + "/tiny_chatml.gguf", tiny_model_gguf(1, nibble::DType::F32, false, 259, mo));
+  }
+  {
     GgufWriter w;  // terminal-escape injection probe for `nibble info`
     w.add_string("evil", "\x1b[31mred\n");
     w.add_string_array("evil.arr", {"\x1b[0m"});

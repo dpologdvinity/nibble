@@ -87,38 +87,71 @@ add_custom_command(TARGET make_test_gguf POST_BUILD
   COMMAND make_test_gguf ${CMAKE_BINARY_DIR}/tests/data
   COMMENT "Generating test GGUF fixtures")
 
-add_test(NAME cli_info_small COMMAND nibble info ${CMAKE_BINARY_DIR}/tests/data/small.gguf)
-set_tests_properties(cli_info_small PROPERTIES PASS_REGULAR_EXPRESSION
-  "general.architecture = qwen2.*token_embd.weight +F16 +\\[64, 10\\]")
-# Metadata strings (scalar and array elements) are printed with control bytes escaped.
-string(ASCII 27 NIBBLE_ESC)
-add_test(NAME cli_info_escapes_control COMMAND nibble info ${CMAKE_BINARY_DIR}/tests/data/escape.gguf)
-set_tests_properties(cli_info_escapes_control PROPERTIES
-  PASS_REGULAR_EXPRESSION "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\""
-  FAIL_REGULAR_EXPRESSION "${NIBBLE_ESC}")
-add_test(NAME cli_info_missing_exit COMMAND nibble info /nonexistent.gguf)
-set_tests_properties(cli_info_missing_exit PROPERTIES WILL_FAIL TRUE)
-add_test(NAME cli_info_missing_msg COMMAND nibble info /nonexistent.gguf)
-set_tests_properties(cli_info_missing_msg PROPERTIES PASS_REGULAR_EXPRESSION "error: .*nonexistent")
-add_test(NAME cli_usage COMMAND nibble frobnicate)
-set_tests_properties(cli_usage PROPERTIES WILL_FAIL TRUE)
+# CLI tests go through tests/cli_expect.cmake: exact exit code, optional output regex.
+set(NIBBLE_EXE $<TARGET_FILE:nibble_cli>)
+function(nibble_cli_test name expect_exit)
+  cmake_parse_arguments(T "SAME_STDOUT" "REGEX;STDIN" "ARGS;LABELS" ${ARGN})
+  string(REPLACE ";" "$<SEMICOLON>" args "${T_ARGS}")  # keep the list in one -D argument
+  set(defs -DCMD=${NIBBLE_EXE} "-DARGS=${args}" -DEXPECT_EXIT=${expect_exit})
+  if(T_REGEX)
+    string(REPLACE ";" "$<SEMICOLON>" regex "${T_REGEX}")
+    list(APPEND defs "-DEXPECT_REGEX=${regex}")
+  endif()
+  if(T_STDIN)
+    list(APPEND defs -DSTDIN_FILE=${T_STDIN})
+  endif()
+  if(T_SAME_STDOUT)
+    list(APPEND defs -DSAME_STDOUT=ON)
+  endif()
+  add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
+endfunction()
+set(NIBBLE_DATA ${CMAKE_BINARY_DIR}/tests/data)
+set(NIBBLE_TINY ${NIBBLE_DATA}/tiny.gguf)
+set(NIBBLE_TINY_CHAT ${NIBBLE_DATA}/tiny_chatml.gguf)
+set(NIBBLE_CLI_DIR ${CMAKE_SOURCE_DIR}/tests/cli)
 
-set(NIBBLE_TINY ${CMAKE_BINARY_DIR}/tests/data/tiny.gguf)
-add_test(NAME cli_run_tiny COMMAND nibble run -m ${NIBBLE_TINY} -p hello -n 4)
-set_tests_properties(cli_run_tiny PROPERTIES PASS_REGULAR_EXPRESSION "\\[max_tokens\\]")
-add_test(NAME cli_run_no_prompt COMMAND nibble run -m ${NIBBLE_TINY})
-set_tests_properties(cli_run_no_prompt PROPERTIES WILL_FAIL TRUE)
-add_test(NAME cli_run_no_prompt_exit2 COMMAND nibble run -m ${NIBBLE_TINY})
-set_tests_properties(cli_run_no_prompt_exit2 PROPERTIES PASS_REGULAR_EXPRESSION "usage: nibble run")
-add_test(NAME cli_run_bad_model COMMAND nibble run -m /nonexistent -p hi)
-set_tests_properties(cli_run_bad_model PROPERTIES WILL_FAIL TRUE)
+nibble_cli_test(cli_info_small 0 ARGS info ${NIBBLE_DATA}/small.gguf
+  REGEX "general.architecture = qwen2.*token_embd.weight +F16 +\\[64, 10\\]")
+# Metadata strings (scalar and array elements) are printed with control bytes escaped.
+nibble_cli_test(cli_info_escapes_control 0 ARGS info ${NIBBLE_DATA}/escape.gguf
+  REGEX "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\"")
+string(ASCII 27 NIBBLE_ESC)
+set_property(TEST cli_info_escapes_control PROPERTY FAIL_REGULAR_EXPRESSION "${NIBBLE_ESC}")
+nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*nonexistent")
+nibble_cli_test(cli_usage 2 ARGS frobnicate REGEX "unknown subcommand")
+
+nibble_cli_test(cli_run_tiny 0 ARGS run -m ${NIBBLE_TINY} -p hello -n 4 --temp 0 REGEX "\\[max_tokens\\]")
+nibble_cli_test(cli_run_no_prompt 2 ARGS run -m ${NIBBLE_TINY} REGEX "usage: nibble run")
+nibble_cli_test(cli_run_bad_model 1 ARGS run -m /nonexistent -p hi REGEX "error: ")
+nibble_cli_test(cli_run_bad_number 2 ARGS run -m ${NIBBLE_TINY} -p hi -n abc REGEX "usage: nibble run")
+nibble_cli_test(cli_run_temp0_deterministic 0 SAME_STDOUT
+  ARGS run -m ${NIBBLE_TINY} -p hello -n 8 --temp 0)
+nibble_cli_test(cli_run_seed_deterministic 0 SAME_STDOUT
+  ARGS run -m ${NIBBLE_TINY} -p hello -n 8 --seed 7)
+nibble_cli_test(cli_run_bad_top_p 2 ARGS run -m ${NIBBLE_TINY} -p hi --top-p -1 REGEX "usage: nibble run")
+nibble_cli_test(cli_run_bad_top_p_high 2 ARGS run -m ${NIBBLE_TINY} -p hi --top-p 1.5)
+nibble_cli_test(cli_run_bad_temp 2 ARGS run -m ${NIBBLE_TINY} -p hi --temp -0.5)
+nibble_cli_test(cli_run_bad_top_k 2 ARGS run -m ${NIBBLE_TINY} -p hi --top-k -3)
+nibble_cli_test(cli_run_bad_seed 2 ARGS run -m ${NIBBLE_TINY} -p hi --seed xyz)
+nibble_cli_test(cli_run_temp_no_value 2 ARGS run -m ${NIBBLE_TINY} -p hi --temp)
+
+nibble_cli_test(cli_chat_two_turns 0 STDIN ${NIBBLE_CLI_DIR}/chat_two_turns.txt
+  ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")
+nibble_cli_test(cli_chat_blank_lines_skipped 0 STDIN ${NIBBLE_CLI_DIR}/chat_blank_lines.txt
+  ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok")
+nibble_cli_test(cli_chat_no_trailing_newline 0 STDIN ${NIBBLE_CLI_DIR}/chat_no_newline.txt
+  ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok")
+# The default system prompt alone takes ~90 tokens: a 100-token context fills during the first reply.
+nibble_cli_test(cli_chat_context_full 0 STDIN ${NIBBLE_CLI_DIR}/chat_two_turns.txt
+  ARGS chat -m ${NIBBLE_TINY_CHAT} -c 100 -n 100 --temp 0 REGEX "\\[context full\\]")
+nibble_cli_test(cli_chat_no_model 2 ARGS chat REGEX "usage: nibble chat")
+nibble_cli_test(cli_chat_bad_model 1 ARGS chat -m /nonexistent REGEX "error: ")
+nibble_cli_test(cli_chat_bad_temp 2 ARGS chat -m ${NIBBLE_TINY_CHAT} --temp abc)
+nibble_cli_test(cli_chat_unknown_flag 2 ARGS chat -m ${NIBBLE_TINY_CHAT} --bogus 1)
+
 # Skipped under sanitizers: ASan aborts on a multi-TB allocation instead of letting new throw.
 if(NOT NIBBLE_SANITIZE)
-add_test(NAME cli_run_huge_ctx COMMAND nibble run -m ${NIBBLE_TINY} -p hello -c 1000000000000)
-set_tests_properties(cli_run_huge_ctx PROPERTIES PASS_REGULAR_EXPRESSION "error: .*n_ctx")
-add_test(NAME cli_run_huge_ctx_exit1
-  COMMAND sh -c "\"$0\" run -m \"$1\" -p hello -c 1000000000000 >/dev/null 2>&1; test $? -eq 1"
-          $<TARGET_FILE:nibble_cli> ${NIBBLE_TINY})
+nibble_cli_test(cli_run_huge_ctx 1 ARGS run -m ${NIBBLE_TINY} -p hello -c 1000000000000 REGEX "error: .*n_ctx")
 endif()
 # A 50 MB u8-array GGUF must not amplify into hundreds of MB: nibble info under a
 # ~300 MB address-space limit exits 0 (or 1 with a translated "error:", not a raw
@@ -129,15 +162,11 @@ set(NIBBLE_BIG_U8 ${CMAKE_BINARY_DIR}/tests/data/big_u8.tmp.gguf)
 add_test(NAME cli_info_big_u8_gen COMMAND make_test_gguf --big-u8 ${NIBBLE_BIG_U8} 50000000)
 set_tests_properties(cli_info_big_u8_gen PROPERTIES FIXTURES_SETUP big_u8)
 add_test(NAME cli_info_big_u8_ulimit
-  COMMAND sh -c "ulimit -v 300000; err=$(\"$0\" info \"$1\" 2>&1 >/dev/null); rc=$?; \
-if [ $rc -eq 0 ]; then exit 0; fi; \
-if [ $rc -eq 1 ] && printf '%s' \"$err\" | grep -q '^error:' && \
-   ! printf '%s' \"$err\" | grep -q 'bad_alloc'; then exit 0; fi; \
-echo \"unexpected exit $rc: $err\"; exit 1"
-          $<TARGET_FILE:nibble_cli> ${NIBBLE_BIG_U8})
+  COMMAND sh -c "ulimit -v 300000; exec \"$0\" -DCMD=\"$1\" \"-DARGS=info;$2\" -DEXPECT_EXIT=0 -P \"$3\""
+          ${CMAKE_COMMAND} ${NIBBLE_EXE} ${NIBBLE_BIG_U8} ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
 set_tests_properties(cli_info_big_u8_ulimit PROPERTIES FIXTURES_REQUIRED big_u8)
 add_test(NAME cli_info_big_u8_clean COMMAND ${CMAKE_COMMAND} -E rm -f ${NIBBLE_BIG_U8})
 set_tests_properties(cli_info_big_u8_clean PROPERTIES FIXTURES_CLEANUP big_u8)
 endif()
-add_test(NAME cli_run_bad_number COMMAND nibble run -m ${NIBBLE_TINY} -p hi -n abc)
-set_tests_properties(cli_run_bad_number PROPERTIES PASS_REGULAR_EXPRESSION "usage: nibble run")
+# Blank lines are skipped: chat_blank_lines.txt holds one message, so exactly one reply.
+set_property(TEST cli_chat_blank_lines_skipped PROPERTY FAIL_REGULAR_EXPRESSION "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")
