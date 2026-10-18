@@ -32,9 +32,15 @@ struct Engine {
         w(model::Weights::bind(file, cfg, be)) {}
 };
 
+// One engine at a time: switching models frees the previous one first.
 Engine& engine(const std::string& path) {
   static std::unique_ptr<Engine> e;
-  if (!e) e = std::make_unique<Engine>(path);
+  static std::string loaded;
+  if (!e || loaded != path) {
+    e.reset();
+    e = std::make_unique<Engine>(path);
+    loaded = path;
+  }
   return *e;
 }
 
@@ -68,13 +74,32 @@ double top_gap(std::span<const float> r) {
   return double(r[m]) - second;
 }
 
-void run_prompt(const std::string& name) {
+// Per-model gate. F16 is held to the strict gate. Q8_0/Q4_0 use a looser one by user decision
+// (2026-10-17): activation requantization amplifies rounding-level differences, and the measured
+// three-way noise floor (nibble vs generic llama.cpp vs an fp64 oracle with Q8_0 requantization)
+// is about 0.9966 cosine, so 0.999 per position and exact argmax are not attainable. Quantized
+// goldens come from the generic llama.cpp build with an F32 KV cache (see tools/make_golden.sh).
+struct Gate {
+  double min_cos;
+  double min_agree;     // required fraction of positions whose argmax agrees (or near-tie)
+  bool strict_argmax;   // every non-tie position must agree
+  bool assert_greedy;   // greedy divergence must be a near-tie; else only WARN
+};
+Gate gate_for(const std::string& model) {
+  if (model == "f16") return {0.999, 1.0, true, true};
+  return {0.995, 0.90, false, false};
+}
+
+void run_prompt(const std::string& model, const std::string& name) {
+  const Gate gate = gate_for(model);
   const std::string root = NIBBLE_SOURCE_DIR;
-  const std::string model_path = root + "/models/qwen2.5-0.5b-instruct-fp16.gguf";
-  const std::string golden_path = root + "/models/golden/qwen2.5-0.5b-f16/" + name + ".bin";
+  const std::string model_path = root + "/models/qwen2.5-0.5b-instruct-" + (model == "f16" ? "fp16" : model) + ".gguf";
+  const std::string golden_path = root + "/models/golden/qwen2.5-0.5b-" + model + "/" + name + ".bin";
   if (!std::filesystem::exists(model_path) || !std::filesystem::exists(golden_path)) SKIP("model or golden missing");
 
   Golden g = Golden::load(golden_path);
+  REQUIRE(g.n_gen == 64);
+  REQUIRE(g.tokens.size() == g.n_prompt + g.n_gen);
   Engine& e = engine(model_path);
   REQUIRE(g.n_vocab == uint32_t(e.cfg.n_vocab));
   const size_t total = g.tokens.size(), np = g.n_prompt;
@@ -93,6 +118,7 @@ void run_prompt(const std::string& name) {
   {
     model::Transformer t(e.cfg, e.w, e.be, 256);
     double min_cos = 2;
+    size_t agree = 0;
     for (size_t i = 0; i < total; ++i) {
       t.forward(std::span(g.tokens).subspan(i, 1), int64_t(i), out.data());
       double c = cosine(g.row(i), out.data());
@@ -101,10 +127,13 @@ void run_prompt(const std::string& name) {
       bool tie = top_gap(g.row(i)) < 1e-3 || top_gap(out) < 1e-3;
       INFO(name << " pos " << i << " cos " << c << " golden argmax " << ga << " (" << g.row(i)[ga] << ") nibble argmax " << na
                 << " (" << out[na] << ")");
-      REQUIRE(c >= 0.999);
-      if (!tie) REQUIRE(ga == na);
+      REQUIRE(c >= gate.min_cos);
+      if (gate.strict_argmax && !tie) REQUIRE(ga == na);
+      if (tie || ga == na) ++agree;
     }
-    WARN(name << ": min cosine over " << total << " positions = " << min_cos);
+    WARN(name << " [" << model << "]: min cosine over " << total << " positions = " << min_cos << ", top-1 agreement " << agree << "/"
+                << total);
+    REQUIRE(double(agree) >= gate.min_agree * double(total));
   }
 
   // 2. batch prefill
@@ -113,7 +142,7 @@ void run_prompt(const std::string& name) {
   {
     double c = cosine(g.row(np - 1), out.data());
     WARN(name << ": prefill last-row cosine = " << c);
-    REQUIRE(c >= 0.999);
+    REQUIRE(c >= gate.min_cos);
   }
 
   // 3. greedy from prefilled state
@@ -124,7 +153,7 @@ void run_prompt(const std::string& name) {
     if (int32_t(tok) != g.tokens[np + k]) {
       double gap = std::min(top_gap(g.row(gpos)), top_gap(out));
       WARN(name << ": greedy diverged at gen " << k << " gap " << gap);
-      REQUIRE(gap < 1e-3);
+      if (gate.assert_greedy) REQUIRE(gap < 1e-3);
       break;
     }
     ++matched;
@@ -137,6 +166,14 @@ void run_prompt(const std::string& name) {
 }
 }  // namespace
 
-TEST_CASE("e2e golden: capital", "[e2e]") { run_prompt("capital"); }
-TEST_CASE("e2e golden: code", "[e2e]") { run_prompt("code"); }
-TEST_CASE("e2e golden: chat", "[e2e]") { run_prompt("chat"); }
+#define E2E_CASE(MODEL, PROMPT) \
+  TEST_CASE("e2e golden: " PROMPT " [" MODEL "]", "[e2e]") { run_prompt(MODEL, PROMPT); }
+E2E_CASE("f16", "capital")
+E2E_CASE("f16", "code")
+E2E_CASE("f16", "chat")
+E2E_CASE("q8_0", "capital")
+E2E_CASE("q8_0", "code")
+E2E_CASE("q8_0", "chat")
+E2E_CASE("q4_0", "capital")
+E2E_CASE("q4_0", "code")
+E2E_CASE("q4_0", "chat")
