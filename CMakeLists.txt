@@ -90,20 +90,20 @@ add_custom_command(TARGET make_test_gguf POST_BUILD
 # CLI tests go through tests/cli_expect.cmake: exact exit code, optional output regex.
 set(NIBBLE_EXE $<TARGET_FILE:nibble_cli>)
 function(nibble_cli_test name expect_exit)
-  cmake_parse_arguments(T "SAME_STDOUT" "REGEX;STDIN" "ARGS;LABELS" ${ARGN})
+  cmake_parse_arguments(T "SAME_STDOUT" "REGEX;FORBID_REGEX;STDIN" "ARGS;LABELS" ${ARGN})
   string(REPLACE ";" "$<SEMICOLON>" args "${T_ARGS}")  # keep the list in one -D argument
   set(defs -DCMD=${NIBBLE_EXE} "-DARGS=${args}" -DEXPECT_EXIT=${expect_exit})
-  if(T_REGEX)
-    string(REPLACE ";" "$<SEMICOLON>" regex "${T_REGEX}")
-    list(APPEND defs "-DEXPECT_REGEX=${regex}")
-  endif()
+  # Regexes are passed as direct arguments, not through the `defs` list: CMake list
+  # expansion mangles unbalanced brackets.
+  string(REPLACE ";" "$<SEMICOLON>" regex "${T_REGEX}")
+  string(REPLACE ";" "$<SEMICOLON>" forbid "${T_FORBID_REGEX}")
   if(T_STDIN)
     list(APPEND defs -DSTDIN_FILE=${T_STDIN})
   endif()
   if(T_SAME_STDOUT)
     list(APPEND defs -DSAME_STDOUT=ON)
   endif()
-  add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} -P ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
+  add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} "-DEXPECT_REGEX=${regex}" "-DFORBID_REGEX=${forbid}" -P ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
 endfunction()
 set(NIBBLE_DATA ${CMAKE_BINARY_DIR}/tests/data)
 set(NIBBLE_TINY ${NIBBLE_DATA}/tiny.gguf)
@@ -114,9 +114,8 @@ nibble_cli_test(cli_info_small 0 ARGS info ${NIBBLE_DATA}/small.gguf
   REGEX "general.architecture = qwen2.*token_embd.weight +F16 +\\[64, 10\\]")
 # Metadata strings (scalar and array elements) are printed with control bytes escaped.
 nibble_cli_test(cli_info_escapes_control 0 ARGS info ${NIBBLE_DATA}/escape.gguf
+  FORBID_REGEX "%ESC%"
   REGEX "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\"")
-string(ASCII 27 NIBBLE_ESC)
-set_property(TEST cli_info_escapes_control PROPERTY FAIL_REGULAR_EXPRESSION "${NIBBLE_ESC}")
 nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*nonexistent")
 nibble_cli_test(cli_usage 2 ARGS frobnicate REGEX "unknown subcommand")
 
@@ -138,7 +137,8 @@ nibble_cli_test(cli_run_temp_no_value 2 ARGS run -m ${NIBBLE_TINY} -p hi --temp)
 nibble_cli_test(cli_chat_two_turns 0 STDIN ${NIBBLE_CLI_DIR}/chat_two_turns.txt
   ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")
 nibble_cli_test(cli_chat_blank_lines_skipped 0 STDIN ${NIBBLE_CLI_DIR}/chat_blank_lines.txt
-  ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok")
+  ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok"
+  FORBID_REGEX "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")  # one message -> exactly one reply
 nibble_cli_test(cli_chat_no_trailing_newline 0 STDIN ${NIBBLE_CLI_DIR}/chat_no_newline.txt
   ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok")
 # The default system prompt alone takes ~90 tokens: a 100-token context fills during the first reply.
@@ -168,5 +168,3 @@ set_tests_properties(cli_info_big_u8_ulimit PROPERTIES FIXTURES_REQUIRED big_u8)
 add_test(NAME cli_info_big_u8_clean COMMAND ${CMAKE_COMMAND} -E rm -f ${NIBBLE_BIG_U8})
 set_tests_properties(cli_info_big_u8_clean PROPERTIES FIXTURES_CLEANUP big_u8)
 endif()
-# Blank lines are skipped: chat_blank_lines.txt holds one message, so exactly one reply.
-set_property(TEST cli_chat_blank_lines_skipped PROPERTY FAIL_REGULAR_EXPRESSION "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")
