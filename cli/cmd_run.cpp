@@ -54,6 +54,7 @@ int cmd_run(int argc, char** argv) {
   std::string model_path, prompt, prompt_file;
   bool have_p = false, have_f = false;
   GenParams gp;
+  gp.temperature = 0;  // greedy, deterministic output. Task 7: flags
   ModelParams mp;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];

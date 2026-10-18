@@ -55,6 +55,8 @@ struct TinyModelOpts {
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
   bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
   std::string raw_type_tensor;  // store this tensor with unsupported ggml type 12 (Q4_K) and dummy bytes
+  int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
+  TinyTokOpts tok;              // tokenizer variant
 };
 
 // qwen2: 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab 261.
@@ -70,12 +72,12 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   w.add_int(a + "block_count", GgufWriter::ValueType::U32, L);
   w.add_int(a + "embedding_length", GgufWriter::ValueType::U32, E);
   w.add_int(a + "feed_forward_length", GgufWriter::ValueType::U32, FF);
-  w.add_int(a + "attention.head_count", GgufWriter::ValueType::U32, H);
-  w.add_int(a + "attention.head_count_kv", GgufWriter::ValueType::U32, KV);
+  w.add_int(a + "attention.head_count", GgufWriter::ValueType::U32, mo.heads_kv > 0 ? mo.heads_kv : H);
+  w.add_int(a + "attention.head_count_kv", GgufWriter::ValueType::U32, mo.kv_heads_kv > 0 ? mo.kv_heads_kv : KV);
   w.add_int(a + "context_length", GgufWriter::ValueType::U32, 64);
   w.add_f32(a + "attention.layer_norm_rms_epsilon", 1e-6f);
   w.add_f32(a + "rope.freq_base", 10000.0f);
-  add_tiny_tokenizer_kvs(w, {}, eos_id);
+  add_tiny_tokenizer_kvs(w, mo.tok, eos_id);
 
   std::mt19937 g(seed);
   auto rnd = [&](size_t n, float lo, float hi) {
@@ -118,7 +120,12 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   } else {
     vec("output_norm.weight", E, 0.9f, 1.1f);
   }
-  if (mo.explicit_output) mat("output.weight", E, V);
+  if (mo.explicit_output) {  // own RNG stream, so every other tensor equals the tied model's
+    const std::mt19937 saved = g;
+    g = std::mt19937(seed ^ 0xA5A5A5A5u);
+    mat("output.weight", E, V);
+    g = saved;
+  }
   for (int64_t i = 0; i < L; ++i) {
     const std::string p = "blk." + std::to_string(i) + ".";
     vec(p + "attn_norm.weight", E, 0.9f, 1.1f);

@@ -52,6 +52,9 @@ void dcheck_count(int64_t count, int64_t rows, int64_t width, [[maybe_unused]] c
 Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, int64_t n_ctx, int64_t max_batch)
     : c_(c), w_(w), be_(be), n_ctx_(n_ctx), max_batch_(max_batch) {
   if (n_ctx <= 0 || max_batch <= 0) throw Error("n_ctx and max_batch must be positive");
+  if (static_cast<int64_t>(w.layers.size()) != c.n_layers)
+    throw Error("weights have " + std::to_string(w.layers.size()) + " layers but config has " +
+                std::to_string(c.n_layers));
   try {
     be.reserve({n_ctx, c.n_heads, max_batch, std::max({c.n_embd, c.n_heads * c.head_dim, c.n_ff})});
   } catch (const Error& e) {

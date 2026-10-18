@@ -2,18 +2,39 @@
 
 #include <algorithm>
 #include <new>
+#include <random>
 #include <span>
 #include <thread>
+#include <variant>
 #include <vector>
 
 #include "backend/cpu/cpu_backend.h"
 #include "gguf/gguf.h"
 #include "model/transformer.h"
+#include "sampler.h"
 #include "thread_pool.h"
 #include "tokenizer/tokenizer.h"
 #include "tokenizer/unicode.h"
 
 namespace nibble {
+
+namespace {
+
+// Compares the tokenizer vocab size with token_embd rows straight from the GGUF
+// metadata, before Tokenizer::from_gguf builds its tables, so a file with a huge
+// token array cannot make us build them first. Missing or mistyped entries are left
+// to the tokenizer/config loaders, which report them.
+const gguf::File& check_vocab_matches_embd(const gguf::File& f) {
+  const gguf::Value* v = f.find("tokenizer.ggml.tokens");
+  const auto* toks = v ? std::get_if<gguf::Array>(v) : nullptr;
+  const auto* te = f.find_tensor("token_embd.weight");
+  if (toks && toks->is_string() && te && static_cast<int64_t>(toks->size()) != te->tensor.ne[1])
+    throw Error("tokenizer has " + std::to_string(toks->size()) + " tokens but token_embd.weight has " +
+                std::to_string(te->tensor.ne[1]) + " rows");
+  return f;
+}
+
+}  // namespace
 
 // Members are in dependency order; destruction runs in reverse
 // (Weights before File, backend before pool).
@@ -28,17 +49,16 @@ struct Model::Impl {
 
   Impl(const std::string& path, const ModelParams& p)
       : file(gguf::File::open(path)),
-        tokenizer(tok::Tokenizer::from_gguf(file)),
+        tokenizer(tok::Tokenizer::from_gguf(check_vocab_matches_embd(file))),
         cfg(model::LlamaConfig::from_gguf(file)),
         pool(p.n_threads > 0 ? p.n_threads
                              : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()))),
         backend(pool),
         weights(model::Weights::bind(file, cfg, backend)),
         n_ctx(p.n_ctx > 0 ? p.n_ctx : std::min<int64_t>(4096, cfg.n_ctx_train)) {
-    if (tokenizer.n_vocab() != cfg.n_vocab)
-      throw Error("tokenizer has " + std::to_string(tokenizer.n_vocab()) + " tokens but token_embd.weight has " +
-                  std::to_string(cfg.n_vocab) + " rows");
-    if (p.n_ctx < 0) throw Error("n_ctx must be non-negative, got " + std::to_string(p.n_ctx));
+    if (p.n_ctx > cfg.n_ctx_train)
+      throw Error("n_ctx " + std::to_string(p.n_ctx) + " exceeds the model's context_length " +
+                  std::to_string(cfg.n_ctx_train));
     if (n_ctx <= 0) throw Error("invalid context length " + std::to_string(n_ctx));
   }
 };
@@ -49,6 +69,8 @@ Model& Model::operator=(Model&&) noexcept = default;
 Model::~Model() = default;
 
 Model Model::load(const std::string& path, ModelParams p) {
+  if (p.n_ctx < 0) throw Error("n_ctx must be non-negative, got " + std::to_string(p.n_ctx));
+  if (p.n_threads < 0) throw Error("n_threads must be non-negative, got " + std::to_string(p.n_threads));
   Model m;
   try {
     m.impl_ = std::make_unique<Impl>(path, p);
@@ -58,40 +80,63 @@ Model Model::load(const std::string& path, ModelParams p) {
   return m;
 }
 
-const std::string& Model::architecture() const { return impl_->cfg.arch; }
-int64_t Model::n_ctx() const { return impl_->n_ctx; }
+namespace {
+[[noreturn]] void throw_moved_from() { throw Error("use of moved-from Model"); }
+}  // namespace
+
+const std::string& Model::architecture() const {
+  if (!impl_) throw_moved_from();
+  return impl_->cfg.arch;
+}
+int64_t Model::n_ctx() const {
+  if (!impl_) throw_moved_from();
+  return impl_->n_ctx;
+}
 
 struct Session::Impl {
   Model::Impl& m;
   model::Transformer tf;
-  std::vector<float> logits;  // preallocated; forward path must not allocate
+  std::vector<float> logits;  // preallocated; forward path must not allocate. Valid when n_past > 0.
   int64_t n_prompt = 0, n_gen = 0;
+  int64_t n_past = 0;  // tokens in the KV cache
 
   explicit Impl(Model& model)
-      : m(*model.impl_),
+      : m(model.impl_ ? *model.impl_ : throw Error("use of moved-from Model")),
         tf(m.cfg, m.weights, m.backend, m.n_ctx),
         logits(static_cast<size_t>(m.cfg.n_vocab)) {}
 
-  int32_t argmax() const {
-    return static_cast<int32_t>(std::max_element(logits.begin(), logits.end()) - logits.begin());
-  }
+  StopReason run(const std::vector<int32_t>& toks, const GenParams& gp,
+                 const std::function<bool(std::string_view)>& on_token);
 };
 
 Session::Session(Model& m) : impl_(std::make_unique<Impl>(m)) {}
 Session::~Session() = default;
 int64_t Session::n_prompt_tokens() const { return impl_->n_prompt; }
 int64_t Session::n_generated() const { return impl_->n_gen; }
+int64_t Session::n_past() const { return impl_->n_past; }
 
-StopReason Session::generate(std::string_view prompt, const GenParams& gp,
-                             const std::function<bool(std::string_view)>& on_token) {
-  Impl& s = *impl_;
-  s.n_prompt = s.n_gen = 0;
-  const int64_t n_ctx = s.m.n_ctx;
-  std::vector<int32_t> toks = s.m.tokenizer.encode(prompt, true);
-  if (toks.empty()) throw Error("empty prompt");
-  if (static_cast<int64_t>(toks.size()) >= n_ctx)
-    throw Error("prompt has " + std::to_string(toks.size()) + " tokens but context is " + std::to_string(n_ctx));
-  s.n_prompt = static_cast<int64_t>(toks.size());
+StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams& gp,
+                              const std::function<bool(std::string_view)>& on_token) {
+  n_prompt = n_gen = 0;
+  const int64_t n_new = static_cast<int64_t>(toks.size());
+  const int64_t start = gp.append ? n_past : 0;
+  if (n_new == 0 && start == 0) throw Error("empty prompt");
+  // Built before any state changes, so invalid params throw with the cache intact.
+  // Allocates its n_vocab buffers here, outside the per-token loop.
+  const uint64_t seed = gp.seed ? *gp.seed : [] {
+    std::random_device rd;
+    return (static_cast<uint64_t>(rd()) << 32) ^ rd();
+  }();
+  Sampler sampler({gp.temperature, gp.top_k, gp.top_p, seed}, m.cfg.n_vocab);
+  if (gp.max_tokens <= 0) return StopReason::MaxTokens;
+  if (start + n_new >= m.n_ctx) return StopReason::ContextFull;
+
+  // n_past is 0 while a forward is in flight, so if it throws the cache reads as
+  // empty rather than out of step with `logits`.
+  n_past = 0;
+  if (n_new > 0) tf.forward(toks, start, logits.data());
+  n_past = start + n_new;
+  n_prompt = n_new;
 
   tok::Utf8Streamer streamer;
   auto finish = [&](StopReason r) {
@@ -99,23 +144,46 @@ StopReason Session::generate(std::string_view prompt, const GenParams& gp,
     if (!tail.empty()) on_token(tail);  // already stopping: ignore return value
     return r;
   };
-
-  s.tf.forward(toks, 0, s.logits.data());
-  int64_t pos = s.n_prompt;
   while (true) {
-    if (gp.max_tokens <= 0) return finish(StopReason::MaxTokens);
-    const int32_t next = s.argmax();
-    if (s.m.tokenizer.is_eog(next)) return finish(StopReason::Eos);
-    std::string piece = streamer.push(s.m.tokenizer.decode_token(next));
-    ++s.n_gen;
-    if (!piece.empty() && !on_token(piece)) return finish(StopReason::Cancelled);
-    if (s.n_gen >= gp.max_tokens) return finish(StopReason::MaxTokens);
-    // Total tokens (prompt + generated) may not exceed n_ctx.
-    if (s.n_prompt + s.n_gen >= n_ctx) return finish(StopReason::ContextFull);
+    const int32_t next = sampler.sample(logits);
+    if (m.tokenizer.is_eog(next)) return finish(StopReason::Eos);
+    std::string piece = streamer.push(m.tokenizer.decode_token(next));
+    ++n_gen;
+    if (!piece.empty() && !on_token(piece)) {
+      (void)streamer.flush();  // drop held bytes: the caller asked to stop
+      return StopReason::Cancelled;
+    }
+    if (n_gen >= gp.max_tokens) return finish(StopReason::MaxTokens);
+    // Total tokens (cached + this one) may not exceed n_ctx; `next` is not forwarded.
+    if (n_past + 1 >= m.n_ctx) return finish(StopReason::ContextFull);
     const int32_t one[1] = {next};
-    s.tf.forward(std::span<const int32_t>(one, 1), pos, s.logits.data());
-    ++pos;
+    const int64_t pos = n_past;
+    n_past = 0;
+    tf.forward(std::span<const int32_t>(one, 1), pos, logits.data());
+    n_past = pos + 1;
   }
+}
+
+StopReason Session::generate(std::span<const PromptPart> parts, const GenParams& gp,
+                             const std::function<bool(std::string_view)>& on_token) {
+  std::vector<int32_t> toks;
+  for (const PromptPart& p : parts) {
+    std::vector<int32_t> t = impl_->m.tokenizer.encode(p.text, p.special);
+    toks.insert(toks.end(), t.begin(), t.end());
+  }
+  return impl_->run(toks, gp, on_token);
+}
+
+StopReason Session::generate(std::string_view prompt, const GenParams& gp,
+                             const std::function<bool(std::string_view)>& on_token) {
+  std::vector<int32_t> toks = impl_->m.tokenizer.encode(prompt, true);
+  if (!gp.append) {  // M0-M3 contract: a fresh prompt that cannot be used throws
+    if (toks.empty()) throw Error("empty prompt");
+    if (static_cast<int64_t>(toks.size()) >= impl_->m.n_ctx)
+      throw Error("prompt has " + std::to_string(toks.size()) + " tokens but context is " +
+                  std::to_string(impl_->m.n_ctx));
+  }
+  return impl_->run(toks, gp, on_token);
 }
 
 }  // namespace nibble

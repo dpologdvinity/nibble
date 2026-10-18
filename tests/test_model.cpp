@@ -130,6 +130,14 @@ TEST_CASE("model tied and explicit output", "[model]") {
   Loaded expl(tiny_model_gguf(5, DType::F32, false, 259, o), be);
   CHECK(expl.file.find_tensor("output.weight") != nullptr);
   CHECK(maxdiff(run(expl, be, kToks, 512, false), naive::naive_logits(expl.file, kToks)) <= 1e-4);
+  // output.weight comes from its own RNG, so all shared tensors are byte-identical and
+  // the logit difference below can only come from the output projection.
+  for (const char* name : {"token_embd.weight", "blk.0.attn_q.weight", "blk.1.ffn_down.weight"}) {
+    const auto* a = tied.file.find_tensor(name);
+    const auto* b = expl.file.find_tensor(name);
+    REQUIRE(a->nbytes == b->nbytes);
+    CHECK(std::memcmp(a->tensor.data, b->tensor.data, a->nbytes) == 0);
+  }
   CHECK(maxdiff(run(tied, be, kToks, 512, false), run(expl, be, kToks, 512, false)) > 1e-3);
 }
 
@@ -170,6 +178,29 @@ TEST_CASE("forward bounds and head divisibility", "[model]") {
   CHECK_THROWS_AS(t.forward(kToks, 0, out.data()), Error);
   CHECK_THROWS_AS(t.forward(std::span(kToks).subspan(0, 2), 3, out.data()), Error);
   CHECK_NOTHROW(t.forward(std::span(kToks).subspan(0, 2), 2, out.data()));
+}
+
+TEST_CASE("config rejects indivisible head counts", "[model]") {
+  auto cfg = [](int64_t heads, int64_t kv) {
+    TinyModelOpts o;
+    o.heads_kv = heads;
+    o.kv_heads_kv = kv;
+    auto bytes = tiny_model_gguf(1, DType::F32, false, 259, o);
+    gguf::File f = gguf::File::parse(bytes);
+    (void)model::LlamaConfig::from_gguf(f);
+  };
+  CHECK_THROWS_WITH(cfg(3, 3), ContainsSubstring("embedding_length 16 is not divisible by"));
+  CHECK_THROWS_WITH(cfg(4, 3), ContainsSubstring("head_count 4 is not divisible by"));
+  CHECK_THROWS_WITH(cfg(16, 16), ContainsSubstring("head_dim 1 must be even"));
+  CHECK_NOTHROW(cfg(4, 2));
+}
+
+TEST_CASE("transformer rejects weights with the wrong layer count", "[model]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  Loaded m(tiny_model_gguf(1), be);
+  m.w.layers.pop_back();
+  CHECK_THROWS_WITH(model::Transformer(m.cfg, m.w, be, 8), ContainsSubstring("layers"));
 }
 
 TEST_CASE("transformer destroy frees all backend allocations", "[model]") {
