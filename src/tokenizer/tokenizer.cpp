@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <queue>
+#include <set>
+#include <variant>
 
 #include "nibble/error.h"
 #include "util/escape.h"
@@ -27,12 +29,80 @@ struct BigramCmp {
   }
 };
 
+
+// Builds llama.cpp's special_eog_ids (llama-vocab.cpp:2993-3173). Names are matched against the
+// LAST id carrying that text (token_to_id[word] = i, :2651). Not mirrored: attribute rewrites
+// (CONTROL/NORMAL overrides) and the FIM pre/suf/mid ids, which never enter the EOG set.
+std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>& tokens, int32_t eos) {
+  const int32_t n = static_cast<int32_t>(tokens.size());
+  std::unordered_map<std::string_view, int32_t> by_text;
+  for (int32_t k = 0; k < n; ++k) by_text[tokens[static_cast<size_t>(k)]] = k;
+  auto named = [&](std::initializer_list<const char*> names) {  // lowest id among matches (llama.cpp: map order)
+    int32_t best = -1;
+    for (const char* nm : names) {
+      auto it = by_text.find(nm);
+      if (it != by_text.end() && (best < 0 || it->second < best)) best = it->second;
+    }
+    return best;
+  };
+  // Optional id key: out of range or non-integer is ignored (:2758-2765, falls back to default NULL).
+  auto key_id = [&](const char* key) -> int32_t {
+    const gguf::Value* v = f.find(key);
+    const int64_t* i = v ? std::get_if<int64_t>(v) : nullptr;
+    return i && *i >= 0 && *i < n ? static_cast<int32_t>(*i) : -1;
+  };
+  // FIM pad/rep/sep: key, else first name match (:2932-2975; names from :2909-2973).
+  auto fim = [&](const char* key, std::initializer_list<const char*> names) {
+    int32_t id = key_id(key);
+    return id >= 0 ? id : named(names);
+  };
+  std::set<int32_t> eog;
+  auto add = [&](int32_t id) { if (id >= 0) eog.insert(id); };
+  add(fim("tokenizer.ggml.fim_pad_token_id", {"<|fim_pad|>", "<fim-pad>", "<fim_pad>", "<PAD>", "[PAD]"}));  // :3015-3017
+  add(fim("tokenizer.ggml.fim_rep_token_id", {"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>"}));  // :3019-3021
+  add(fim("tokenizer.ggml.fim_sep_token_id", {"<|file_sep|>", "<|plamo:file_separator|>"}));  // :3023-3025
+  // EOG names, :3029-3055 (every supported vocab's eot/eom name is in this list, so the
+  // eot/eom name searches at :2828-2860 add nothing beyond it).
+  static const char* const names[] = {"<|eot_id|>", "<|eot|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
+                                      "<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>",
+                                      "<|eom_id|>", "<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>",
+                                      "<end_of_utterance>", "<eos>", "<turn|>", "<|tool_response>",
+                                      "<\xEF\xBD\x9C" "end\xE2\x96\x81" "of\xE2\x96\x81" "sentence\xEF\xBD\x9C>",
+                                      "[e~[", "<|ifm|im_end|>"};
+  for (const char* nm : names) {
+    auto it = by_text.find(nm);
+    if (it != by_text.end()) eog.insert(it->second);
+  }
+  // eos / eot / eom ids always join the set (:3079-3093).
+  add(eos);
+  add(key_id("tokenizer.ggml.eot_token_id"));
+  add(key_id("tokenizer.ggml.eom_token_id"));
+  // Removal rules. "<|end|>" is dropped when "<|return|>"+"<|call|>" or "<|calls|>"+"<|flush|>" are
+  // EOG too (:3095-3142); "</s>" is dropped next to a normal-token marker (:3144-3173). Both apply to
+  // vocabularies (o200k_harmony, solar-open, gemma4, plamo, beam) nibble does not load; implemented
+  // because they are cheap and keep the set identical if such a vocab ever appears.
+  auto in_eog = [&](const char* nm) {
+    auto it = by_text.find(nm);
+    return it != by_text.end() && eog.count(it->second) > 0;
+  };
+  if (in_eog("<|end|>") && ((in_eog("<|return|>") && (in_eog("<|call|>") || in_eog("<|calls|>"))) ||
+                            ((in_eog("<|call|>") || in_eog("<|calls|>")) && in_eog("<|flush|>"))))
+    eog.erase(by_text.at("<|end|>"));
+  if (in_eog("</s>") && (by_text.count("<rfl:parameter name=\"") || in_eog("<|tool_response>") || in_eog("<|plamo:eos|>")))
+    eog.erase(by_text.at("</s>"));
+  std::vector<bool> out(tokens.size(), false);
+  for (int32_t id : eog) out[static_cast<size_t>(id)] = true;
+  return out;
+}
+
 }  // namespace
 
 Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   const std::string model = f.get_string("tokenizer.ggml.model");
   if (model != "gpt2") throw Error("unsupported tokenizer model: '" + escape_control(model) + "' (only 'gpt2')");
   const std::string pre = f.get_string("tokenizer.ggml.pre");
+  // Deliberately narrowed: llama.cpp also maps falcon3, pixtral, lfm2, ... to LLAMA3 (:2299-2309) and
+  // many other pre names; only the families nibble supports (qwen2, llama3/llama-v3/llama-bpe) are accepted.
   // llama-vocab.cpp:2299-2311 maps these to LLAMA3 (ignore_merges, add_bos default true);
   // qwen2 at :2389 keeps defaults (add_bos false, no ignore_merges).
   const bool llama3 = pre == "llama3" || pre == "llama-v3" || pre == "llama-bpe";
@@ -93,6 +163,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     t.add_bos_ = *b;
   }
 
+  t.eog_ = build_eog(f, t.tokens_, t.eos_);
+
   for (size_t k = 0; k < t.tokens_.size(); ++k) {
     auto ty = t.types_[k];
     if (ty == TokenType::Control || ty == TokenType::UserDefined || ty == TokenType::Unknown)
@@ -110,20 +182,7 @@ int32_t Tokenizer::find(std::string_view s) const {
   return it == ids_.end() ? -1 : it->second;
 }
 
-bool Tokenizer::is_eog(int32_t id) const {
-  if (id < 0 || id >= n_vocab()) return false;
-  if (id == eos_) return true;
-  // llama-vocab.cpp:3029-3055 (names that exist in supported vocabularies)
-  static const char* const names[] = {"<|eot_id|>", "<|eot|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
-                                      "<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>",
-                                      "<|eom_id|>", "<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>",
-                                      "<end_of_utterance>", "<eos>", "<turn|>", "<|tool_response>",
-                                      "<\xEF\xBD\x9C" "end\xE2\x96\x81" "of\xE2\x96\x81" "sentence\xEF\xBD\x9C>",
-                                      "[e~[", "<|ifm|im_end|>"};
-  for (const char* n : names)
-    if (tokens_[id] == n) return true;
-  return false;
-}
+bool Tokenizer::is_eog(int32_t id) const { return id >= 0 && id < n_vocab() && eog_[static_cast<size_t>(id)]; }
 
 std::string Tokenizer::decode_token(int32_t id) const {
   if (id < 0 || id >= n_vocab()) throw Error("token id out of range: " + std::to_string(id));

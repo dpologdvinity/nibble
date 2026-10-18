@@ -32,6 +32,7 @@ class Tokenizer {
   std::unordered_map<std::string, int32_t> ids_;
   std::unordered_map<std::string, int32_t> ranks_;  // "left right" -> rank
   std::vector<int32_t> specials_;                   // Control/UserDefined/Unknown ids, longest text first
+  std::vector<bool> eog_;  // llama.cpp special_eog_ids as a per-id flag
   int32_t eos_ = -1;
   int32_t bos_ = -1;
   bool add_bos_ = false;

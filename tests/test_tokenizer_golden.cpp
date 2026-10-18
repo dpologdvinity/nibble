@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 #include "corpus.h"
 #include "gguf/gguf.h"
+#include "nibble/error.h"
 #include "tokenizer/tokenizer.h"
 
 static std::string join(const std::vector<int32_t>& v) {
@@ -49,4 +51,35 @@ TEST_CASE("tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
 
 TEST_CASE("llama 3.2 tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
   check_golden("llama-3.2-1b-instruct-f16.gguf", "llama32-1b-f16");
+}
+
+TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
+  struct M { const char *file, *dir; };
+  const M models[] = {{"qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16"},
+                      {"qwen2.5-0.5b-instruct-q8_0.gguf", "qwen2.5-0.5b-q8_0"},
+                      {"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-q4_0"},
+                      {"llama-3.2-1b-instruct-f16.gguf", "llama32-1b-f16"},
+                      {"tinyllama-1.1b-chat-f16.gguf", "tinyllama-1.1b-f16"}};
+  const std::string root = NIBBLE_SOURCE_DIR;
+  int ran = 0;
+  for (const M& m : models) {
+    const std::string gguf = root + "/models/" + m.file, gold = root + "/models/golden/" + m.dir + "/eog.txt";
+    if (!std::filesystem::exists(gguf) || !std::filesystem::exists(gold)) continue;
+    auto file = nibble::gguf::File::open(gguf);
+    // TinyLlama is SPM; skipped until the SPM tokenizer lands (Task 4).
+    std::optional<nibble::tok::Tokenizer> tok;
+    try { tok.emplace(nibble::tok::Tokenizer::from_gguf(file)); } catch (const nibble::Error&) { continue; }
+    std::ifstream gf(gold);
+    std::vector<int32_t> want, got;
+    for (int32_t x; gf >> x;) want.push_back(x);
+    for (int32_t id = 0; id < tok->n_vocab(); ++id) if (tok->is_eog(id)) got.push_back(id);
+    std::string msg;
+    for (auto id : want) msg += " " + std::to_string(id) + "='" + tok->decode_token(id) + "'";
+    std::string msg2;
+    for (auto id : got) msg2 += " " + std::to_string(id) + "='" + tok->decode_token(id) + "'";
+    INFO(m.dir << "\nllama.cpp:" << msg << "\nnibble:  " << msg2);
+    CHECK(got == want);
+    ++ran;
+  }
+  if (ran == 0) SKIP("no model with eog golden");
 }
