@@ -19,6 +19,8 @@ TEST_CASE("pretokenize rules", "[pretokenize]") {
   CHECK(split("Hello world") == V{"Hello", " world"});
   CHECK(split("I'm 12345") == V{"I", "'m", " ", "1", "2", "3", "4", "5"});
   CHECK(split("I'm 12345", 3) == V{"I", "'m", " ", "123", "45"});
+  CHECK(split("12345", 3) == V{"123", "45"});
+  CHECK(split("1234567 x", 3) == V{"123", "456", "7", " x"});
   CHECK(split("DON'T") == V{"DON", "'T"});
   CHECK(split("a\n\n  b") == V{"a", "\n\n", " ", " b"});
   CHECK(split("trailing   ") == V{"trailing", "   "});

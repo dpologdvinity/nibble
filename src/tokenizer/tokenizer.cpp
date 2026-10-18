@@ -33,7 +33,11 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   const std::string model = f.get_string("tokenizer.ggml.model");
   if (model != "gpt2") throw Error("unsupported tokenizer model: '" + escape_control(model) + "' (only 'gpt2')");
   const std::string pre = f.get_string("tokenizer.ggml.pre");
-  if (pre != "qwen2") throw Error("unsupported tokenizer pre-tokenizer: '" + escape_control(pre) + "' (only 'qwen2')");
+  // llama-vocab.cpp:2299-2311 maps these to LLAMA3 (ignore_merges, add_bos default true);
+  // qwen2 at :2389 keeps defaults (add_bos false, no ignore_merges).
+  const bool llama3 = pre == "llama3" || pre == "llama-v3" || pre == "llama-bpe";
+  if (!llama3 && pre != "qwen2")
+    throw Error("unsupported tokenizer pre-tokenizer: '" + escape_control(pre) + "' (only 'qwen2', 'llama3', 'llama-v3', 'llama-bpe')");
 
   const auto& toks = f.get_array("tokenizer.ggml.tokens");
   const auto& types = f.get_array("tokenizer.ggml.token_type");
@@ -47,6 +51,9 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   if (toks.empty() || toks.size() > INT32_MAX) throw Error("bad tokenizer vocab size " + std::to_string(toks.size()));
 
   Tokenizer t;
+  t.digit_run_ = llama3 ? 3 : 1;
+  t.ignore_merges_ = llama3;
+  t.add_bos_ = llama3;
   t.tokens_.reserve(toks.size());
   for (size_t k = 0; k < toks.size(); ++k) t.tokens_.emplace_back(toks.str_at(k));
   t.types_.reserve(types.size());
@@ -73,6 +80,19 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     throw Error("eos_token_id out of range: " + std::to_string(eos));
   t.eos_ = static_cast<int32_t>(eos);
 
+  if (const gguf::Value* v = f.find("tokenizer.ggml.bos_token_id")) {
+    const int64_t* b = std::get_if<int64_t>(v);
+    if (!b) throw Error("tokenizer.ggml.bos_token_id is not an integer");
+    if (*b < 0 || *b >= static_cast<int64_t>(t.tokens_.size()))
+      throw Error("bos_token_id out of range: " + std::to_string(*b));
+    t.bos_ = static_cast<int32_t>(*b);
+  }
+  if (const gguf::Value* v = f.find("tokenizer.ggml.add_bos_token")) {
+    const bool* b = std::get_if<bool>(v);
+    if (!b) throw Error("tokenizer.ggml.add_bos_token is not a bool");
+    t.add_bos_ = *b;
+  }
+
   for (size_t k = 0; k < t.tokens_.size(); ++k) {
     auto ty = t.types_[k];
     if (ty == TokenType::Control || ty == TokenType::UserDefined || ty == TokenType::Unknown)
@@ -93,8 +113,16 @@ int32_t Tokenizer::find(std::string_view s) const {
 bool Tokenizer::is_eog(int32_t id) const {
   if (id < 0 || id >= n_vocab()) return false;
   if (id == eos_) return true;
-  const std::string& s = tokens_[id];
-  return s == "<|im_end|>" || s == "<|endoftext|>" || s == "<|eot_id|>";
+  // llama-vocab.cpp:3029-3055 (names that exist in supported vocabularies)
+  static const char* const names[] = {"<|eot_id|>", "<|eot|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
+                                      "<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>",
+                                      "<|eom_id|>", "<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>",
+                                      "<end_of_utterance>", "<eos>", "<turn|>", "<|tool_response>",
+                                      "<\xEF\xBD\x9C" "end\xE2\x96\x81" "of\xE2\x96\x81" "sentence\xEF\xBD\x9C>",
+                                      "[e~[", "<|ifm|im_end|>"};
+  for (const char* n : names)
+    if (tokens_[id] == n) return true;
+  return false;
 }
 
 std::string Tokenizer::decode_token(int32_t id) const {
@@ -121,9 +149,16 @@ std::string Tokenizer::decode_token(int32_t id) const {
 void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out) const {
   utf8_decode(text);  // validate; throws with byte offset
   const auto& map = byte_to_unicode();
-  for (std::string_view word : pretokenize(text, 1)) {
+  for (std::string_view word : pretokenize(text, digit_run_)) {
     std::string w;
     for (unsigned char c : word) w += map[c];
+    if (ignore_merges_) {  // llama-vocab.cpp:669
+      auto whole = ids_.find(w);
+      if (whole != ids_.end()) {
+        out.push_back(whole->second);
+        continue;
+      }
+    }
     std::vector<Sym> syms;
     for (size_t off = 0; off < w.size();) {
       size_t n = 1;

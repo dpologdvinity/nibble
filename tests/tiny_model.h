@@ -18,6 +18,9 @@ struct TinyTokOpts {
   // Appends "<|im_start|>", "<|im_end|>" as Control tokens after `extra`. "<|im_end|>"
   // is EOG by name (Tokenizer::is_eog), as for Qwen; eos_token_id is unchanged.
   bool chatml = false;
+  int64_t bos = -1;      // >= 0: write tokenizer.ggml.bos_token_id (U32)
+  int add_bos = -1;      // 0/1: write tokenizer.ggml.add_bos_token (Bool); -1: absent
+  bool bos_as_string = false;  // write bos_token_id as a string (bad type)
 };
 
 inline int64_t tiny_tok_vocab(const TinyTokOpts& o) {
@@ -48,6 +51,9 @@ inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t 
   w.add_i32_array("tokenizer.ggml.token_type", types);
   w.add_string_array("tokenizer.ggml.merges", o.merges);
   w.add_int("tokenizer.ggml.eos_token_id", GgufWriter::ValueType::U32, eos_id);
+  if (o.bos_as_string) w.add_string("tokenizer.ggml.bos_token_id", "x");
+  else if (o.bos >= 0) w.add_int("tokenizer.ggml.bos_token_id", GgufWriter::ValueType::U32, o.bos);
+  if (o.add_bos >= 0) w.add_int("tokenizer.ggml.add_bos_token", GgufWriter::ValueType::Bool, o.add_bos);
 }
 
 inline std::vector<uint8_t> tiny_tokenizer_gguf(const TinyTokOpts& o = {}) {

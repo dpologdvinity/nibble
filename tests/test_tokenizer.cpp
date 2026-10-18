@@ -55,3 +55,35 @@ TEST_CASE("tokenizer errors", "[tokenizer]") {
   { TinyTokOpts o; o.merges = {"h zz"}; CHECK_THROWS_WITH(make(o), ContainsSubstring("zz")); }
   { TinyTokOpts o; o.merges = {"nospace"}; CHECK_THROWS_AS(make(o), nibble::Error); }
 }
+
+TEST_CASE("llama-bpe pre accepted, bos and add_bos", "[tokenizer]") {
+  { auto t = make(); CHECK(t.bos() == -1); CHECK_FALSE(t.add_bos()); }  // qwen2 default
+  for (const char* pre : {"llama-bpe", "llama3", "llama-v3"}) {
+    TinyTokOpts o; o.pre = pre; o.bos = 260;
+    auto t = make(o);
+    CHECK(t.bos() == 260);
+    CHECK(t.add_bos());  // llama.cpp default for LLAMA3 pre
+    o.add_bos = 0;
+    CHECK_FALSE(make(o).add_bos());
+  }
+  { TinyTokOpts o; o.add_bos = 1; CHECK(make(o).add_bos()); }
+  { TinyTokOpts o; o.bos = 9999; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id")); }
+  { TinyTokOpts o; o.bos_as_string = true; CHECK_THROWS_AS(make(o), nibble::Error); }
+}
+
+TEST_CASE("llama3 digits split in 3 and whole-word vocab hit", "[tokenizer]") {
+  TinyTokOpts o;
+  o.pre = "llama-bpe";
+  o.extra = {"12", "123"};  // 261, 262
+  auto t = make(o);
+  CHECK(t.encode("12345", false) == Ids{262, '4' , '5'});
+  CHECK(t.encode("1234", false) == Ids{262, '4'});
+}
+
+TEST_CASE("eog by name", "[tokenizer]") {
+  TinyTokOpts o;
+  o.extra = {"<|eot_id|>", "<|eom_id|>", "</s>", "<|end_of_text|>", "plain"};  // 261..265
+  auto t = make(o);
+  for (int id : {261, 262, 263, 264}) CHECK(t.is_eog(id));
+  CHECK_FALSE(t.is_eog(265));
+}
