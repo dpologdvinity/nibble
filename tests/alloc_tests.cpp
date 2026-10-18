@@ -20,6 +20,7 @@
 #include "gguf/gguf.h"
 #include "gguf_writer.h"
 #include "nibble/nibble.h"
+#include "sampler.h"
 #include "tiny_model.h"
 
 namespace {
@@ -166,4 +167,20 @@ TEST_CASE("bad_alloc during Model::load surfaces as nibble::Error", "[api][alloc
   INFO("injected failures: " << failures << ", reported as out of memory: " << oom);
   REQUIRE(failures > 0);
   REQUIRE(oom > 0);
+}
+
+TEST_CASE("Sampler::sample does not allocate", "[sampler][alloc]") {
+  std::vector<float> l(1000);
+  for (size_t i = 0; i < l.size(); ++i) l[i] = static_cast<float>((i * 37) % 101) * 0.1f;
+  nibble::Sampler s({0.8f, 50, 0.9f, 5}, 1000);
+  nibble::Sampler greedy({0.0f, 0, 1.0f, 5}, 1000);
+  nibble::Sampler full({1.0f, 0, 1.0f, 5}, 1000);
+  int64_t sink = 0, n = -1;
+  {
+    Armed armed;
+    for (int i = 0; i < 1000; ++i) sink += s.sample(l) + greedy.sample(l) + full.sample(l);
+    n = g_count.load();
+  }
+  REQUIRE(n == 0);
+  REQUIRE(sink >= 0);
 }
