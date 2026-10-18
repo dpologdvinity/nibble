@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Usage: tools/make_golden.sh <model-name>   (model: models/<model-name>.gguf-resolved below)
+# Usage: tools/make_golden.sh [--eog-only] <model-name>
+#   --eog-only: write only eog.txt (vocab-only load, default build); leaves tokenize/logits goldens alone.   (model: models/<model-name>.gguf-resolved below)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-NAME="${1:?usage: make_golden.sh <model-name>}"
+EOG_ONLY=0
+[ "${1:-}" = "--eog-only" ] && { EOG_ONLY=1; shift; }
+NAME="${1:?usage: make_golden.sh [--eog-only] <model-name>}"
 case "$NAME" in
   qwen2.5-0.5b-f16) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-fp16.gguf" ;;
   qwen2.5-0.5b-q8_0) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-q8_0.gguf" ;;
@@ -12,6 +15,11 @@ case "$NAME" in
   *) GGUF="$ROOT/models/$NAME.gguf" ;;
 esac
 [ -f "$GGUF" ] || { echo "missing model $GGUF" >&2; exit 1; }
+if [ "$EOG_ONLY" = 1 ]; then
+  mkdir -p "$ROOT/models/golden/$NAME"
+  "$ROOT/third_party/build/bin/llama_ref" eog "$GGUF" "$ROOT/models/golden/$NAME/eog.txt"
+  exit 0
+fi
 # F16 golden: default (native AVX2) build. Quantized goldens: the generic build with an F32 KV cache,
 # because the native build (AVX2 quantizer/dot, llamafile sgemm, Q4_0 repack, F16 KV) is not the
 # generic algorithm nibble implements, and activation requantization amplifies rounding differences
@@ -25,6 +33,7 @@ esac
 OUT="$ROOT/models/golden/$NAME"
 mkdir -p "$OUT"
 "$REF" tokenize "$GGUF" "$ROOT/tests/tokenizer/corpus.txt" "$OUT/tokenize.txt"
+"$REF" eog "$GGUF" "$OUT/eog.txt"
 CHAT=chat   # chat prompt per model family; the output is always chat.bin
 case "$NAME" in
   llama32-1b-*) CHAT=chat_llama3 ;;

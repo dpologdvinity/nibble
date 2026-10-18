@@ -1,5 +1,6 @@
 // Reference tool built against pinned llama.cpp (see tools/llama_cpp_version.txt).
 //   llama_ref tokenize <model.gguf> <corpus.txt> <out.txt>
+//   llama_ref eog      <model.gguf> <out.txt>   (ascending ids with llama_vocab_is_eog, vocab only)
 //   llama_ref logits   <model.gguf> <prompt.txt> <n_gen> <out.bin>
 #include <algorithm>
 #include <cstdint>
@@ -58,6 +59,23 @@ static int cmd_tokenize(char** a) {
     for (size_t i = 0; i < t.size(); ++i) out << (i ? " " : "") << t[i];
     out << "\n";
   }
+  out.close();
+  if (!out) die("write failed");
+  llama_model_free(m);
+  return 0;
+}
+
+static int cmd_eog(char** a) {
+  llama_backend_init();
+  llama_model_params mp = llama_model_default_params();
+  mp.vocab_only = true;
+  llama_model* m = llama_model_load_from_file(a[0], mp);
+  if (!m) die(std::string("cannot load model ") + a[0]);
+  const llama_vocab* v = llama_model_get_vocab(m);
+  std::ofstream out(a[1], std::ios::binary);
+  if (!out) die(std::string("cannot write ") + a[1]);
+  for (int32_t id = 0; id < llama_vocab_n_tokens(v); ++id)
+    if (llama_vocab_is_eog(v, id)) out << id << "\n";
   out.close();
   if (!out) die("write failed");
   llama_model_free(m);
@@ -149,7 +167,8 @@ static int cmd_logits(char** a) {
 int main(int argc, char** argv) {
   if (argc == 5 && std::string(argv[1]) == "tokenize") return cmd_tokenize(argv + 2);
   if (argc == 7 && std::string(argv[1]) == "logits" && std::string(argv[6]) == "--kv-f32") g_kv_f32 = true, argc = 6;
+  if (argc == 4 && std::string(argv[1]) == "eog") return cmd_eog(argv + 2);
   if (argc == 2 && std::string(argv[1]) == "sysinfo") return std::puts(llama_print_system_info()), 0;
   if (argc == 6 && std::string(argv[1]) == "logits") return cmd_logits(argv + 2);
-  die("usage: llama_ref tokenize <model> <corpus> <out> | logits <model> <prompt> <n_gen> <out> [--kv-f32] | sysinfo");
+  die("usage: llama_ref eog <model> <out> | tokenize <model> <corpus> <out> | logits <model> <prompt> <n_gen> <out> [--kv-f32] | sysinfo");
 }
