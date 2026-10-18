@@ -122,6 +122,7 @@ Session::~Session() = default;
 int64_t Session::n_prompt_tokens() const { return impl_->n_prompt; }
 int64_t Session::n_generated() const { return impl_->n_gen; }
 int64_t Session::n_past() const { return impl_->n_past; }
+const std::string& Session::architecture() const { return impl_->m.cfg.arch; }
 
 StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams& gp,
                               const std::function<bool(std::string_view)>& on_token) {

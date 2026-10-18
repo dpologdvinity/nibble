@@ -60,6 +60,8 @@ class Model {
 
 // A Session must not outlive its Model. v1 allows ONE active Session per Model
 // at a time (the backend's attention scratch is shared).
+class Chat;
+
 class Session {
  public:
   explicit Session(Model&);
@@ -101,8 +103,44 @@ class Session {
   int64_t n_past() const;           // tokens currently in the KV cache
 
  private:
+  friend class Chat;
+  const std::string& architecture() const;  // of the Session's Model
   struct Impl;
   std::unique_ptr<Impl> impl_;
+};
+
+struct ChatTestAccess;
+
+// Multi-turn chat over a Session, formatted with the model's chat template
+// (ChatML for qwen2). The KV cache is kept between turns, so each send prefills
+// only the new turn's tokens. The Chat must not outlive its Session, and the
+// Session must not be used directly while a Chat drives it (that breaks the
+// cached history). Move-only.
+class Chat {
+ public:
+  // Throws Error("no chat template for architecture <a>") if the model has no
+  // known chat format. An empty system prompt selects the model's default
+  // (Qwen: "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.").
+  explicit Chat(Session&, std::string system_prompt = {});
+  Chat(Chat&&) noexcept;
+  Chat& operator=(Chat&&) noexcept;
+  ~Chat();
+  Chat(const Chat&) = delete;
+  Chat& operator=(const Chat&) = delete;
+
+  // Sends one user message and streams the assistant reply. User and system text
+  // are tokenized as plain text, so they cannot inject control tokens. The first
+  // turn (including the system prompt) starts the Session fresh; later turns append.
+  // GenParams::append is ignored. Once a send returns ContextFull (the turn did not
+  // fit, or the reply filled the context), every later send returns ContextFull at
+  // once without calling on_token. Throws Error on a moved-from Chat.
+  StopReason send(std::string_view user, const GenParams&,
+                  const std::function<bool(std::string_view piece)>& on_token);
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  friend struct ChatTestAccess;
 };
 
 }  // namespace nibble

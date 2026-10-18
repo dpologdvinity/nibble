@@ -15,7 +15,14 @@ struct TinyTokOpts {
   std::vector<std::string> merges = {"h e", "he l", "\xC4\xA0 w"};
   std::vector<std::string> extra;  // extra Normal tokens after the 5 fixed ones (ids 261..)
   bool drop_type = false;  // token_type one shorter than tokens
+  // Appends "<|im_start|>", "<|im_end|>" as Control tokens after `extra`. "<|im_end|>"
+  // is EOG by name (Tokenizer::is_eog), as for Qwen; eos_token_id is unchanged.
+  bool chatml = false;
 };
+
+inline int64_t tiny_tok_vocab(const TinyTokOpts& o) {
+  return 261 + static_cast<int64_t>(o.extra.size()) + (o.chatml ? 2 : 0);
+}
 
 inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t eos_id = 259) {
   std::vector<std::string> toks;
@@ -29,6 +36,10 @@ inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t 
   for (const auto& e : o.extra) {
     toks.push_back(e);
     types.push_back(1);
+  }
+  if (o.chatml) {
+    toks.insert(toks.end(), {"<|im_start|>", "<|im_end|>"});
+    types.insert(types.end(), {3, 3});
   }
   if (o.drop_type) types.pop_back();
   w.add_string("tokenizer.ggml.model", o.model);
@@ -51,7 +62,7 @@ struct TinyModelOpts {
   std::string drop_tensor;      // omit this tensor
   std::string bad_shape;        // give this 2-D tensor a wrong ne[1]
   std::string q4_tensor;        // store this tensor as Q4_0 (needs ne[0] % 32 == 0, e.g. blk.0.ffn_down.weight)
-  int64_t vocab_delta = 0;      // token_embd rows = 261 + delta (tokenizer unchanged)
+  int64_t vocab_delta = 0;      // token_embd rows = tokenizer vocab + delta (tokenizer unchanged)
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
   bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
   std::string raw_type_tensor;  // store this tensor with unsupported ggml type 12 (Q4_K) and dummy bytes
@@ -59,12 +70,13 @@ struct TinyModelOpts {
   TinyTokOpts tok;              // tokenizer variant
 };
 
-// qwen2: 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab 261.
+// qwen2: 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by default).
 inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype = nibble::DType::F32,
                                             bool zero_output_norm = false, int32_t eos_id = 259,
                                             const TinyModelOpts& mo = {}) {
   using nibble::DType;
-  constexpr int64_t H = 4, KV = 2, V = 261, L = 2;
+  constexpr int64_t H = 4, KV = 2, L = 2;
+  const int64_t V = tiny_tok_vocab(mo.tok);
   const int64_t E = mo.quant_dims ? 32 : 16, HD = E / H, FF = mo.quant_dims ? 64 : 32;
   GgufWriter w;
   w.add_string("general.architecture", mo.arch);
