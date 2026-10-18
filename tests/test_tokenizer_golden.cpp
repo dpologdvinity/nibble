@@ -39,7 +39,9 @@ static void check_golden(const std::string& model_file, const std::string& golde
     }
     INFO("entry " << i << "\nwant: " << join(want) << "\ngot:  " << join(got) << "\npieces: " << pieces);
     CHECK(got == want);
-    CHECK(cat == corpus[i]);
+    // SPM adds one leading space (add_space_prefix) that decode cannot tell from text.
+    const bool prefixed = tok.add_space_prefix() && !corpus[i].empty();
+    CHECK(cat == (prefixed ? " " + corpus[i] : corpus[i]));
     ++n;
   }
   CHECK(n == 37);
@@ -51,6 +53,10 @@ TEST_CASE("tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
 
 TEST_CASE("llama 3.2 tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
   check_golden("llama-3.2-1b-instruct-f16.gguf", "llama32-1b-f16");
+}
+
+TEST_CASE("tinyllama spm tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
+  check_golden("tinyllama-1.1b-chat-f16.gguf", "tinyllama-1.1b-f16");
 }
 
 TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
@@ -66,9 +72,8 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
     const std::string gguf = root + "/models/" + m.file, gold = root + "/models/golden/" + m.dir + "/eog.txt";
     if (!std::filesystem::exists(gguf) || !std::filesystem::exists(gold)) continue;
     auto file = nibble::gguf::File::open(gguf);
-    // TinyLlama is SPM; skipped until the SPM tokenizer lands (Task 4).
     std::optional<nibble::tok::Tokenizer> tok;
-    try { tok.emplace(nibble::tok::Tokenizer::from_gguf(file)); } catch (const nibble::Error&) { continue; }
+    tok.emplace(nibble::tok::Tokenizer::from_gguf(file));  // a throwing tokenizer fails the test
     std::ifstream gf(gold);
     std::vector<int32_t> want, got;
     for (int32_t x; gf >> x;) want.push_back(x);
@@ -81,5 +86,10 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
     CHECK(got == want);
     ++ran;
   }
+  int expected = 0;  // every model with both files present must have been compared
+  for (const M& m : models)
+    expected += std::filesystem::exists(root + "/models/" + m.file) &&
+                std::filesystem::exists(root + "/models/golden/" + m.dir + "/eog.txt");
+  CHECK(ran == expected);
   if (ran == 0) SKIP("no model with eog golden");
 }

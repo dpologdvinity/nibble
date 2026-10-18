@@ -21,13 +21,67 @@ struct TinyTokOpts {
   int64_t bos = -1;      // >= 0: write tokenizer.ggml.bos_token_id (U32)
   int add_bos = -1;      // 0/1: write tokenizer.ggml.add_bos_token (Bool); -1: absent
   bool bos_as_string = false;  // write bos_token_id as a string (bad type)
+  // SentencePiece ("llama") vocab; see tiny_spm_vocab. Ignores merges/extra/chatml/pre; bos 1, eos 2, unk 0.
+  bool spm = false;
+  int add_space_prefix = -1;   // spm: 0/1 writes tokenizer.ggml.add_space_prefix; -1 absent (default true)
+  int bad_scores = 0;          // spm: 1 = one score too few, 2 = I32 instead of F32
 };
 
+struct TinySpmTok { const char* text; int type; float score; };
+
+// ids: 0 <unk>, 1 <s>, 2 </s>, 3..258 <0x00>..<0xFF>, then the table below from 259.
+inline std::vector<TinySpmTok> tiny_spm_vocab() {
+  std::vector<TinySpmTok> v = {{"<unk>", 2, 0}, {"<s>", 3, 0}, {"</s>", 3, 0}};
+  static std::vector<std::string> bytes;  // stable storage for c_str()
+  if (bytes.empty())
+    for (int b = 0; b < 256; ++b) {
+      char buf[8];
+      snprintf(buf, sizeof buf, "<0x%02X>", b);
+      bytes.emplace_back(buf);
+    }
+  for (const auto& s : bytes) v.push_back({s.c_str(), 6, 0});
+#define SP "\xE2\x96\x81"  // U+2581
+  for (const TinySpmTok& t : std::vector<TinySpmTok>{
+           {SP, 1, -10}, {"h", 1, -10}, {"i", 1, -10}, {"t", 1, -10}, {"e", 1, -10}, {"r", 1, -10},
+           {"a", 1, -10}, {"b", 1, -10}, {"c", 1, -10},
+           {SP "h", 1, -6}, {"hi", 1, -7}, {SP "hi", 1, -3},
+           {SP "t", 1, -6}, {"he", 1, -4}, {"the", 1, -3}, {SP "the", 1, -2},
+           {"re", 1, -5}, {SP "there", 1, -1},
+           {SP "a", 1, -20}, {SP "b", 1, -20}, {"ab", 1, -1}, {"bc", 1, -2}})
+    v.push_back(t);
+#undef SP
+  return v;
+}
+
 inline int64_t tiny_tok_vocab(const TinyTokOpts& o) {
+  if (o.spm) return static_cast<int64_t>(tiny_spm_vocab().size());
   return 261 + static_cast<int64_t>(o.extra.size()) + (o.chatml ? 2 : 0);
 }
 
+inline void add_tiny_spm_kvs(GgufWriter& w, const TinyTokOpts& o) {
+  std::vector<std::string> toks;
+  std::vector<int32_t> types;
+  std::vector<float> scores;
+  for (const auto& t : tiny_spm_vocab()) {
+    toks.push_back(t.text);
+    types.push_back(t.type);
+    scores.push_back(t.score);
+  }
+  w.add_string("tokenizer.ggml.model", "llama");
+  w.add_string_array("tokenizer.ggml.tokens", toks);
+  w.add_i32_array("tokenizer.ggml.token_type", types);
+  if (o.bad_scores == 1) scores.pop_back();
+  if (o.bad_scores == 2) w.add_i32_array("tokenizer.ggml.scores", std::vector<int32_t>(toks.size(), 0));
+  else w.add_f32_array("tokenizer.ggml.scores", scores);
+  w.add_int("tokenizer.ggml.bos_token_id", GgufWriter::ValueType::U32, 1);
+  w.add_int("tokenizer.ggml.eos_token_id", GgufWriter::ValueType::U32, 2);
+  w.add_int("tokenizer.ggml.unknown_token_id", GgufWriter::ValueType::U32, 0);
+  if (o.add_space_prefix >= 0) w.add_int("tokenizer.ggml.add_space_prefix", GgufWriter::ValueType::Bool, o.add_space_prefix);
+  if (o.add_bos >= 0) w.add_int("tokenizer.ggml.add_bos_token", GgufWriter::ValueType::Bool, o.add_bos);
+}
+
 inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t eos_id = 259) {
+  if (o.spm) return add_tiny_spm_kvs(w, o);
   std::vector<std::string> toks;
   std::vector<int32_t> types;
   for (const auto& s : nibble::tok::byte_to_unicode()) {

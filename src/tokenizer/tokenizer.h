@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -11,7 +12,8 @@ namespace nibble::tok {
 
 enum class TokenType : int32_t { Normal = 1, Unknown = 2, Control = 3, UserDefined = 4, Unused = 5, Byte = 6 };
 
-// Byte-level BPE (gpt2 model; qwen2 or llama3 pre-tokenizer). Matches llama.cpp token IDs.
+// Byte-level BPE (gpt2 model; qwen2 or llama3 pre-tokenizer) or SentencePiece-style BPE (llama model).
+// Matches llama.cpp token IDs.
 class Tokenizer {
  public:
   static Tokenizer from_gguf(const gguf::File&);
@@ -21,10 +23,12 @@ class Tokenizer {
   int32_t eos() const { return eos_; }
   int32_t bos() const { return bos_; }  // -1 if none
   bool add_bos() const { return add_bos_; }
+  bool add_space_prefix() const { return add_space_prefix_; }  // SPM only
   bool is_eog(int32_t id) const;
   int32_t find(std::string_view token_text) const;  // -1 if absent
 
  private:
+  void init_spm(const gguf::File&);
   void encode_segment(std::string_view text, std::vector<int32_t>& out) const;
 
   std::vector<std::string> tokens_;
@@ -37,6 +41,11 @@ class Tokenizer {
   int32_t bos_ = -1;
   bool add_bos_ = false;
   int digit_run_ = 1;          // 1 qwen2, 3 llama3
+  bool spm_ = false;           // SentencePiece ("llama") model; no pre-tokenizer or merges
+  bool add_space_prefix_ = false;
+  int32_t unk_ = -1;
+  std::vector<float> scores_;  // spm
+  std::array<int32_t, 256> byte_ids_{};  // spm: id of <0xXX> per byte, -1 if absent
   bool ignore_merges_ = false; // llama3: a pre-token that is a whole vocab entry skips BPE
 };
 

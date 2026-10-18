@@ -4,6 +4,7 @@
 #include "nibble/error.h"
 #include "tiny_model.h"
 #include "tokenizer/tokenizer.h"
+#include "tokenizer/unicode.h"
 
 using nibble::tok::Tokenizer;
 using Ids = std::vector<int32_t>;
@@ -50,7 +51,7 @@ TEST_CASE("tokenizer errors", "[tokenizer]") {
   auto t = make();
   CHECK_THROWS_AS(t.encode("\xFF", false), nibble::Error);
   { TinyTokOpts o; o.pre = "deepseek-llm"; CHECK_THROWS_WITH(make(o), ContainsSubstring("deepseek-llm")); }
-  { TinyTokOpts o; o.model = "llama"; CHECK_THROWS_WITH(make(o), ContainsSubstring("llama")); }
+  { TinyTokOpts o; o.model = "bert"; CHECK_THROWS_WITH(make(o), ContainsSubstring("bert")); }
   { TinyTokOpts o; o.drop_type = true; CHECK_THROWS_AS(make(o), nibble::Error); }
   { TinyTokOpts o; o.merges = {"h zz"}; CHECK_THROWS_WITH(make(o), ContainsSubstring("zz")); }
   { TinyTokOpts o; o.merges = {"nospace"}; CHECK_THROWS_AS(make(o), nibble::Error); }
@@ -86,4 +87,62 @@ TEST_CASE("eog by name", "[tokenizer]") {
   auto t = make(o);
   for (int id : {261, 262, 263, 264}) CHECK(t.is_eog(id));
   CHECK_FALSE(t.is_eog(265));
+}
+
+// ---- SentencePiece ("llama") ----
+static const std::string SP = "\xE2\x96\x81";  // U+2581
+
+static Tokenizer make_spm(int add_space_prefix = -1) {
+  TinyTokOpts o;
+  o.spm = true;
+  o.add_space_prefix = add_space_prefix;
+  return make(o);
+}
+
+TEST_CASE("spm space prefix and escaping", "[tokenizer][spm]") {
+  auto t = make_spm();
+  CHECK(t.add_bos());
+  CHECK(t.bos() == 1);
+  CHECK(t.encode("hi there", false) == Ids{t.find(SP + "hi"), t.find(SP + "there")});
+  CHECK(t.encode("", false).empty());
+  auto np = make_spm(0);
+  CHECK(np.encode("hi", false) == Ids{np.find("hi")});
+}
+
+TEST_CASE("spm highest score merge wins", "[tokenizer][spm]") {
+  auto t = make_spm();
+  // SP+"a" (-20) is a candidate but "ab" (-1) outranks it; "bc" (-2) is then gone.
+  CHECK(t.encode("abc", false) == Ids{t.find(SP), t.find("ab"), t.find("c")});
+}
+
+TEST_CASE("spm byte fallback", "[tokenizer][spm]") {
+  auto t = make_spm();
+  CHECK(t.encode("\xC3\xA9", false) == Ids{t.find(SP), 3 + 0xC3, 3 + 0xA9});
+}
+
+TEST_CASE("spm space prefix after special", "[tokenizer][spm]") {
+  auto t = make_spm();
+  CHECK(t.encode("a</s>b", true) == Ids{t.find(SP + "a"), 2, t.find(SP + "b")});
+  CHECK(t.encode("</s>", true) == Ids{2});
+}
+
+TEST_CASE("spm decode", "[tokenizer][spm]") {
+  auto t = make_spm();
+  CHECK(t.decode_token(t.find(SP + "hi")) == " hi");
+  CHECK(t.decode_token(0) == "");
+  CHECK(t.decode_token(1) == "");
+  nibble::tok::Utf8Streamer st;
+  std::string s = st.push(t.decode_token(3 + 0xC3));
+  CHECK(s.empty());
+  s += st.push(t.decode_token(3 + 0xA9));
+  CHECK(s == "\xC3\xA9");
+}
+
+TEST_CASE("spm rejects bad scores", "[tokenizer][spm]") {
+  TinyTokOpts o;
+  o.spm = true;
+  o.bad_scores = 1;
+  CHECK_THROWS_WITH(make(o), ContainsSubstring("scores length"));
+  o.bad_scores = 2;
+  CHECK_THROWS_WITH(make(o), ContainsSubstring("scores is not a float array"));
 }

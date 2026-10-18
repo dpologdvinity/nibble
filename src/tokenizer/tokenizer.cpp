@@ -8,6 +8,7 @@
 #include "nibble/error.h"
 #include "util/escape.h"
 #include "tokenizer/pretokenize.h"
+#include "tokenizer/spm.h"
 #include "tokenizer/unicode.h"
 
 namespace nibble::tok {
@@ -37,7 +38,9 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
   const int32_t n = static_cast<int32_t>(tokens.size());
   std::unordered_map<std::string_view, int32_t> by_text;
   for (int32_t k = 0; k < n; ++k) by_text[tokens[static_cast<size_t>(k)]] = k;
-  auto named = [&](std::initializer_list<const char*> names) {  // lowest id among matches (llama.cpp: map order)
+  // Several names present: llama.cpp takes the first hit while iterating token_to_id, a std::unordered_map
+  // (llama-vocab.cpp:1969, loop :2825), so the order is unspecified. We pick the lowest id for determinism.
+  auto named = [&](std::initializer_list<const char*> names) {
     int32_t best = -1;
     for (const char* nm : names) {
       auto it = by_text.find(nm);
@@ -99,21 +102,24 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
 
 Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   const std::string model = f.get_string("tokenizer.ggml.model");
-  if (model != "gpt2") throw Error("unsupported tokenizer model: '" + escape_control(model) + "' (only 'gpt2')");
-  const std::string pre = f.get_string("tokenizer.ggml.pre");
+  const bool spm = model == "llama";
+  if (model != "gpt2" && !spm)
+    throw Error("unsupported tokenizer model: '" + escape_control(model) + "' (only 'gpt2', 'llama')");
+  const std::string pre = spm ? "" : f.get_string("tokenizer.ggml.pre");
   // Deliberately narrowed: llama.cpp also maps falcon3, pixtral, lfm2, ... to LLAMA3 (:2299-2309) and
   // many other pre names; only the families nibble supports (qwen2, llama3/llama-v3/llama-bpe) are accepted.
   // llama-vocab.cpp:2299-2311 maps these to LLAMA3 (ignore_merges, add_bos default true);
   // qwen2 at :2389 keeps defaults (add_bos false, no ignore_merges).
   const bool llama3 = pre == "llama3" || pre == "llama-v3" || pre == "llama-bpe";
-  if (!llama3 && pre != "qwen2")
+  if (!spm && !llama3 && pre != "qwen2")
     throw Error("unsupported tokenizer pre-tokenizer: '" + escape_control(pre) + "' (only 'qwen2', 'llama3', 'llama-v3', 'llama-bpe')");
 
   const auto& toks = f.get_array("tokenizer.ggml.tokens");
   const auto& types = f.get_array("tokenizer.ggml.token_type");
-  const auto& merges = f.get_array("tokenizer.ggml.merges");
+  static const gguf::Array no_merges;
+  const auto& merges = spm ? no_merges : f.get_array("tokenizer.ggml.merges");
   if (!toks.is_string()) throw Error("tokenizer.ggml.tokens is not a string array");
-  if (!merges.is_string()) throw Error("tokenizer.ggml.merges is not a string array");
+  if (!spm && !merges.is_string()) throw Error("tokenizer.ggml.merges is not a string array");
   if (!types.is_int()) throw Error("tokenizer.ggml.token_type is not an integer array");
   if (types.size() != toks.size())
     throw Error("tokenizer.ggml.token_type length " + std::to_string(types.size()) +
@@ -123,9 +129,13 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   Tokenizer t;
   t.digit_run_ = llama3 ? 3 : 1;
   t.ignore_merges_ = llama3;
-  t.add_bos_ = llama3;
+  t.add_bos_ = llama3 || spm;  // SPM default: llama-vocab.cpp:2564-2569
+  t.spm_ = spm;
   t.tokens_.reserve(toks.size());
   for (size_t k = 0; k < toks.size(); ++k) t.tokens_.emplace_back(toks.str_at(k));
+  if (spm)  // llama-vocab.cpp:2663-2667
+    for (size_t k = 0; k < t.tokens_.size(); ++k)
+      if (t.tokens_[k].empty()) t.tokens_[k] = "[EMPTY_" + std::to_string(k) + "]";
   t.types_.reserve(types.size());
   for (size_t k = 0; k < types.size(); ++k) {
     int64_t v = types.int_at(k);
@@ -133,9 +143,14 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     t.types_.push_back(static_cast<TokenType>(v));
   }
   t.ids_.reserve(t.tokens_.size());
-  for (size_t k = 0; k < t.tokens_.size(); ++k) t.ids_.emplace(t.tokens_[k], static_cast<int32_t>(k));  // first wins
+  for (size_t k = 0; k < t.tokens_.size(); ++k) {
+    const bool fresh = t.ids_.emplace(t.tokens_[k], static_cast<int32_t>(k)).second;  // first wins
+    // llama.cpp asserts token_to_id.size() == id_to_token.size() (llama-vocab.cpp:2679).
+    if (spm && !fresh) throw Error("duplicate token text at id " + std::to_string(k) + ": '" + escape_control(t.tokens_[k]) + "'");
+  }
+  if (spm) t.init_spm(f);
 
-  t.ranks_.reserve(merges.size());
+  t.ranks_.reserve(merges.size());  // empty for spm
   for (size_t k = 0; k < merges.size(); ++k) {
     const std::string m(merges.str_at(k));
     size_t sp = m.find(' ', 1);  // same as llama.cpp: first space after position 0
@@ -150,6 +165,7 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     throw Error("eos_token_id out of range: " + std::to_string(eos));
   t.eos_ = static_cast<int32_t>(eos);
 
+  if (spm && t.tokens_.size() > 1) t.bos_ = 1;  // llama-vocab.cpp:1936 default
   if (const gguf::Value* v = f.find("tokenizer.ggml.bos_token_id")) {
     const int64_t* b = std::get_if<int64_t>(v);
     if (!b) throw Error("tokenizer.ggml.bos_token_id is not an integer");
@@ -177,6 +193,49 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   return t;
 }
 
+// Scores, byte tokens, unk id and add_space_prefix for the SPM model.
+void Tokenizer::init_spm(const gguf::File& f) {
+  const size_t n = tokens_.size();
+  scores_.assign(n, 0.0f);  // absent: all zero (llama-vocab.cpp:2635-2637)
+  if (const gguf::Value* v = f.find("tokenizer.ggml.scores")) {
+    const gguf::Array* a = std::get_if<gguf::Array>(v);
+    if (!a || a->elem_type() != gguf::ValueType::F32) throw Error("tokenizer.ggml.scores is not a float array");
+    if (a->size() != n)
+      throw Error("tokenizer.ggml.scores length " + std::to_string(a->size()) + " != tokens length " + std::to_string(n));
+    for (size_t k = 0; k < n; ++k) scores_[k] = static_cast<float>(a->float_at(k));
+  }
+  for (size_t k = 0; k < n; ++k) {
+    if (types_[k] != TokenType::Byte) continue;
+    const std::string& s = tokens_[k];
+    auto hex = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; };
+    if (s.size() != 6 || s.compare(0, 3, "<0x") != 0 || s[5] != '>' || hex(s[3]) < 0 || hex(s[4]) < 0)
+      throw Error("bad byte token text at id " + std::to_string(k) + ": '" + escape_control(s) + "'");
+  }
+  // byte_to_token (llama-vocab.cpp:4165-4177): "<0xXX>", else the byte as a 1-char string.
+  for (int b = 0; b < 256; ++b) {
+    char buf[7];
+    snprintf(buf, sizeof buf, "<0x%02X>", b);
+    int32_t id = find(buf);
+    if (id < 0) id = find(std::string(1, static_cast<char>(b)));
+    byte_ids_[static_cast<size_t>(b)] = id;
+  }
+  auto opt_id = [&](const char* key, int32_t dflt) {  // llama-vocab.cpp:1940 default unk 0
+    const gguf::Value* v = f.find(key);
+    if (!v) return dflt;
+    const int64_t* i = std::get_if<int64_t>(v);
+    if (!i) throw Error(std::string(key) + " is not an integer");
+    if (*i < 0 || *i >= static_cast<int64_t>(n)) throw Error(std::string(key) + " out of range: " + std::to_string(*i));
+    return static_cast<int32_t>(*i);
+  };
+  unk_ = opt_id("tokenizer.ggml.unknown_token_id", n > 0 ? 0 : -1);
+  add_space_prefix_ = true;  // llama-vocab.cpp:2566, overridden by the key at :2591
+  if (const gguf::Value* v = f.find("tokenizer.ggml.add_space_prefix")) {
+    const bool* b = std::get_if<bool>(v);
+    if (!b) throw Error("tokenizer.ggml.add_space_prefix is not a bool");
+    add_space_prefix_ = *b;
+  }
+}
+
 int32_t Tokenizer::find(std::string_view s) const {
   auto it = ids_.find(std::string(s));
   return it == ids_.end() ? -1 : it->second;
@@ -186,6 +245,25 @@ bool Tokenizer::is_eog(int32_t id) const { return id >= 0 && id < n_vocab() && e
 
 std::string Tokenizer::decode_token(int32_t id) const {
   if (id < 0 || id >= n_vocab()) throw Error("token id out of range: " + std::to_string(id));
+  if (spm_) {  // token_to_piece, llama-vocab.cpp:3823-3897 (special=false)
+    switch (types_[id]) {
+      case TokenType::UserDefined:
+        return tokens_[id];
+      case TokenType::Normal: {  // llama_unescape_whitespace, :3540
+        std::string out;
+        const std::string& s = tokens_[id];
+        for (size_t k = 0; k < s.size();) {
+          if (s.compare(k, 3, "\xE2\x96\x81") == 0) out.push_back(' '), k += 3;
+          else out.push_back(s[k++]);
+        }
+        return out;
+      }
+      case TokenType::Byte:  // validated as <0xXX> at load
+        return std::string(1, static_cast<char>(std::stoi(tokens_[id].substr(3, 2), nullptr, 16)));
+      default:  // Control, Unknown, Unused
+        return "";
+    }
+  }
   switch (types_[id]) {
     case TokenType::Control:
     case TokenType::Unknown:
@@ -291,9 +369,23 @@ std::vector<int32_t> Tokenizer::encode(std::string_view text, bool parse_special
     frags = std::move(next);
   }
   std::vector<int32_t> out;
+  bool prev_special = true;  // llama-vocab.cpp:3586: the first fragment counts as following a special
+  const SpmVocab sv{ids_, scores_, byte_ids_, unk_};
   for (const Frag& fr : frags) {
-    if (fr.special >= 0) out.push_back(fr.special);
-    else encode_segment(text.substr(fr.off, fr.len), out);
+    if (fr.special >= 0) {
+      out.push_back(fr.special);
+      prev_special = true;
+    } else if (spm_) {
+      if (fr.len == 0) continue;  // llama.cpp never makes empty raw fragments
+      std::string s = add_space_prefix_ && prev_special ? " " : "";  // :3599-3601
+      s.append(text.substr(fr.off, fr.len));
+      std::string esc;  // llama_escape_whitespace, :3536
+      for (char c : s) esc += c == ' ' ? "\xE2\x96\x81" : std::string(1, c);
+      spm_encode(sv, esc, out);
+      prev_special = false;
+    } else {
+      encode_segment(text.substr(fr.off, fr.len), out);
+    }
   }
   return out;
 }
