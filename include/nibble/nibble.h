@@ -75,7 +75,8 @@ class Session {
   Session(const Session&) = delete;
   Session& operator=(const Session&) = delete;
 
-  // Encodes the parts (in order) and samples with GenParams. append = false starts
+  // Encodes the parts (in order, as one string: adjacent plain text is tokenized together, so
+  // "a" + "b" equals "ab") and samples with GenParams. append = false starts
   // at position 0 (n_past() becomes 0); append = true prefills the new tokens at
   // n_past(). Every sampled token except EOS is forwarded into the KV cache, so
   // after any return (not a throw)
@@ -91,6 +92,10 @@ class Session {
   // In both cases n_past() is unchanged for append = true and 0 for append = false.
   // Otherwise ContextFull is returned once start + n_prompt_tokens() + n_generated()
   // == n_ctx() (the cache is then full).
+  //
+  // With append = false, the BOS token is prepended when the model defines one and wants it
+  // (SentencePiece models such as TinyLlama, Llama 3), unless the prompt already starts with it;
+  // append = true adds none. Qwen has no BOS. An all-empty prompt gets no BOS.
   //
   // Empty input: zero new tokens (an empty parts list, or parts that encode to
   // nothing) with append = false throws Error("empty prompt"). With append = true it

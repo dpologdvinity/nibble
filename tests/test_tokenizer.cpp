@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
+#include <random>
+
 #include "nibble/error.h"
 #include "tiny_model.h"
 #include "tokenizer/tokenizer.h"
@@ -145,4 +148,90 @@ TEST_CASE("spm rejects bad scores", "[tokenizer][spm]") {
   CHECK_THROWS_WITH(make(o), ContainsSubstring("scores length"));
   o.bad_scores = 2;
   CHECK_THROWS_WITH(make(o), ContainsSubstring("scores is not a float array"));
+}
+
+TEST_CASE("spm equal-score tie goes to the lowest left index", "[tokenizer][spm]") {
+  auto t = make_spm();
+  // "ca" and "ab" both score -1 and overlap; llama-vocab.cpp:99-101 merges the left one first.
+  CHECK(t.encode("cab", false) == Ids{t.find(SP), t.find("ca"), t.find("b")});
+}
+
+TEST_CASE("spm byte fallback via 1-char string token and via unk", "[tokenizer][spm]") {
+  TinyTokOpts o;
+  o.spm = true;
+  o.byte_0xC3 = 1;  // no "<0xC3>"; the byte is the 1-char token "\xC3" (id 3 + 0xC3)
+  auto t = make(o);
+  CHECK(t.encode("\xC3\xA9", false) == Ids{t.find(SP), 3 + 0xC3, 3 + 0xA9});
+  o.byte_0xC3 = 2;  // neither form exists: unk (id 0)
+  CHECK(make(o).encode("\xC3\xA9", false) == Ids{make(o).find(SP), 0, 3 + 0xA9});
+}
+
+TEST_CASE("spm rejects non-finite scores", "[tokenizer][spm]") {
+  TinyTokOpts o;
+  o.spm = true;
+  o.bad_scores = 3;
+  CHECK_THROWS_WITH(make(o), ContainsSubstring("tokenizer.ggml.scores[5]"));
+  o.bad_scores = 4;
+  CHECK_THROWS_WITH(make(o), ContainsSubstring("tokenizer.ggml.scores[6]"));
+}
+
+TEST_CASE("encode_parts equals encode of the whole string", "[tokenizer]") {
+  // Splits never land inside a special token's text.
+  const std::vector<std::string> bpe_corpus = {"hello world", "hel he", "a b  c", "he<tool>llo", "x\xC3\xA9y z", "hello"};
+  const std::vector<std::string> spm_corpus = {"hi there", "abc ab", "the re", "ab ab", "hi<unk>x", "\xC3\xA9 cab"};
+  std::mt19937 rng(7);
+  for (bool spm : {false, true}) {
+    TinyTokOpts o;
+    o.spm = spm;
+    auto t = make(o);
+    for (const std::string& s : spm ? spm_corpus : bpe_corpus) {
+      const Ids want = t.encode(s, false);
+      for (int rep = 0; rep < 200; ++rep) {
+        std::vector<size_t> cuts = {0, s.size()};
+        for (int k = int(rng() % 4); k > 0; --k) cuts.push_back(rng() % (s.size() + 1));
+        std::sort(cuts.begin(), cuts.end());
+        // Do not cut inside "<tool>" / "<unk>"; it is a different (valid) tokenization.
+        bool bad = false;
+        for (size_t c : cuts)
+          for (const char* sp : {"<tool>", "<unk>"}) {
+            size_t at = s.find(sp);
+            if (at != std::string::npos && c > at && c < at + 6) bad = true;
+          }
+        if (bad) continue;
+        std::vector<nibble::tok::Part> parts;
+        for (size_t k = 0; k + 1 < cuts.size(); ++k) parts.push_back({std::string_view(s).substr(cuts[k], cuts[k + 1] - cuts[k]), false});
+        INFO((spm ? "spm '" : "bpe '") << s << "' with " << parts.size() << " parts");
+        CHECK(t.encode_parts(parts, false) == want);
+      }
+    }
+  }
+}
+
+TEST_CASE("encode_parts special flag is per part", "[tokenizer][spm]") {
+  auto t = make_spm();
+  using P = nibble::tok::Part;
+  const P a[] = {{"a", false}, {"</s>", false}, {"b", false}};  // Control text stays plain when special = false
+  CHECK(t.encode_parts(a, false) == t.encode("a</s>b", false));
+  const P b[] = {{"a", false}, {"</s>", true}, {"b", false}};
+  CHECK(t.encode_parts(b, false) == Ids{t.find(SP + "a"), 2, t.find(SP + "b")});
+}
+
+TEST_CASE("encode_parts adds bos once", "[tokenizer][spm]") {
+  using P = nibble::tok::Part;
+  auto t = make_spm();
+  const P hi[] = {{"hi", true}};
+  CHECK(t.encode_parts(hi, true) == Ids{1, t.find(SP + "hi")});
+  CHECK(t.encode_parts(hi, false) == Ids{t.find(SP + "hi")});
+  const P dbl[] = {{"<s>hi", true}};  // llama.cpp would emit two BOS (and warn); we keep one
+  CHECK(t.encode_parts(dbl, true) == Ids{1, t.find(SP + "hi")});
+  const P txt[] = {{"<s>hi", false}};  // plain text: not a BOS token
+  CHECK(t.encode_parts(txt, true).front() == 1);
+  CHECK(t.encode_parts(txt, true).size() > 2);
+  TinyTokOpts o;
+  o.spm = true;
+  o.add_bos = 0;
+  CHECK(make(o).encode_parts(hi, true) == Ids{make(o).find(SP + "hi")});
+  auto q = make();  // qwen2: no bos
+  const P h[] = {{"hello", true}};
+  CHECK(q.encode_parts(h, true) == q.encode("hello", true));
 }

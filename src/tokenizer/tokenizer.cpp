@@ -1,6 +1,7 @@
 #include "tokenizer/tokenizer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <queue>
 #include <set>
 #include <variant>
@@ -202,7 +203,10 @@ void Tokenizer::init_spm(const gguf::File& f) {
     if (!a || a->elem_type() != gguf::ValueType::F32) throw Error("tokenizer.ggml.scores is not a float array");
     if (a->size() != n)
       throw Error("tokenizer.ggml.scores length " + std::to_string(a->size()) + " != tokens length " + std::to_string(n));
-    for (size_t k = 0; k < n; ++k) scores_[k] = static_cast<float>(a->float_at(k));
+    for (size_t k = 0; k < n; ++k) {
+      scores_[k] = static_cast<float>(a->float_at(k));
+      if (!std::isfinite(scores_[k])) throw Error("tokenizer.ggml.scores[" + std::to_string(k) + "] is not finite");
+    }
   }
   for (size_t k = 0; k < n; ++k) {
     if (types_[k] != TokenType::Byte) continue;
@@ -341,52 +345,68 @@ void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out)
 }
 
 std::vector<int32_t> Tokenizer::encode(std::string_view text, bool parse_special) const {
+  const Part p{text, parse_special};
+  return encode_parts(std::span(&p, 1), false);
+}
+
+std::vector<int32_t> Tokenizer::encode_parts(std::span<const Part> parts, bool add_bos) const {
   struct Frag {
-    size_t off, len;
-    int32_t special;  // -1 = raw text
+    std::string text;  // raw text when special < 0
+    int32_t special;   // -1 = raw text
   };
-  std::vector<Frag> frags{{0, text.size(), -1}};
-  for (int32_t sid : specials_) {
-    if (!parse_special && types_[sid] != TokenType::UserDefined) continue;
-    const std::string& st = tokens_[sid];
-    std::vector<Frag> next;
-    for (const Frag& fr : frags) {
-      if (fr.special >= 0) {
-        next.push_back(fr);
-        continue;
+  std::vector<Frag> all;
+  for (const Part& part : parts) {
+    // Partition this part (llama.cpp tokenizer_st_partition): one pass per special token, longest first.
+    std::vector<Frag> frags{{std::string(part.text), -1}};
+    for (int32_t sid : specials_) {
+      if (!part.special && types_[sid] != TokenType::UserDefined) continue;
+      const std::string& st = tokens_[sid];
+      std::vector<Frag> next;
+      for (Frag& fr : frags) {
+        if (fr.special >= 0) {
+          next.push_back(std::move(fr));
+          continue;
+        }
+        size_t pos = 0;
+        for (;;) {
+          size_t m = fr.text.find(st, pos);
+          if (m == std::string::npos) break;
+          if (m > pos) next.push_back({fr.text.substr(pos, m - pos), -1});
+          next.push_back({"", sid});
+          pos = m + st.size();
+        }
+        if (pos < fr.text.size()) next.push_back({fr.text.substr(pos), -1});
       }
-      std::string_view sub = text.substr(fr.off, fr.len);
-      size_t pos = 0;
-      for (;;) {
-        size_t m = sub.find(st, pos);
-        if (m == std::string_view::npos) break;
-        if (m > pos) next.push_back({fr.off + pos, m - pos, -1});
-        next.push_back({0, 0, sid});
-        pos = m + st.size();
-      }
-      if (pos < sub.size()) next.push_back({fr.off + pos, sub.size() - pos, -1});
+      frags = std::move(next);
     }
-    frags = std::move(next);
+    // Raw text on either side of a part boundary is one fragment in llama.cpp's single string.
+    for (Frag& fr : frags) {
+      if (fr.special < 0 && !all.empty() && all.back().special < 0) all.back().text += fr.text;
+      else all.push_back(std::move(fr));
+    }
   }
   std::vector<int32_t> out;
   bool prev_special = true;  // llama-vocab.cpp:3586: the first fragment counts as following a special
   const SpmVocab sv{ids_, scores_, byte_ids_, unk_};
-  for (const Frag& fr : frags) {
+  for (const Frag& fr : all) {
     if (fr.special >= 0) {
       out.push_back(fr.special);
       prev_special = true;
     } else if (spm_) {
-      if (fr.len == 0) continue;  // llama.cpp never makes empty raw fragments
+      if (fr.text.empty()) continue;  // llama.cpp never makes empty raw fragments
       std::string s = add_space_prefix_ && prev_special ? " " : "";  // :3599-3601
-      s.append(text.substr(fr.off, fr.len));
+      s += fr.text;
       std::string esc;  // llama_escape_whitespace, :3536
       for (char c : s) esc += c == ' ' ? "\xE2\x96\x81" : std::string(1, c);
       spm_encode(sv, esc, out);
       prev_special = false;
     } else {
-      encode_segment(text.substr(fr.off, fr.len), out);
+      encode_segment(fr.text, out);
     }
   }
+  // llama.cpp prepends bos then only warns when the text also starts with one (llama-vocab.cpp:3617-3623
+  // SPM, :3716-3722 BPE); we keep a single bos instead.
+  if (add_bos && add_bos_ && bos_ >= 0 && (out.empty() || out[0] != bos_)) out.insert(out.begin(), bos_);
   return out;
 }
 

@@ -90,6 +90,18 @@ Gate gate_for(const std::string& model) {
   return {0.995, 0.90, false, false};
 }
 
+// Prompt file for `name`: the chat prompt differs per model family.
+void check_prompt_tokens(const tok::Tokenizer& t, const Golden& g, const std::string& name, const std::string& file = "") {
+  const std::string root = NIBBLE_SOURCE_DIR;
+  std::ifstream in(root + "/tests/e2e/prompts/" + (file.empty() ? name : file) + ".txt", std::ios::binary);
+  REQUIRE(in);
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const std::vector<int32_t> want(g.tokens.begin(), g.tokens.begin() + std::ptrdiff_t(g.n_prompt));
+  const tok::Part part{text, true};
+  INFO(name << " (" << file << ")");
+  REQUIRE(t.encode_parts(std::span(&part, 1), /*add_bos=*/true) == want);
+}
+
 void run_prompt(const std::string& model, const std::string& name) {
   const Gate gate = gate_for(model);
   const std::string root = NIBBLE_SOURCE_DIR;
@@ -105,14 +117,8 @@ void run_prompt(const std::string& model, const std::string& name) {
   const size_t total = g.tokens.size(), np = g.n_prompt;
   std::vector<float> out(g.n_vocab);
 
-  // 0. our tokenizer (parse_special=true, as the API uses) reproduces llama.cpp's prompt tokens
-  {
-    std::ifstream in(root + "/tests/e2e/prompts/" + name + ".txt", std::ios::binary);
-    REQUIRE(in);
-    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    const std::vector<int32_t> want(g.tokens.begin(), g.tokens.begin() + std::ptrdiff_t(np));
-    REQUIRE(e.tokenizer.encode(text, /*parse_special=*/true) == want);
-  }
+  // 0. our tokenizer (special parsing and automatic bos, as the API uses) reproduces llama.cpp's prompt tokens
+  check_prompt_tokens(e.tokenizer, g, name);
 
   // 1. incremental, one token at a time
   {
@@ -177,3 +183,27 @@ E2E_CASE("q8_0", "chat")
 E2E_CASE("q4_0", "capital")
 E2E_CASE("q4_0", "code")
 E2E_CASE("q4_0", "chat")
+
+// Prompt tokens only (no forward pass) for every model that has goldens.
+TEST_CASE("e2e prompt tokens match llama.cpp", "[e2e]") {
+  struct M { const char* gguf; const char* golden; const char* chat; };
+  const M models[] = {
+      {"qwen2.5-0.5b-instruct-fp16", "qwen2.5-0.5b-f16", "chat"},
+      {"qwen2.5-0.5b-instruct-q8_0", "qwen2.5-0.5b-q8_0", "chat"},
+      {"qwen2.5-0.5b-instruct-q4_0", "qwen2.5-0.5b-q4_0", "chat"},
+      {"llama-3.2-1b-instruct-f16", "llama32-1b-f16", "chat_llama3"},
+      {"tinyllama-1.1b-chat-f16", "tinyllama-1.1b-f16", "chat_zephyr"},
+  };
+  const std::string root = NIBBLE_SOURCE_DIR;
+  for (const M& m : models) {
+    const std::string gguf = root + "/models/" + m.gguf + ".gguf";
+    if (!std::filesystem::exists(gguf)) continue;
+    const auto t = tok::Tokenizer::from_gguf(gguf::File::open(gguf));
+    for (const char* p : {"capital", "code", "chat"}) {
+      const std::string bin = root + "/models/golden/" + m.golden + "/" + p + ".bin";
+      if (!std::filesystem::exists(bin)) continue;
+      INFO(m.golden << " " << p);
+      check_prompt_tokens(t, Golden::load(bin), p, std::string(p) == "chat" ? m.chat : p);
+    }
+  }
+}

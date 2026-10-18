@@ -455,3 +455,18 @@ TEST_CASE("api: append = false resets n_past on early returns", "[api]") {
   CHECK(s.generate(abc, {.max_tokens = 0}, keep_going) == StopReason::MaxTokens);
   CHECK(s.n_past() == 0);
 }
+
+TEST_CASE("api: bos is added to a fresh prompt only", "[api]") {
+  TinyModelOpts mo;
+  mo.tok.spm = true;
+  TmpModel f(tiny_model_gguf(1, nibble::DType::F32, false, 2, mo));
+  Model m = Model::load(f.path.string(), {.n_threads = 1});
+  Session s(m);
+  const PromptPart hi[] = {{"hi", true}};
+  s.generate(hi, {.max_tokens = 1, .temperature = 0}, keep_going);
+  CHECK(s.n_prompt_tokens() == 2);  // <s>, ▁hi
+  s.generate(hi, {.max_tokens = 1, .temperature = 0, .append = true}, keep_going);
+  CHECK(s.n_prompt_tokens() == 1);
+  const PromptPart none[] = {{"", true}};
+  CHECK_THROWS_WITH(Session(m).generate(none, {.temperature = 0}, keep_going), ContainsSubstring("empty prompt"));
+}

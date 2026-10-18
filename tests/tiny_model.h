@@ -1,6 +1,7 @@
 #pragma once
 // Tiny synthetic models for tests: tokenizer half, and tokenizer + qwen2 weights.
 #include <cstring>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -24,7 +25,8 @@ struct TinyTokOpts {
   // SentencePiece ("llama") vocab; see tiny_spm_vocab. Ignores merges/extra/chatml/pre; bos 1, eos 2, unk 0.
   bool spm = false;
   int add_space_prefix = -1;   // spm: 0/1 writes tokenizer.ggml.add_space_prefix; -1 absent (default true)
-  int bad_scores = 0;          // spm: 1 = one score too few, 2 = I32 instead of F32
+  int bad_scores = 0;          // spm: 1 = one score too few, 2 = I32 instead of F32, 3 = NaN at id 5, 4 = +inf at id 6
+  int byte_0xC3 = 0;           // spm: 1 = <0xC3> becomes the 1-char string "\xC3", 2 = removed (falls back to unk)
 };
 
 struct TinySpmTok { const char* text; int type; float score; };
@@ -47,7 +49,7 @@ inline std::vector<TinySpmTok> tiny_spm_vocab() {
            {SP "h", 1, -6}, {"hi", 1, -7}, {SP "hi", 1, -3},
            {SP "t", 1, -6}, {"he", 1, -4}, {"the", 1, -3}, {SP "the", 1, -2},
            {"re", 1, -5}, {SP "there", 1, -1},
-           {SP "a", 1, -20}, {SP "b", 1, -20}, {"ab", 1, -1}, {"bc", 1, -2}})
+           {SP "a", 1, -20}, {SP "b", 1, -20}, {"ab", 1, -1}, {"bc", 1, -2}, {"ca", 1, -1}})
     v.push_back(t);
 #undef SP
   return v;
@@ -67,10 +69,16 @@ inline void add_tiny_spm_kvs(GgufWriter& w, const TinyTokOpts& o) {
     types.push_back(t.type);
     scores.push_back(t.score);
   }
+  if (o.byte_0xC3) {  // id 3 + 0xC3
+    toks[3 + 0xC3] = o.byte_0xC3 == 1 ? "\xC3" : "[no-c3]";
+    types[3 + 0xC3] = 1;
+  }
   w.add_string("tokenizer.ggml.model", "llama");
   w.add_string_array("tokenizer.ggml.tokens", toks);
   w.add_i32_array("tokenizer.ggml.token_type", types);
   if (o.bad_scores == 1) scores.pop_back();
+  if (o.bad_scores == 3) scores[5] = std::numeric_limits<float>::quiet_NaN();
+  if (o.bad_scores == 4) scores[6] = std::numeric_limits<float>::infinity();
   if (o.bad_scores == 2) w.add_i32_array("tokenizer.ggml.scores", std::vector<int32_t>(toks.size(), 0));
   else w.add_f32_array("tokenizer.ggml.scores", scores);
   w.add_int("tokenizer.ggml.bos_token_id", GgufWriter::ValueType::U32, 1);

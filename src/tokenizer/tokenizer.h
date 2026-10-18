@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -12,12 +13,22 @@ namespace nibble::tok {
 
 enum class TokenType : int32_t { Normal = 1, Unknown = 2, Control = 3, UserDefined = 4, Unused = 5, Byte = 6 };
 
+// One piece of a prompt; only `special` parts match Control/Unknown token text (UserDefined always match).
+struct Part {
+  std::string_view text;
+  bool special;
+};
+
 // Byte-level BPE (gpt2 model; qwen2 or llama3 pre-tokenizer) or SentencePiece-style BPE (llama model).
 // Matches llama.cpp token IDs.
 class Tokenizer {
  public:
   static Tokenizer from_gguf(const gguf::File&);
   std::vector<int32_t> encode(std::string_view text, bool parse_special) const;
+  // Same tokens as encode() of the concatenated parts (llama.cpp tokenize_impl), except that a special token's
+  // text never spans two parts. Adjacent raw text is merged across parts before encoding. add_bos prepends
+  // bos() when the model has one and add_bos() is set, unless the output already starts with it.
+  std::vector<int32_t> encode_parts(std::span<const Part> parts, bool add_bos) const;
   std::string decode_token(int32_t id) const;  // raw bytes, may end mid-code-point; Control -> ""
   int32_t n_vocab() const { return static_cast<int32_t>(tokens_.size()); }
   int32_t eos() const { return eos_; }

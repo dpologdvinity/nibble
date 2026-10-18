@@ -183,17 +183,19 @@ StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams&
 
 StopReason Session::generate(std::span<const PromptPart> parts, const GenParams& gp,
                              const std::function<bool(std::string_view)>& on_token) {
-  std::vector<int32_t> toks;
+  std::vector<tok::Part> tp;
+  bool any_text = false;  // an all-empty prompt stays empty (no lone bos) so "empty prompt" still throws
   for (const PromptPart& p : parts) {
-    std::vector<int32_t> t = impl_->m.tokenizer.encode(p.text, p.special);
-    toks.insert(toks.end(), t.begin(), t.end());
+    tp.push_back({p.text, p.special});
+    any_text |= !p.text.empty();
   }
-  return impl_->run(toks, gp, on_token);
+  return impl_->run(impl_->m.tokenizer.encode_parts(tp, !gp.append && any_text), gp, on_token);
 }
 
 StopReason Session::generate(std::string_view prompt, const GenParams& gp,
                              const std::function<bool(std::string_view)>& on_token) {
-  std::vector<int32_t> toks = impl_->m.tokenizer.encode(prompt, true);
+  const tok::Part part{prompt, true};
+  std::vector<int32_t> toks = impl_->m.tokenizer.encode_parts(std::span(&part, 1), !gp.append && !prompt.empty());
   if (!gp.append) {  // M0-M3 contract: a fresh prompt that cannot be used throws
     if (toks.empty()) throw Error("empty prompt");
     if (static_cast<int64_t>(toks.size()) >= impl_->m.n_ctx)
