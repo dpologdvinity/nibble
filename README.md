@@ -57,7 +57,9 @@ End-to-end tests compare against llama.cpp. They need the model, a pinned
 llama.cpp build, and golden files:
 
 ```sh
-tools/build_llama_cpp.sh && tools/make_golden.sh qwen2.5-0.5b-f16 && ctest --test-dir build -L e2e
+tools/build_llama_cpp.sh && tools/make_quants.sh \
+  && for m in f16 q8_0 q4_0; do tools/make_golden.sh qwen2.5-0.5b-$m; done \
+  && ctest --test-dir build -L e2e
 ```
 
 ## Correctness

@@ -38,7 +38,7 @@ target_compile_definitions(nibble_tests PRIVATE NIBBLE_SOURCE_DIR="${CMAKE_SOURC
 target_link_libraries(nibble_tests PRIVATE nibble Catch2::Catch2WithMain)
 
 catch_discover_tests(nibble_tests TEST_SPEC "~[e2e]")
-catch_discover_tests(nibble_tests TEST_SPEC "[e2e]" EXTRA_ARGS --allow-running-no-tests TEST_SUFFIX " [e2e]" PROPERTIES LABELS e2e)
+catch_discover_tests(nibble_tests TEST_SPEC "[e2e]" EXTRA_ARGS --allow-running-no-tests TEST_SUFFIX " [e2e]" PROPERTIES LABELS e2e TIMEOUT 7200)
 
 # Separate binary: replaces global operator new/delete with a counting hook.
 add_executable(nibble_alloc_tests tests/alloc_tests.cpp)

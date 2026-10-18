@@ -64,6 +64,8 @@ static int cmd_tokenize(char** a) {
   return 0;
 }
 
+static bool g_kv_f32 = false;
+
 static int cmd_logits(char** a) {
   int n_gen = std::atoi(a[2]);
   if (n_gen < 0) die("bad n_gen");
@@ -77,6 +79,7 @@ static int cmd_logits(char** a) {
   llama_context_params cp = llama_context_default_params();
   cp.n_ctx = uint32_t(n_prompt + n_gen + 8);
   cp.n_batch = cp.n_ctx;
+  if (g_kv_f32) cp.type_k = cp.type_v = GGML_TYPE_F32;
   cp.n_threads = cp.n_threads_batch = int(std::max(1u, std::thread::hardware_concurrency()));
   llama_context* ctx = llama_init_from_model(m, cp);
   if (!ctx) die("cannot create context");
@@ -145,6 +148,8 @@ static int cmd_logits(char** a) {
 
 int main(int argc, char** argv) {
   if (argc == 5 && std::string(argv[1]) == "tokenize") return cmd_tokenize(argv + 2);
+  if (argc == 7 && std::string(argv[1]) == "logits" && std::string(argv[6]) == "--kv-f32") g_kv_f32 = true, argc = 6;
+  if (argc == 2 && std::string(argv[1]) == "sysinfo") return std::puts(llama_print_system_info()), 0;
   if (argc == 6 && std::string(argv[1]) == "logits") return cmd_logits(argv + 2);
-  die("usage: llama_ref tokenize <model> <corpus> <out> | logits <model> <prompt> <n_gen> <out>");
+  die("usage: llama_ref tokenize <model> <corpus> <out> | logits <model> <prompt> <n_gen> <out> [--kv-f32] | sysinfo");
 }

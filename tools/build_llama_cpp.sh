@@ -10,5 +10,11 @@ else
   rm -rf "$SRC"
   git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp.git "$SRC"
 fi
+if [ "${1:-}" = "--generic" ]; then
+  # Same pinned source, generic (non-SIMD) ggml CPU path; used for quantized goldens.
+  cmake -S "$ROOT/tools/llama_ref" -B "$ROOT/third_party/build-generic" -DCMAKE_BUILD_TYPE=Release -DNIBBLE_GENERIC=ON
+  cmake --build "$ROOT/third_party/build-generic" -j"$(nproc)" --target llama_ref
+  exit 0
+fi
 cmake -S "$ROOT/tools/llama_ref" -B "$ROOT/third_party/build" -DCMAKE_BUILD_TYPE=Release
 cmake --build "$ROOT/third_party/build" -j"$(nproc)" --target llama_ref llama-quantize llama-bench
