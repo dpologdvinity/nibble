@@ -9,6 +9,7 @@ SRC="$ROOT/models/qwen2.5-0.5b-instruct-fp16.gguf"
 for T in Q8_0 Q4_0; do
   OUT="$ROOT/models/qwen2.5-0.5b-instruct-$(echo "$T" | tr 'A-Z' 'a-z').gguf"
   if [ -f "$OUT" ]; then echo "skip $OUT"; continue; fi
-  "$Q" --pure "$SRC" "$OUT" "$T"
+  "$Q" --pure "$SRC" "$OUT.tmp" "$T"
+  mv "$OUT.tmp" "$OUT"
 done
 ls -l "$ROOT"/models/*.gguf
