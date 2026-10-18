@@ -139,6 +139,9 @@ nibble_cli_test(cli_chat_two_turns 0 STDIN ${NIBBLE_CLI_DIR}/chat_two_turns.txt
 nibble_cli_test(cli_chat_blank_lines_skipped 0 STDIN ${NIBBLE_CLI_DIR}/chat_blank_lines.txt
   ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok"
   FORBID_REGEX "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")  # one message -> exactly one reply
+nibble_cli_test(cli_chat_crlf_blank_skipped 0 STDIN ${NIBBLE_CLI_DIR}/chat_crlf.txt
+  ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok"
+  FORBID_REGEX "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")  # CRLF blank line is blank: one reply
 nibble_cli_test(cli_chat_no_trailing_newline 0 STDIN ${NIBBLE_CLI_DIR}/chat_no_newline.txt
   ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok")
 # The default system prompt alone takes ~90 tokens: a 100-token context fills during the first reply.

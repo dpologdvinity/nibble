@@ -1,3 +1,4 @@
 tests/tokenizer/corpus.txt -text
 tests/e2e/prompts/*.txt -text
 src/tokenizer/unicode_tables.inc linguist-generated
+tests/cli/chat_crlf.txt -text

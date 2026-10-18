@@ -63,6 +63,7 @@ int cmd_chat(int argc, char** argv) {
       std::fflush(stderr);
     }
     if (!std::getline(std::cin, line)) break;  // EOF; a last line without '\n' is still returned
+    if (!line.empty() && line.back() == '\r') line.pop_back();  // CRLF input
     if (line.empty()) continue;                // a blank line is not a user message: skip it
 
     const auto start = clock::now();
