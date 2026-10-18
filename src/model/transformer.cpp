@@ -133,7 +133,8 @@ void Transformer::forward(std::span<const int32_t> tokens, int64_t pos0, float* 
 void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
   const int64_t n = static_cast<int64_t>(tokens.size()), hd = c_.head_dim, E = c_.n_embd;
   const int64_t kvw = c_.n_kv_heads * hd;
-  const RopeParams rp{c_.rope_base, c_.rope_neox, nullptr};
+  const RopeParams rp{c_.rope_base, c_.rope_neox,
+                       w_.rope_freqs ? static_cast<const float*>(w_.rope_freqs->data) : nullptr};
   const int64_t Q = c_.n_heads * hd;
   NIBBLE_DCHECK(n > 0 && n <= max_batch_ && pos0 >= 0 && pos0 + n <= n_ctx_,
                 "run_chunk: n=%lld pos0=%lld vs max_batch=%lld n_ctx=%lld", static_cast<long long>(n),

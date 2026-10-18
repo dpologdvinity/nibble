@@ -46,6 +46,7 @@ Weights Weights::bind(const gguf::File& f, const LlamaConfig& c, const Backend& 
   w.token_embd = get(f, be, "token_embd.weight", {E, c.n_vocab}, false);
   w.output_norm = get(f, be, "output_norm.weight", {E}, true);
   w.output = find(f, "output.weight") ? get(f, be, "output.weight", {E, c.n_vocab}, false) : w.token_embd;
+  if (find(f, "rope_freqs.weight")) w.rope_freqs = get(f, be, "rope_freqs.weight", {c.head_dim / 2}, true);
   for (int64_t i = 0; i < c.n_layers; ++i) {
     const std::string p = "blk." + std::to_string(i) + ".";
     LayerWeights l;

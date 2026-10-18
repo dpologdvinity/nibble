@@ -52,11 +52,14 @@ inline std::vector<double> rms(const std::vector<double>& x, const std::vector<d
 }
 
 inline std::vector<float> naive_logits(const nibble::gguf::File& f, std::span<const int32_t> tokens) {
-  const size_t L = static_cast<size_t>(f.get_int("qwen2.block_count")), E = static_cast<size_t>(f.get_int("qwen2.embedding_length")),
-               H = static_cast<size_t>(f.get_int("qwen2.attention.head_count")),
-               KV = static_cast<size_t>(f.get_int("qwen2.attention.head_count_kv")), HD = E / H,
-               FF = static_cast<size_t>(f.get_int("qwen2.feed_forward_length"));
-  const double eps = f.get_float("qwen2.attention.layer_norm_rms_epsilon"), base = f.get_float("qwen2.rope.freq_base");
+  const std::string arch = f.get_string("general.architecture"), a = arch + ".";
+  const bool llama = arch == "llama";  // llama: normal-mode rope, no qkv bias
+  const size_t L = static_cast<size_t>(f.get_int(a + "block_count")), E = static_cast<size_t>(f.get_int(a + "embedding_length")),
+               H = static_cast<size_t>(f.get_int(a + "attention.head_count")),
+               KV = static_cast<size_t>(f.get_int(a + "attention.head_count_kv")), HD = E / H,
+               FF = static_cast<size_t>(f.get_int(a + "feed_forward_length"));
+  const double eps = f.get_float(a + "attention.layer_norm_rms_epsilon"), base = f.get_float(a + "rope.freq_base");
+  const auto ff = f.find_tensor("rope_freqs.weight") ? load(f, "rope_freqs.weight") : std::vector<double>();
   auto emb = load(f, "token_embd.weight");
   const size_t V = emb.size() / E;
   const size_t T = tokens.size();
@@ -69,19 +72,26 @@ inline std::vector<float> naive_logits(const nibble::gguf::File& f, std::span<co
     for (size_t h = 0; h < heads; ++h)
       for (size_t i = 0; i < HD / 2; ++i) {
         double th = static_cast<double>(pos) * std::pow(base, -2.0 * static_cast<double>(i) / static_cast<double>(HD));
+        if (!ff.empty()) th /= ff[i];
         double c = std::cos(th), s = std::sin(th);
-        double a = v[h * HD + i], b = v[h * HD + i + HD / 2];
-        v[h * HD + i] = a * c - b * s;
-        v[h * HD + i + HD / 2] = a * s + b * c;
+        const size_t ia = llama ? h * HD + 2 * i : h * HD + i, ib = llama ? ia + 1 : ia + HD / 2;
+        double x0 = v[ia], x1 = v[ib];
+        v[ia] = x0 * c - x1 * s;
+        v[ib] = x0 * s + x1 * c;
       }
   };
 
   for (size_t l = 0; l < L; ++l) {
     const std::string p = "blk." + std::to_string(l) + ".";
     auto an = load(f, p + "attn_norm.weight"), wq = load(f, p + "attn_q.weight"), wk = load(f, p + "attn_k.weight"),
-         wv = load(f, p + "attn_v.weight"), wo = load(f, p + "attn_output.weight"), bq = load(f, p + "attn_q.bias"),
-         bk = load(f, p + "attn_k.bias"), bv = load(f, p + "attn_v.bias"), fn = load(f, p + "ffn_norm.weight"),
+         wv = load(f, p + "attn_v.weight"), wo = load(f, p + "attn_output.weight"), fn = load(f, p + "ffn_norm.weight"),
          wg = load(f, p + "ffn_gate.weight"), wu = load(f, p + "ffn_up.weight"), wd = load(f, p + "ffn_down.weight");
+    std::vector<double> bq(H * HD, 0.0), bk(KV * HD, 0.0), bv(KV * HD, 0.0);
+    if (!llama) {
+      bq = load(f, p + "attn_q.bias");
+      bk = load(f, p + "attn_k.bias");
+      bv = load(f, p + "attn_v.bias");
+    }
     std::vector<std::vector<double>> q(T), k(T), v(T);
     for (size_t t = 0; t < T; ++t) {
       auto h = rms(x[t], an, eps);

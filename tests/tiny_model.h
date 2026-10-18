@@ -69,9 +69,12 @@ struct TinyModelOpts {
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
   TinyTokOpts tok;              // tokenizer variant
   uint32_t context_length = 64; // written as <arch>.context_length
+  bool rope_freqs = false;      // add rope_freqs.weight: F32 {HD/2}, values in [1, 8]
+  int bad_rope_freqs = 0;       // with rope_freqs: 1 = wrong ne ({HD/2 + 1}), 2 = F16 instead of F32
+  int64_t rope_dim = 0, key_length = 0;  // if > 0, written as <arch>.rope.dimension_count / attention.key_length
 };
 
-// qwen2: 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by default).
+// qwen2 (or llama, no biases): 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by default).
 inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype = nibble::DType::F32,
                                             bool zero_output_norm = false, int32_t eos_id = 259,
                                             const TinyModelOpts& mo = {}) {
@@ -90,6 +93,8 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   w.add_int(a + "context_length", GgufWriter::ValueType::U32, mo.context_length);
   w.add_f32(a + "attention.layer_norm_rms_epsilon", 1e-6f);
   w.add_f32(a + "rope.freq_base", 10000.0f);
+  if (mo.rope_dim > 0) w.add_int(a + "rope.dimension_count", GgufWriter::ValueType::U32, mo.rope_dim);
+  if (mo.key_length > 0) w.add_int(a + "attention.key_length", GgufWriter::ValueType::U32, mo.key_length);
   add_tiny_tokenizer_kvs(w, mo.tok, eos_id);
 
   std::mt19937 g(seed);
@@ -139,6 +144,15 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
     mat("output.weight", E, V);
     g = saved;
   }
+  if (mo.rope_freqs) {  // own RNG stream, so the other tensors are unchanged by the option
+    const std::mt19937 saved = g;
+    g = std::mt19937(seed ^ 0x5A5A5A5Au);
+    const bool f16 = mo.bad_rope_freqs == 2;
+    const int64_t n = mo.bad_rope_freqs == 1 ? HD / 2 + 1 : HD / 2;
+    w.add_tensor("rope_freqs.weight", f16 ? DType::F16 : DType::F32, {n},
+                 bytes(f16 ? DType::F16 : DType::F32, rnd(static_cast<size_t>(n), 1.f, 8.f), n));
+    g = saved;
+  }
   for (int64_t i = 0; i < L; ++i) {
     const std::string p = "blk." + std::to_string(i) + ".";
     vec(p + "attn_norm.weight", E, 0.9f, 1.1f);
@@ -146,9 +160,9 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
     mat(p + "attn_k.weight", E, KV * HD);
     mat(p + "attn_v.weight", E, KV * HD);
     mat(p + "attn_output.weight", H * HD, E);
-    vec(p + "attn_q.bias", H * HD, -0.5f, 0.5f);
-    vec(p + "attn_k.bias", KV * HD, -0.5f, 0.5f);
-    vec(p + "attn_v.bias", KV * HD, -0.5f, 0.5f);
+    if (mo.arch == "qwen2") vec(p + "attn_q.bias", H * HD, -0.5f, 0.5f);
+    if (mo.arch == "qwen2") vec(p + "attn_k.bias", KV * HD, -0.5f, 0.5f);
+    if (mo.arch == "qwen2") vec(p + "attn_v.bias", KV * HD, -0.5f, 0.5f);
     vec(p + "ffn_norm.weight", E, 0.9f, 1.1f);
     mat(p + "ffn_gate.weight", E, FF);
     mat(p + "ffn_up.weight", E, FF);

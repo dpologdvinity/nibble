@@ -15,6 +15,7 @@ struct LayerWeights {
 // Tensors point into the mapped gguf::File, which must outlive the Weights.
 struct Weights {
   Tensor token_embd, output_norm, output;
+  std::optional<Tensor> rope_freqs;  // F32 [head_dim / 2] frequency factors (llama 3.x)
   std::vector<LayerWeights> layers;
   static Weights bind(const gguf::File&, const LlamaConfig&, const Backend&);
 };

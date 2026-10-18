@@ -82,6 +82,58 @@ TEST_CASE("model matches naive reference", "[model]") {
   }
 }
 
+TEST_CASE("llama arch matches naive", "[model][llama]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  for (DType ty : {DType::F32, DType::F16})
+    for (bool rf : {false, true}) {
+      TinyModelOpts o;
+      o.arch = "llama";
+      o.rope_freqs = rf;
+      Loaded m(tiny_model_gguf(7, ty, false, 259, o), be);
+      CHECK(m.cfg.arch == "llama");
+      CHECK(!m.cfg.rope_neox);
+      CHECK(!m.cfg.qkv_bias);
+      CHECK(m.w.rope_freqs.has_value() == rf);
+      CHECK(!m.w.layers[0].bq);
+      CHECK(maxdiff(run(m, be, kToks, 512, false), naive::naive_logits(m.file, kToks)) <= 1e-4);
+    }
+}
+
+TEST_CASE("llama chunked prefill equals incremental", "[model][llama]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  TinyModelOpts o;
+  o.arch = "llama";
+  o.rope_freqs = true;
+  Loaded m(tiny_model_gguf(3, DType::F32, false, 259, o), be);
+  auto batch = run(m, be, kToks, 512, false);
+  CHECK(bitwise_equal(run(m, be, kToks, 512, true), batch));
+  CHECK(bitwise_equal(run(m, be, kToks, 2, false), batch));
+}
+
+TEST_CASE("llama bad rope_freqs and head_dim throw", "[model][llama]") {
+  ThreadPool pool(2);
+  cpu::CpuBackend be(pool);
+  auto load = [&](TinyModelOpts o) { Loaded m(tiny_model_gguf(1, DType::F32, false, 259, o), be); };
+  TinyModelOpts o;
+  o.arch = "llama";
+  o.rope_freqs = true;
+  for (int bad : {1, 2}) {
+    o.bad_rope_freqs = bad;
+    CHECK_THROWS_WITH(load(o), ContainsSubstring("rope_freqs.weight"));
+  }
+  o = {};
+  o.arch = "llama";
+  o.rope_dim = 8;  // head_dim is 4
+  CHECK_THROWS_WITH(load(o), ContainsSubstring("llama.rope.dimension_count") && ContainsSubstring("8") &&
+                                 ContainsSubstring("4"));
+  o.rope_dim = 4;
+  CHECK_NOTHROW(load(o));
+  o.key_length = 6;
+  CHECK_THROWS_WITH(load(o), ContainsSubstring("llama.attention.key_length"));
+}
+
 TEST_CASE("quantized model matches naive on dequantized weights", "[model][quant]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
