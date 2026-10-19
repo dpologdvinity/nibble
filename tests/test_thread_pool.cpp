@@ -140,6 +140,21 @@ TEST_CASE("default thread count: hybrid capacity picks the fastest CPUs") {
   REQUIRE(nibble::default_thread_count(fs.root, 12) == 4);
 }
 
+TEST_CASE("default thread count: three tiers count every CPU above the midpoint") {
+  FakeSysfs fs({1024, 800, 800, 800, 300, 300, 300, 300});  // 1 prime + 3 big + 4 little
+  REQUIRE(nibble::default_thread_count(fs.root, 8) == 4);
+}
+
+TEST_CASE("default thread count: ITMT-favoured cores do not shrink the big tier") {
+  FakeSysfs fs({1024, 1024, 1010, 1010, 400, 400, 400, 400, 400, 400, 400, 400});
+  REQUIRE(nibble::default_thread_count(fs.root, 12) == 4);
+}
+
+TEST_CASE("default thread count: never more than hardware_concurrency") {
+  FakeSysfs fs({1024, 1024, 1024, 1024, 512, 512, 512, 512});  // offline cpuN dirs beyond hw
+  REQUIRE(nibble::default_thread_count(fs.root, 2) == 2);
+}
+
 TEST_CASE("default thread count: uniform or missing capacity falls back to the fraction") {
   FakeSysfs uniform(std::vector<int>(12, 1024));  // what WSL2 reports on a hybrid host
   REQUIRE(nibble::default_thread_count(uniform.root, 12) == 8);

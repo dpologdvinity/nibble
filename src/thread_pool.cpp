@@ -126,7 +126,10 @@ int default_thread_count(const std::filesystem::path& cpu_dir, unsigned hw) {
   if (ec || caps.empty()) return fallback;
   const auto [lo, hi] = std::minmax_element(caps.begin(), caps.end());
   if (*lo == *hi) return fallback;
-  return static_cast<int>(std::count(caps.begin(), caps.end(), *hi));
+  // Above the midpoint rather than at the max: prime cores and ITMT-favoured cores sit a little above the big tier.
+  const long mid = (*lo + *hi) / 2;
+  const auto big = std::count_if(caps.begin(), caps.end(), [mid](long c) { return c > mid; });
+  return std::clamp(static_cast<int>(big), 1, std::max(1, static_cast<int>(hw)));  // offline cpuN dirs count too
 }
 
 }  // namespace nibble

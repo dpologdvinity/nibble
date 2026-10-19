@@ -46,7 +46,8 @@ class ThreadPool {
 
 // Thread count for n_threads = 0. cpu_dir is /sys/devices/system/cpu (injectable for tests); hw is
 // std::thread::hardware_concurrency(). If every cpuN/cpu_capacity is readable and they differ (hybrid
-// CPU), returns the number of CPUs at the highest capacity. Otherwise (missing, or uniform as WSL2
+// CPU), returns the number of CPUs above the midpoint of the lowest and highest capacity, clamped
+// to [1, hw]. Otherwise (missing, or uniform as WSL2
 // reports even on hybrid hosts) returns 2/3 of hw, at least 1: the M6 sweep on the i7-1265U picked
 // 8 of 12 for tg128 (README, Performance).
 int default_thread_count(const std::filesystem::path& cpu_dir, unsigned hw);
