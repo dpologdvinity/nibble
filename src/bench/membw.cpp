@@ -11,7 +11,11 @@
 namespace nibble::bench {
 
 size_t membw_default_bytes() {
+#ifdef _SC_LEVEL3_CACHE_SIZE
   const long l3 = sysconf(_SC_LEVEL3_CACHE_SIZE);
+#else
+  const long l3 = 0;  // glibc-only name; 0 keeps the 1 GiB floor
+#endif
   return std::max<size_t>(size_t{1} << 30, l3 > 0 ? 4 * static_cast<size_t>(l3) : 0);
 }
 

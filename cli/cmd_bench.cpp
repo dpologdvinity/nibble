@@ -32,7 +32,7 @@ namespace {
 
 void usage() {
   std::fputs(
-      "usage: nibble bench -m <model.gguf> [-t <list, e.g. 1,2,4,8>] [-p <prompt tokens=512>] "
+      "usage: nibble bench -m <model.gguf> [-t <list=1, e.g. 1,2,4,8>] [-p <prompt tokens=512>] "
       "[-n <gen tokens=128>] [-r <reps=5>] [--mem] [--out <file.jsonl>]\n",
       stderr);
 }
