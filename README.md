@@ -219,7 +219,7 @@ Paired ABBA blocks (llama.cpp ÷ nibble; tok/s are medians of the per-block mean
 | TinyLlama-1.1B F16 | pp512 | 1 | 2 | 1.02× | 1.01–1.04× | 33.6 | 34.4 |
 | TinyLlama-1.1B F16 | pp512 | 8 | 2 | 0.89× | 0.79–0.99× | 65.5 | 57.3 |
 
-Thread sweep, Qwen2.5-0.5B Q4_0, tok/s: single session (2026-10-19 11:57–13:00 UTC), used only to choose the default thread count:
+Thread sweep, Qwen2.5-0.5B Q4_0, tok/s: single session (2026-10-19 11:57–13:00 UTC, nibble 2ca56ef), used only to choose the default thread count:
 
 | t | nibble tg128 | llama.cpp tg128 | nibble pp512 | llama.cpp pp512 |
 |---|---|---|---|---|
