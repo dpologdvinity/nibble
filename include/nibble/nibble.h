@@ -16,7 +16,8 @@ namespace nibble {
 // n_ctx above the model's context_length.
 struct ModelParams {
   int64_t n_ctx = 0;   // 0 = auto: min(4096, model context length)
-  int n_threads = 0;   // 0 = auto: the fastest CPUs if hybrid, else 2/3 of hardware_concurrency
+  int n_threads = 0;   // 0 = auto: the fastest CPUs if hybrid, else 2/3 of hardware_concurrency.
+                       // The hybrid count is of logical CPUs, so SMT siblings are included.
 };
 
 struct GenParams {

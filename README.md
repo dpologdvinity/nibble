@@ -44,6 +44,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 
 Requires CMake ≥ 3.25 and g++ 13 or clang 18. Catch2 is fetched at configure time.
 
+The SIMD kernels are chosen at compile time: they need AVX2, FMA and F16C, and the
+VNNI dot products also need AVX-VNNI. `NIBBLE_NATIVE` defaults to ON
+(`-march=native`), so the binary may not run on an older CPU than the build host.
+`-DNIBBLE_NATIVE=OFF` builds a portable binary that runs only the scalar kernels and
+is much slower. `-DNIBBLE_SIMD=OFF` forces the scalar kernels even on a native
+build. `nibble info <model.gguf>` prints the active set, e.g.
+`kernels: avx2+fma+f16c+avxvnni` or `kernels: scalar`.
+
 ## Getting a model
 
 ```sh
