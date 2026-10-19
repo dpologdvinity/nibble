@@ -64,7 +64,7 @@ build/nibble chat -m models/qwen2.5-0.5b-instruct-q4_0.gguf
 | `--temp <f>` | sampling temperature, >= 0; 0 is greedy (default 0.8) |
 | `--top-k <N>` | top-k cutoff; 0 disables (default 40) |
 | `--top-p <f>` | nucleus cutoff in (0, 1] (default 0.95) |
-| `--seed <u64>` | sampler seed (default: random); each `chat` turn restarts the RNG from it, so turns reuse one stream: reproducible but correlated |
+| `--seed <u64>` | sampler seed (default: random); each reply draws its own stream, derived from the seed and the reply's index, so a seeded `chat` is reproducible and its turns are not correlated |
 
 Sampling order is top-k, then temperature-scaled softmax, then top-p. llama.cpp's
 default chain is top-k, top-p, min-p (0.05), temperature, so the same flag values

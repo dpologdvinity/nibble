@@ -27,9 +27,11 @@ struct GenParams {
   float temperature = 0.8f;  // 0 = greedy (argmax, lowest id on ties)
   int top_k = 40;            // <= 0 or >= n_vocab: disabled
   float top_p = 0.95f;       // >= 1: disabled
-  // nullopt = random (std::random_device). Each generate/send call restarts the RNG
-  // from seed, so a seeded multi-turn chat reuses the same stream every turn:
-  // reproducible, but the turns are correlated.
+  // nullopt = random (std::random_device). With a seed, call number i on a Session
+  // (counting every generate call from 0, including ones that throw) samples from
+  // splitmix64(seed ^ i). So a fresh Session given the same seed and the same call
+  // sequence reproduces its output, while successive calls, such as the turns of a
+  // seeded Chat, draw different streams.
   std::optional<uint64_t> seed = std::nullopt;
   bool append = false;  // continue after the previous call's context instead of resetting
 };

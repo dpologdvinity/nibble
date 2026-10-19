@@ -107,6 +107,9 @@ struct Session::Impl {
   std::vector<float> logits;  // preallocated; forward path must not allocate. Valid when n_past > 0.
   int64_t n_prompt = 0, n_gen = 0;
   int64_t n_past = 0;  // tokens in the KV cache
+  // generate calls made on this Session, counted on entry, so also those that
+  // throw (even before validation). Seeds the per-call RNG; Chat's desync guard.
+  uint64_t n_calls = 0;
 
   explicit Impl(Model& model)
       : m(model.impl_ ? *model.impl_ : throw Error("use of moved-from Model")),
@@ -136,7 +139,11 @@ StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams&
   if (n_new == 0 && start == 0) throw Error("empty prompt");
   // Built before any state changes, so invalid params throw with the cache intact.
   // Allocates its n_vocab buffers here, outside the per-token loop.
-  uint64_t seed = gp.seed.value_or(0);
+  uint64_t seed = 0;
+  if (gp.seed) {
+    uint64_t x = *gp.seed ^ (n_calls - 1);  // this call's index
+    seed = splitmix64(x);
+  }
   if (!gp.seed && gp.temperature > 0.0f) {  // the seed only matters when sampling
     try {
       std::random_device rd;
@@ -187,6 +194,7 @@ StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams&
 
 StopReason Session::generate(std::span<const PromptPart> parts, const GenParams& gp,
                              const std::function<bool(std::string_view)>& on_token) {
+  ++impl_->n_calls;
   std::vector<tok::Part> tp;
   bool any_text = false;  // an all-empty prompt stays empty (no lone bos) so "empty prompt" still throws
   for (const PromptPart& p : parts) {
@@ -198,6 +206,7 @@ StopReason Session::generate(std::span<const PromptPart> parts, const GenParams&
 
 StopReason Session::generate(std::string_view prompt, const GenParams& gp,
                              const std::function<bool(std::string_view)>& on_token) {
+  ++impl_->n_calls;
   const tok::Part part{prompt, true};
   std::vector<int32_t> toks = impl_->m.tokenizer.encode_parts(std::span(&part, 1), !gp.append && !prompt.empty());
   if (!gp.append) {  // M0-M3 contract: a fresh prompt that cannot be used throws

@@ -162,11 +162,21 @@ TEST_CASE("api: seeded sampling is reproducible", "[api]") {
   Session s(m);
   const PromptPart p[] = {{kPrompt, true}};
   const GenParams gp{.max_tokens = 24, .temperature = 5.0f, .top_k = 0, .top_p = 1.0f, .seed = 42};
+  // Each generate call derives its own stream (splitmix64(seed ^ call_index)): the
+  // same seed on the next call gives different text, and a fresh Session replays
+  // the same sequence.
   const std::string a = run_text(s, p, gp);
-  CHECK(a == run_text(s, p, gp));
+  const std::string a2 = run_text(s, p, gp);
+  CHECK(a != a2);
+  {
+    Session fresh(m);
+    CHECK(a == run_text(fresh, p, gp));
+    CHECK(a2 == run_text(fresh, p, gp));
+  }
+  Session s43(m);
   GenParams other = gp;
   other.seed = 43;
-  CHECK(a != run_text(s, p, other));
+  CHECK(a != run_text(s43, p, other));
   // A random seed runs (output not checked).
   GenParams rnd = gp;
   rnd.seed.reset();
