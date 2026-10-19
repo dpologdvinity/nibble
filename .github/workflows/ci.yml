@@ -10,7 +10,8 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
       - run: cmake --build build -j
       - run: ctest --test-dir build -LE e2e --output-on-failure
-  # Runner CPUs have AVX2/FMA/F16C so this exercises the SIMD kernels. They usually lack
+  # Runner CPUs have AVX2/FMA/F16C, so the NATIVE=ON jobs (native, clang, sanitize) exercise the
+  # SIMD kernels; release and fuzz stay NATIVE=OFF (portable, scalar). Runners usually lack
   # AVX-VNNI: the VNNI path is only tested locally.
   native:
     runs-on: ubuntu-24.04
@@ -23,14 +24,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - run: CXX=clang++ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
+      - run: CXX=clang++ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
       - run: cmake --build build -j
       - run: ctest --test-dir build -LE e2e --output-on-failure
   sanitize:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=OFF -DNIBBLE_SANITIZE=address,undefined
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=address,undefined
       - run: cmake --build build -j
       - run: ctest --test-dir build -LE e2e --output-on-failure
   fuzz:
