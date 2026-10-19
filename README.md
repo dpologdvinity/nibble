@@ -75,8 +75,9 @@ values print usage and exit 2; errors such as a missing model exit 1.
 
 `nibble chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N]` plus the
 sampling flags reads one user message per stdin line and streams each reply to
-stdout (`-n` is per reply, default 512). Blank lines are skipped. It prompts with `> ` on stderr only when stdin is a terminal,
-stops at EOF, and on a full context prints `[context full]` and exits 0.
+stdout (`-n` is per reply, default 512). Blank lines are skipped. It prompts with
+`> ` on stderr only when stdin is a terminal, stops at EOF, and on a full context
+prints `[context full]` and exits 0.
 
 ## Tests
 
@@ -110,7 +111,8 @@ the prefill last row, and top-1 agreement on >= 90% of positions per prompt
 (near-ties count as agreement). Greedy decoding is reported but not asserted.
 Activation requantization amplifies rounding-level differences: nibble, generic
 llama.cpp and an fp64 oracle with Q8_0 requantization disagree pairwise at about
-0.9966 cosine, so a tighter gate was not attained by any of the three implementations compared. Minimum cosine (capital / code / chat):
+0.9966 cosine, so a tighter gate was not attained by any of the three
+implementations compared. Minimum cosine (capital / code / chat):
 
 - Q8_0: 0.99941 / 0.99854 / 0.99616
 - Q4_0: 0.99888 / 0.99858 / 0.99658

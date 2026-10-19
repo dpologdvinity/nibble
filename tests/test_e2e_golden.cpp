@@ -109,9 +109,13 @@ void run_prompt(const std::string& model, const std::string& name) {
   std::string golden = "qwen2.5-0.5b-" + model;
   std::string chat = "chat";
   if (model == "llama32-f16") {
-    gguf = "llama-3.2-1b-instruct-f16", golden = "llama32-1b-f16", chat = "chat_llama3";
+    gguf = "llama-3.2-1b-instruct-f16";
+    golden = "llama32-1b-f16";
+    chat = "chat_llama3";
   } else if (model == "tinyllama-f16") {
-    gguf = "tinyllama-1.1b-chat-f16", golden = "tinyllama-1.1b-f16", chat = "chat_zephyr";
+    gguf = "tinyllama-1.1b-chat-f16";
+    golden = "tinyllama-1.1b-f16";
+    chat = "chat_zephyr";
   }
   const std::string model_path = root + "/models/" + gguf + ".gguf";
   const std::string golden_path = root + "/models/golden/" + golden + "/" + name + ".bin";
