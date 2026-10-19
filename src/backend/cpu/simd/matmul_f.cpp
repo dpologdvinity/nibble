@@ -8,17 +8,6 @@
 namespace nibble::simd {
 namespace {
 
-struct LoadF32 {
-  using T = float;
-  static __m256 load(const float* p) { return _mm256_loadu_ps(p); }
-  static float one(float v) { return v; }
-};
-struct LoadF16 {
-  using T = uint16_t;
-  static __m256 load(const uint16_t* p) { return load_f16x8(p); }
-  static float one(uint16_t v) { return fp16_to_fp32(v); }
-};
-
 // y[t*out + r] for r in [rb, re): 4 rows share each x load; 8-wide FMA accumulators per row.
 template <class L>
 void matmul_t(const typename L::T* w, int64_t in, int64_t out, const float* x, float* y, int64_t n, int64_t rb,

@@ -24,17 +24,6 @@ using u8 = unsigned char;
 
 // ---- F32 / F16 ----
 
-struct LoadF32 {
-  using T = float;
-  static __m256 load(const float* p) { return _mm256_loadu_ps(p); }
-  static float one(float v) { return v; }
-};
-struct LoadF16 {
-  using T = uint16_t;
-  static __m256 load(const uint16_t* p) { return load_f16x8(p); }
-  static float one(uint16_t v) { return fp16_to_fp32(v); }
-};
-
 constexpr int kRf = 4, kTf = 3;  // 12 accumulators + 3 activation vectors + 1 weight vector = 16 ymm
 
 // y[t*out + r] for R rows from w and T tokens from x.

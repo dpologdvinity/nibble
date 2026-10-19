@@ -5,6 +5,8 @@
 #if defined(NIBBLE_SIMD_ENABLED) && defined(__AVX2__) && defined(__FMA__) && defined(__F16C__)
 #define NIBBLE_HAVE_AVX2 1
 #include <immintrin.h>
+
+#include "fp16.h"
 #if defined(__AVXVNNI__)
 #define NIBBLE_HAVE_AVXVNNI 1
 #endif
@@ -54,6 +56,18 @@ static inline int32_t hsum_epi32(__m256i v) {
 static inline __m256 load_f16x8(const uint16_t* p) {
   return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
 }
+
+// F32/F16 weight access for the matmul kernels (matmul_f.cpp, gemm.cpp): 8 lanes or one element as float.
+struct LoadF32 {
+  using T = float;
+  static __m256 load(const float* p) { return _mm256_loadu_ps(p); }
+  static float one(float v) { return v; }
+};
+struct LoadF16 {
+  using T = uint16_t;
+  static __m256 load(const uint16_t* p) { return load_f16x8(p); }
+  static float one(uint16_t v) { return fp16_to_fp32(v); }
+};
 
 // int8 dot per group of 4 consecutive bytes: lane k = sum of x[i]*y[i] for i in [4k, 4k+4), as 8 int32 lanes.
 // Sign trick after llama.cpp's mul_sum_i8_pairs_float (ggml-cpu/arch/x86/quants.c, MIT).
