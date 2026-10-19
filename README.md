@@ -8,7 +8,8 @@ pthreads.
 
 ## Status
 
-Milestones M0–M6 are done: Qwen2.5 (F16, Q8_0, Q4_0), Llama 3.2 1B and TinyLlama
+Milestones M0–M5 are done and M6 is implemented, with its final verification
+pending: Qwen2.5 (F16, Q8_0, Q4_0), Llama 3.2 1B and TinyLlama
 1.1B (F16) run on the CPU with AVX2/AVX-VNNI kernels (scalar twins kept as the
 reference) on a thread pool, with a sampler and a multi-turn `nibble chat`. See
 [Performance](#performance) for numbers against llama.cpp.
@@ -154,46 +155,69 @@ divergence only at a near-tie). Minimum cosine (capital / code / chat):
 
 All numbers come from `bench/results/*.jsonl`; the charts and the tables below are
 generated from them by `bench/plot.py` (`bench/plot.py` writes `docs/bench/*.svg`,
-`bench/plot.py --markdown` prints the tables).
+`bench/plot.py --markdown` prints the tables). `tools/bench_final.sh` runs both
+tools and writes the rows.
 
 **Machine:** Intel Core i7-1265U (2 P-cores with Hyper-Threading plus 8 E-cores, 12
 logical CPUs; AVX2, FMA, F16C, AVX-VNNI), under WSL2 on a shared laptop. g++ 13
-Release build of commit `2ca56ef`; llama.cpp b11715 (`tools/bench_llamacpp.sh`).
+Release build; llama.cpp b11715 (`tools/bench_llamacpp.sh`).
 
-**Protocol:** `nibble bench -p 512 -n 128 -r 5` and `llama-bench` with the same
-sizes and thread count: median of 5 reps after 1 warm-up. For each (model, thread
-count) the two tools ran back to back in one session, with alternating order so
-neither always runs second on a hot CPU. Before each tool run the driver waited
-45 s and then until the 1-minute load average was below 2 (at most 10 minutes). Each row records
-the load average when it started; rows above 2 count as noisy (hollow in the
-charts, † in the tables). None of the final rows is noisy. Qwen2.5-0.5B Q4_0 was swept over
-t = 1, 2, 4, 6, 8, 10, 12; the other models ran at t = 1 and 8. The machine is
-shared, so run-to-run spread is large: the sweep is not monotonic (llama.cpp
-tg128 is 47.3 at t = 2 but 41.6 at t = 4), and differences under about 10% are
-within the noise.
+**Why paired ratios.** Absolute tok/s on this machine drift between sessions far more
+than the load average shows; clock speed, temperature and background work are not
+in it. Two single-session runs at t = 8, both with load average below 2, put llama.cpp
+at 1.31× nibble's Qwen2.5-0.5B Q4_0 decode speed and then at 0.69× an hour later
+(the first session alternated which tool ran first per (model, t), which put nibble
+first in every t = 8 pair; the second ran llama.cpp first). So the comparison uses
+ratios from paired blocks, which cancel slow drift, and absolute tok/s are only
+shown per block or per session.
 
-**Target (tg128 on Qwen2.5-0.5B Q4_0 within 1.5× of llama.cpp): met, not matched.**
-Both tools are fastest at t = 8: llama.cpp 53.5 tok/s, nibble 40.8, a ratio of
-1.31×. At t = 1 the ratio is 1.42× (27.4 vs 19.3). On pp512 nibble is faster at every
-thread count of the sweep (322 tok/s at t = 10 vs llama.cpp's best, 260 at
-t = 12). Of the other models, nibble's decode is level with llama.cpp on Qwen
-Q8_0 and F16 (within the noise), faster on Llama 3.2 1B F16 and slower on TinyLlama
-1.1B F16.
+**Protocol** (`tools/bench_final.sh --abba`): `nibble bench -p 512 -n 128 -r 5`
+and `llama-bench` with the same sizes and thread count, each reporting the median
+of 5 reps after 1 warm-up. One ABBA block runs llama.cpp, nibble, nibble, llama.cpp
+back to back for one (model, thread count). Before every run the driver waits 45 s,
+then until the 1-minute load average is below 2 (at most 10 minutes). The block
+ratio is the mean of the two llama.cpp medians divided by the mean of the two nibble
+medians; above 1 means llama.cpp is faster. Each run measures pp512 and tg128, so one
+block yields both. Blocks are interleaved: every (model, t) gets its first block
+before any gets its second. Qwen2.5-0.5B Q4_0 has 3 blocks at t = 1 and t = 8, the
+other models 2 each. The tables give the median block ratio and its range. All 88
+runs (nibble at commit `39ec442`) started with load average below 2, so none is
+noisy. Noisy rows would be marked † and drawn hollow.
 
-| model | test | nibble, best t | llama.cpp, best t | llama.cpp ÷ nibble | llama.cpp at nibble's t | ÷ nibble, same t | nibble weight BW |
+**Target (tg128 on Qwen2.5-0.5B Q4_0 within 1.5× of llama.cpp): met at t = 8, missed
+at t = 1.** At t = 8, the default thread count, llama.cpp ÷ nibble is 1.19× (range
+0.99–1.20× over 3 blocks). At t = 1 it is 1.68× (1.57–1.71×): every block is above
+1.5×. nibble's single-thread Q4_0 decode is the gap. On pp512 nibble is faster at
+t = 1 (0.74×) and slower at t = 8 (1.12×). On the other models nibble's tg128 is
+level or faster at both thread counts (0.68–1.04×). Its pp512 is about 2× faster on
+Q8_0 and about 2× slower on F16 Qwen at t = 8.
+
+Paired ABBA blocks (llama.cpp ÷ nibble; tok/s are medians of the per-block means):
+
+| model | test | t | blocks | llama.cpp ÷ nibble, median | range | nibble tok/s | llama.cpp tok/s |
 |---|---|---|---|---|---|---|---|
-| Qwen2.5-0.5B Q4_0 | tg128 | 40.8 (t8) | 53.5 (t8) | 1.31× | 53.5 (t8) | 1.31× | 36% of membw |
-| Qwen2.5-0.5B Q4_0 | pp512 | 322.1 (t10) | 260.0 (t12) | 0.81× | 189.8 (t10) | 0.59× |  |
-| Qwen2.5-0.5B Q8_0 | tg128 | 63.5 (t8) | 63.1 (t8) | 0.99× | 63.1 (t8) | 0.99× | 106% of membw |
-| Qwen2.5-0.5B Q8_0 | pp512 | 495.8 (t8) | 260.9 (t8) | 0.53× | 260.9 (t8) | 0.53× |  |
-| Qwen2.5-0.5B F16 | tg128 | 34.3 (t8) | 32.7 (t8) | 0.95× | 32.7 (t8) | 0.95× | 107% of membw |
-| Qwen2.5-0.5B F16 | pp512 | 260.3 (t8) | 312.0 (t8) | 1.20× | 312.0 (t8) | 1.20× |  |
-| Llama-3.2-1B F16 | tg128 | 13.1 (t8) | 10.0 (t8) | 0.76× | 10.0 (t8) | 0.76× | 80% of membw |
-| Llama-3.2-1B F16 | pp512 | 77.2 (t8) | 70.4 (t8) | 0.91× | 70.4 (t8) | 0.91× |  |
-| TinyLlama-1.1B F16 | tg128 | 11.2 (t8) | 13.0 (t8) | 1.16× | 13.0 (t8) | 1.16× | 61% of membw |
-| TinyLlama-1.1B F16 | pp512 | 57.3 (t8) | 77.8 (t8) | 1.36× | 77.8 (t8) | 1.36× |  |
+| Qwen2.5-0.5B Q4_0 | tg128 | 1 | 3 | 1.68× | 1.57–1.71× | 25.3 | 41.9 |
+| Qwen2.5-0.5B Q4_0 | tg128 | 8 | 3 | 1.19× | 0.99–1.20× | 88.8 | 106.9 |
+| Qwen2.5-0.5B Q4_0 | pp512 | 1 | 3 | 0.74× | 0.68–0.74× | 225.0 | 165.9 |
+| Qwen2.5-0.5B Q4_0 | pp512 | 8 | 3 | 1.12× | 1.10–1.14× | 492.6 | 551.0 |
+| Qwen2.5-0.5B Q8_0 | tg128 | 1 | 2 | 1.04× | 0.99–1.08× | 19.2 | 20.0 |
+| Qwen2.5-0.5B Q8_0 | tg128 | 8 | 2 | 0.86× | 0.74–0.99× | 56.0 | 48.4 |
+| Qwen2.5-0.5B Q8_0 | pp512 | 1 | 2 | 0.48× | 0.46–0.51× | 230.9 | 112.0 |
+| Qwen2.5-0.5B Q8_0 | pp512 | 8 | 2 | 0.51× | 0.48–0.55× | 499.8 | 256.8 |
+| Qwen2.5-0.5B F16 | tg128 | 1 | 2 | 0.86× | 0.84–0.87× | 14.2 | 12.2 |
+| Qwen2.5-0.5B F16 | tg128 | 8 | 2 | 0.83× | 0.83–0.84× | 23.3 | 19.4 |
+| Qwen2.5-0.5B F16 | pp512 | 1 | 2 | 1.06× | 1.03–1.10× | 95.0 | 100.8 |
+| Qwen2.5-0.5B F16 | pp512 | 8 | 2 | 1.93× | 1.89–1.98× | 163.4 | 315.8 |
+| Llama-3.2-1B F16 | tg128 | 1 | 2 | 0.68× | 0.64–0.72× | 7.9 | 5.4 |
+| Llama-3.2-1B F16 | tg128 | 8 | 2 | 0.73× | 0.67–0.78× | 11.2 | 8.0 |
+| Llama-3.2-1B F16 | pp512 | 1 | 2 | 1.05× | 0.99–1.11× | 33.3 | 34.9 |
+| Llama-3.2-1B F16 | pp512 | 8 | 2 | 0.93× | 0.85–1.00× | 63.7 | 58.6 |
+| TinyLlama-1.1B F16 | tg128 | 1 | 2 | 0.70× | 0.70–0.70× | 8.4 | 5.8 |
+| TinyLlama-1.1B F16 | tg128 | 8 | 2 | 0.70× | 0.63–0.78× | 12.9 | 8.9 |
+| TinyLlama-1.1B F16 | pp512 | 1 | 2 | 1.02× | 1.01–1.04× | 33.6 | 34.4 |
+| TinyLlama-1.1B F16 | pp512 | 8 | 2 | 0.89× | 0.79–0.99× | 65.5 | 57.3 |
 
-Thread sweep, Qwen2.5-0.5B Q4_0 (tok/s):
+Thread sweep, Qwen2.5-0.5B Q4_0, tok/s: single session (2026-10-19 11:57–13:00 UTC), used only to choose the default thread count:
 
 | t | nibble tg128 | llama.cpp tg128 | nibble pp512 | llama.cpp pp512 |
 |---|---|---|---|---|
@@ -205,22 +229,25 @@ Thread sweep, Qwen2.5-0.5B Q4_0 (tok/s):
 | 10 | 30.5 | 37.3 | 322.1 | 189.8 |
 | 12 | 31.0 | 40.5 | 321.1 | 260.0 |
 
-† noisy: 1-minute load average > 2 when the run started.
+† noisy: 1-minute load average > 2 when a run started (for blocks: in any of its runs).
 
-![nibble vs llama.cpp](docs/bench/vs-llamacpp.svg)
+![llama.cpp ÷ nibble ratios](docs/bench/vs-llamacpp.svg)
 
-**Roofline.** Decode reads every weight once per token, so `model bytes × tg128
-tok/s` is the weight-read bandwidth it achieves (the GGUF file size stands in for
-the weight bytes). `roofline.svg` shows it as a percentage of `nibble bench --mem`
-at the same thread count. That probe is a plain streaming sum and does not reach the
-machine's peak: Q8_0 and F16 decode exceed it slightly (106% and 107%), so those
-models are memory-bound; Q4_0, at 36%, is still compute- or overhead-bound.
+**Roofline** (single session, the one the thread sweep comes from). Decode reads every
+weight once per token, so `model bytes × tg128 tok/s` is the weight-read bandwidth
+it achieves. The GGUF file size stands in for the weight bytes; for TinyLlama that
+includes an untied `token_embd` (~131 MB) that decode does not read in full.
+`roofline.svg` shows it as a percentage of the `nibble bench --mem` probe: the
+highest probe across that session's models at the same thread count. That probe is
+a plain streaming sum and does not reach the machine's peak. In that session Q8_0
+and F16 Qwen decode slightly exceed it (106% and 107%), so they are memory-bound.
+Q4_0, at 36%, is still compute- or overhead-bound.
 
 ![weight-read bandwidth](docs/bench/roofline.svg)
 
 **Ladder.** `ladder.svg` shows nibble's best decode tok/s after each M6 step
-(`bench/results/m6-*.jsonl`). Each step keeps its own thread counts and load
-average. All steps except the last used reduced sizes (tg16, labelled under each step) on a
+(`bench/results/m6-*.jsonl`). Each step is a single session and keeps its own thread
+counts and load average. All steps except the last used reduced sizes (tg16, labelled under each step) on a
 busier machine, so they show the trend, not exact speed-ups. The hand-recorded
 thread-pool dispatch timings in `m6-4b-dispatch.jsonl` are not plotted.
 
@@ -228,17 +255,20 @@ thread-pool dispatch timings in `m6-4b-dispatch.jsonl` are not plotted.
 
 **Default thread count.** With `n_threads = 0` (and no `-t` for `run` and
 `chat`) nibble reads `/sys/devices/system/cpu/cpu*/cpu_capacity`. If the
-capacities differ (a hybrid CPU), it uses the CPUs at the highest capacity. Otherwise it uses
-2/3 of `hardware_concurrency`, which is 8 here: the best tg128 thread count in
-the sweep above. WSL2 reports a capacity of 1024 on all 12 CPUs, and a
+capacities differ (a hybrid CPU), it uses the CPUs above the midpoint of the lowest and
+highest capacity (so a prime core or ITMT-favoured cores do not shrink the big tier),
+at most `hardware_concurrency`. Otherwise it uses
+2/3 of `hardware_concurrency`, which is 8 here: the best nibble tg128 thread count in
+the single-session sweep above (t = 4 was within noise of it). WSL2 reports a capacity of 1024 on all 12 CPUs, and a
 topology of 6 cores with 2 threads each, which is not the real 2 P + 8 E. So on
 this machine the rule always takes the 2/3 fallback. The hybrid branch has not
 been measured on native Linux. `nibble bench -t` still defaults to 1.
 
 ## Roadmap
 
-Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama · M6 SIMD
-kernels, threading and benchmarks. Next: Phase 2: CUDA backend.
+Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama. Implemented,
+verification pending: M6 SIMD kernels, threading and benchmarks. Next: Phase 2:
+CUDA backend.
 
 ## License
 

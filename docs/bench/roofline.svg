@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="440" viewBox="0 0 900 440">
 <rect width="900" height="440" fill="white"/>
-<text x="450.0" y="22.0" font-family="sans-serif" font-size="15" text-anchor="middle" font-weight="bold" fill="#222">Decode weight-read bandwidth: model bytes × tg128 tok/s, % of measured membw</text>
+<text x="450.0" y="22.0" font-family="sans-serif" font-size="15" text-anchor="middle" font-weight="bold" fill="#222">Decode weight-read bandwidth, % of membw probe (single session, 2026-10-19 11:57–13:00 UTC)</text>
 <line x1="60.0" y1="350.0" x2="860.0" y2="350.0" stroke="#ccc" stroke-width="1"/>
 <text x="55.0" y="354.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0</text>
 <line x1="60.0" y1="290.0" x2="860.0" y2="290.0" stroke="#ccc" stroke-width="1"/>
@@ -60,5 +60,6 @@
 <rect x="70.0" y="405.0" width="10" height="10" fill="#ff7f0e"/>
 <text x="85.0" y="414.0" font-family="sans-serif" font-size="11" text-anchor="start" font-weight="normal" fill="#222">llama.cpp</text>
 <text x="170.0" y="398.0" font-family="sans-serif" font-size="10" text-anchor="start" font-weight="normal" fill="#555">Each tool at its own best thread count (t under the value).</text>
+<text x="170.0" y="414.0" font-family="sans-serif" font-size="10" text-anchor="start" font-weight="normal" fill="#555">membw = highest probe across models at that t. Bytes = GGUF file size; TinyLlama&#x27;s untied token_embd (~131 MB) is counted but not read per token.</text>
 <text x="10.0" y="432.0" font-family="sans-serif" font-size="10" text-anchor="start" font-weight="normal" fill="#555">Hollow = noisy (1-min load average &gt; 2 when the run started).</text>
 </svg>
