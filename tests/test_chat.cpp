@@ -5,6 +5,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <unistd.h>
 
 #include "chat.h"
@@ -505,4 +506,19 @@ TEST_CASE("generate: control text split across two parts stays plain", "[chat]")
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(plain.size()) + 1);  // + BOS
   s.generate(std::vector<PromptPart>{{"a</s>b", true}}, gp, keep_going);
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(special.size()) + 1);
+}
+
+TEST_CASE("chat_turn text matches the llama.cpp-rendered prompt files", "[chat]") {
+  const std::string root = NIBBLE_SOURCE_DIR;
+  const struct { ChatFormat f; const char* file; } cases[] = {
+      {ChatFormat::Llama3, "chat_llama3"}, {ChatFormat::Zephyr, "chat_zephyr"}, {ChatFormat::ChatML, "chat"}};
+  for (const auto& c : cases) {
+    std::ifstream in(root + "/tests/e2e/prompts/" + c.file + ".txt", std::ios::binary);
+    REQUIRE(in);
+    const std::string want((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string got;
+    for (const auto& p : chat_turn(c.f, "You are a helpful assistant.", "Name three primary colors.", true)) got += p.text;
+    INFO(c.file);
+    CHECK(got == want);
+  }
 }

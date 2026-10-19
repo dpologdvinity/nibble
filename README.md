@@ -8,9 +8,23 @@ pthreads.
 
 ## Status
 
-Milestones M0–M4 are done: Qwen2.5 models in F16, Q8_0 and Q4_0 run on the CPU
-with scalar reference kernels, with a sampler and a multi-turn `nibble chat`.
-This is a scalar baseline; optimization comes in M6.
+Milestones M0–M5 are done: Qwen2.5 (F16, Q8_0, Q4_0), Llama 3.2 1B and TinyLlama
+1.1B (F16) run on the CPU with scalar reference kernels, with a sampler and a
+multi-turn `nibble chat`. This is a scalar baseline; optimization comes in M6.
+
+## Supported models
+
+| model | types | how to get it |
+|-------|-------|---------------|
+| Qwen2.5-0.5B-Instruct | F16, Q8_0, Q4_0 | `tools/download_models.sh` (F16), then `tools/make_quants.sh` (Q8_0, Q4_0) |
+| Llama-3.2-1B-Instruct | F16 | `tools/convert_hf.sh llama32-1b` |
+| TinyLlama-1.1B-Chat-v1.0 | F16 | `tools/convert_hf.sh tinyllama-1.1b` |
+
+`convert_hf.sh` downloads the Hugging Face weights and converts them with the
+pinned llama.cpp converter. `nibble chat` picks the chat format from the model's
+chat template: ChatML (Qwen2.5), Llama 3 header format (Llama 3.2) or Zephyr
+(TinyLlama). The Llama 3.2 prompt carries llama.cpp's fixed knowledge-cutoff
+system header.
 
 ## Build
 
@@ -61,8 +75,7 @@ values print usage and exit 2; errors such as a missing model exit 1.
 
 `nibble chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N]` plus the
 sampling flags reads one user message per stdin line and streams each reply to
-stdout (`-n` is per reply, default 512). Blank lines are skipped. Qwen2 models
-only (ChatML). It prompts with `> ` on stderr only when stdin is a terminal,
+stdout (`-n` is per reply, default 512). Blank lines are skipped. It prompts with `> ` on stderr only when stdin is a terminal,
 stops at EOF, and on a full context prints `[context full]` and exits 0.
 
 ## Tests
@@ -102,10 +115,17 @@ llama.cpp and an fp64 oracle with Q8_0 requantization disagree pairwise at about
 - Q8_0: 0.99941 / 0.99854 / 0.99616
 - Q4_0: 0.99888 / 0.99858 / 0.99658
 
+Llama-3.2-1B-Instruct and TinyLlama-1.1B-Chat F16 (same strict gate as Qwen F16:
+cosine >= 0.999 at every position, argmax agreement except near-ties, greedy
+divergence only at a near-tie). Minimum cosine (capital / code / chat):
+
+- Llama 3.2 1B: 0.999996 / 0.999981 / 0.999990; top-1 agreement 100%; greedy 64/64 on all three
+- TinyLlama 1.1B: 0.999999 / 0.999999 / 0.999997; top-1 agreement 100%; greedy 64/64 on all three
+
 ## Roadmap
 
-M4: Q8_0/Q4_0 quantized weights, sampler, chat template · M5: Llama 3.2 and
-TinyLlama · M6: SIMD kernels, threading and benchmarks · Phase 2: CUDA backend.
+Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama. Next: M6 SIMD
+kernels, threading and benchmarks · Phase 2: CUDA backend.
 
 ## License
 

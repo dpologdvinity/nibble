@@ -86,7 +86,7 @@ struct Gate {
   bool assert_greedy;   // greedy divergence must be a near-tie; else only WARN
 };
 Gate gate_for(const std::string& model) {
-  if (model == "f16") return {0.999, 1.0, true, true};
+  if (model == "f16" || model == "llama32-f16" || model == "tinyllama-f16") return {0.999, 1.0, true, true};
   return {0.995, 0.90, false, false};
 }
 
@@ -105,8 +105,16 @@ void check_prompt_tokens(const tok::Tokenizer& t, const Golden& g, const std::st
 void run_prompt(const std::string& model, const std::string& name) {
   const Gate gate = gate_for(model);
   const std::string root = NIBBLE_SOURCE_DIR;
-  const std::string model_path = root + "/models/qwen2.5-0.5b-instruct-" + (model == "f16" ? "fp16" : model) + ".gguf";
-  const std::string golden_path = root + "/models/golden/qwen2.5-0.5b-" + model + "/" + name + ".bin";
+  std::string gguf = "qwen2.5-0.5b-instruct-" + (model == "f16" ? std::string("fp16") : model);
+  std::string golden = "qwen2.5-0.5b-" + model;
+  std::string chat = "chat";
+  if (model == "llama32-f16") {
+    gguf = "llama-3.2-1b-instruct-f16", golden = "llama32-1b-f16", chat = "chat_llama3";
+  } else if (model == "tinyllama-f16") {
+    gguf = "tinyllama-1.1b-chat-f16", golden = "tinyllama-1.1b-f16", chat = "chat_zephyr";
+  }
+  const std::string model_path = root + "/models/" + gguf + ".gguf";
+  const std::string golden_path = root + "/models/golden/" + golden + "/" + name + ".bin";
   if (!std::filesystem::exists(model_path) || !std::filesystem::exists(golden_path)) SKIP("model or golden missing");
 
   Golden g = Golden::load(golden_path);
@@ -118,7 +126,7 @@ void run_prompt(const std::string& model, const std::string& name) {
   std::vector<float> out(g.n_vocab);
 
   // 0. our tokenizer (special parsing and automatic bos, as the API uses) reproduces llama.cpp's prompt tokens
-  check_prompt_tokens(e.tokenizer, g, name);
+  check_prompt_tokens(e.tokenizer, g, name, name == "chat" ? chat : name);
 
   // 1. incremental, one token at a time
   {
@@ -177,6 +185,12 @@ void run_prompt(const std::string& model, const std::string& name) {
 E2E_CASE("f16", "capital")
 E2E_CASE("f16", "code")
 E2E_CASE("f16", "chat")
+E2E_CASE("llama32-f16", "capital")
+E2E_CASE("llama32-f16", "code")
+E2E_CASE("llama32-f16", "chat")
+E2E_CASE("tinyllama-f16", "capital")
+E2E_CASE("tinyllama-f16", "code")
+E2E_CASE("tinyllama-f16", "chat")
 E2E_CASE("q8_0", "capital")
 E2E_CASE("q8_0", "code")
 E2E_CASE("q8_0", "chat")
@@ -195,15 +209,19 @@ TEST_CASE("e2e prompt tokens match llama.cpp", "[e2e]") {
       {"tinyllama-1.1b-chat-f16", "tinyllama-1.1b-f16", "chat_zephyr"},
   };
   const std::string root = NIBBLE_SOURCE_DIR;
+  int checked = 0, expected = 0;
   for (const M& m : models) {
     const std::string gguf = root + "/models/" + m.gguf + ".gguf";
-    if (!std::filesystem::exists(gguf)) continue;
+    if (!std::filesystem::exists(gguf) || !std::filesystem::is_directory(root + "/models/golden/" + m.golden)) continue;
+    expected += 3;
     const auto t = tok::Tokenizer::from_gguf(gguf::File::open(gguf));
     for (const char* p : {"capital", "code", "chat"}) {
       const std::string bin = root + "/models/golden/" + m.golden + "/" + p + ".bin";
-      if (!std::filesystem::exists(bin)) continue;
       INFO(m.golden << " " << p);
+      REQUIRE(std::filesystem::exists(bin));
       check_prompt_tokens(t, Golden::load(bin), p, std::string(p) == "chat" ? m.chat : p);
+      ++checked;
     }
   }
+  REQUIRE(checked == expected);
 }
