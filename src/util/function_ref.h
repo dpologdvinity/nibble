@@ -9,7 +9,8 @@ template <class Sig>
 class FunctionRef;
 
 // Non-owning reference to a callable: a pointer plus a trampoline, never allocates.
-// The callable (an object, not a bare function) must outlive every call. Not nullable.
+// The callable must outlive every call. Function lvalues are rejected; function-pointer
+// variables are accepted. Not nullable.
 template <class R, class... Args>
 class FunctionRef<R(Args...)> {
  public:

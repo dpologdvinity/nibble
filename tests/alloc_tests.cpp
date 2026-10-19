@@ -32,13 +32,17 @@ std::atomic<int64_t> g_count{0};    // allocations while armed
 std::atomic<int64_t> g_bytes{0};    // bytes requested while armed
 std::atomic<int64_t> g_fail_at{0};  // 1-based index of the armed allocation to fail; 0 = never
 
-void* counted_alloc(std::size_t n) {
+void* counted_alloc(std::size_t n, std::size_t align = 0) {
   if (g_armed.load(std::memory_order_relaxed)) {
     const int64_t c = g_count.fetch_add(1) + 1;
     if (c == g_fail_at.load()) throw std::bad_alloc();
     g_bytes.fetch_add(static_cast<int64_t>(n));
   }
-  if (void* p = std::malloc(n ? n : 1)) return p;
+  if (align) {
+    if (void* p = std::aligned_alloc(align, (n + align - 1) / align * align)) return p;
+  } else if (void* p = std::malloc(n ? n : 1)) {
+    return p;
+  }
   throw std::bad_alloc();
 }
 
@@ -82,6 +86,12 @@ void* operator new[](std::size_t n, const std::nothrow_t&) noexcept {
     return nullptr;
   }
 }
+void* operator new(std::size_t n, std::align_val_t a) { return counted_alloc(n, static_cast<std::size_t>(a)); }
+void* operator new[](std::size_t n, std::align_val_t a) { return counted_alloc(n, static_cast<std::size_t>(a)); }
+void operator delete(void* p, std::align_val_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::align_val_t) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { std::free(p); }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
@@ -216,21 +226,45 @@ TEST_CASE("Transformer::forward decode and CpuBackend::matmul do not allocate", 
       float* x = be.alloc(8 * m.w.layers[0].w_up.ne[0]);
       float* y = be.alloc(m.w.layers[0].w_up.rows() * 8);
       const int32_t one[1] = {7};
-      int64_t n_fwd = -1, n_mm = -1;
+      std::vector<int32_t> p8 = {1, 50, 257, 3, 9, 10, 11, 12};
+      tr.forward(p8, 8, logits.data());  // warm-up prefill n=8
+      struct Inv {
+        size_t live, sc, xq;
+      };
+      auto inv = [&] { return Inv{be.live_allocations(), be.scratch_capacity(), be.quant_scratch_capacity()}; };
+      const Inv before = inv();
+      auto same = [&](const Inv& i) { return i.live == before.live && i.sc == before.sc && i.xq == before.xq; };
+      int64_t n_fwd = -1, n_mm = -1, n_pre4 = -1, n_pre8 = -1;
       {
         Armed a;
-        for (int i = 0; i < 16; ++i) tr.forward(one, 4 + i, logits.data());
+        for (int i = 0; i < 16; ++i) tr.forward(one, 16 + i, logits.data());
         n_fwd = g_count.load();
       }
+      CHECK(same(inv()));
+      {
+        Armed a;
+        tr.forward(std::span(p8).first(4), 32, logits.data());
+        n_pre4 = g_count.load();
+      }
+      CHECK(same(inv()));
+      {
+        Armed a;
+        tr.forward(p8, 40, logits.data());
+        n_pre8 = g_count.load();
+      }
+      CHECK(same(inv()));
       {
         Armed a;
         be.matmul(m.w.layers[0].w_up, x, y, 8);
         n_mm = g_count.load();
       }
+      CHECK(same(inv()));
       be.free(x);
       be.free(y);
       CHECK(n_fwd == 0);
       CHECK(n_mm == 0);
+      CHECK(n_pre4 == 0);
+      CHECK(n_pre8 == 0);
     }
   }
 }

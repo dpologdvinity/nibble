@@ -68,7 +68,7 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
   }
   {
     std::lock_guard<std::mutex> lk(mu_);
-    fn_ = &fn;
+    fn_ = &fn;  // dangles after return; workers read it only after seeing a new generation
     n_ = n;
     chunk_ = chunk;
     next_.store(0);

@@ -15,6 +15,22 @@
 #include "nibble/error.h"
 #include "tiny_model.h"
 
+#ifdef __has_feature
+#define NIBBLE_HAS_FEATURE(x) __has_feature(x)
+#else
+#define NIBBLE_HAS_FEATURE(x) 0
+#endif
+#if defined(__SANITIZE_ADDRESS__) || NIBBLE_HAS_FEATURE(address_sanitizer)
+#define NIBBLE_UNDER_ASAN 1
+#else
+#define NIBBLE_UNDER_ASAN 0
+#endif
+#if defined(__SANITIZE_THREAD__) || NIBBLE_HAS_FEATURE(thread_sanitizer)
+#define NIBBLE_UNDER_TSAN 1
+#else
+#define NIBBLE_UNDER_TSAN 0
+#endif
+
 using namespace nibble;
 using Catch::Matchers::ContainsSubstring;
 
@@ -300,7 +316,7 @@ TEST_CASE("transformer huge n_ctx throws Error naming n_ctx", "[model]") {
   Loaded m(tiny_model_gguf(1), be);
   const size_t base = be.live_allocations();
   std::vector<int64_t> sizes = {INT64_MAX / 4, INT64_MAX};  // overflow paths
-#ifndef __SANITIZE_ADDRESS__  // ASan aborts on multi-TB allocations instead of failing them
+#if !NIBBLE_UNDER_ASAN && !NIBBLE_UNDER_TSAN  // ASan/TSan abort on multi-TB allocations instead of failing them
   sizes.push_back(int64_t{1000000000000});
 #endif
   for (int64_t n : sizes) {
