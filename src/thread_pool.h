@@ -21,7 +21,8 @@ class ThreadPool {
   int size() const { return n_threads_; }
   void parallel_for(int64_t n, int64_t chunk,
                     FunctionRef<void(int64_t begin, int64_t end)> fn);
-  // Workers currently blocked in the sleep fallback (test hook).
+  // Workers that passed the spin bound and entered the sleep path; some may not be in the futex yet
+  // (test hook).
   int sleeping_workers() const { return sleeping_.load(); }
 
  private:

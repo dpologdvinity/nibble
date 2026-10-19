@@ -70,12 +70,26 @@ TEST_CASE("idle workers go to sleep within the spin bound") {
   auto add = [&](int64_t b, int64_t e) { sum += e - b; };
   for (int round = 0; round < 3; ++round) {
     pool.parallel_for(64, 4, add);
-    // Loose: the spin bound is tens of microseconds; one second absorbs scheduler noise and sanitizers.
+    // Loose: the spin bound is tens of microseconds; 200 ms absorbs scheduler noise and sanitizers.
     const auto t0 = clock::now();
-    while (pool.sleeping_workers() < 3 && clock::now() - t0 < std::chrono::seconds(1)) std::this_thread::yield();
+    while (pool.sleeping_workers() < 3 && clock::now() - t0 < std::chrono::milliseconds(200)) std::this_thread::yield();
     REQUIRE(pool.sleeping_workers() == 3);
   }
   REQUIRE(sum.load() == 3 * 64);  // sleeping workers still wake for each call
+}
+
+TEST_CASE("calls straddling the spin bound all complete") {
+  // Gaps of 0-100 us land on both sides of the spin bound, so workers wake from both the spin and the
+  // sleep path, and some calls race a worker that is just entering sleep.
+  nibble::ThreadPool pool(4);
+  for (int k = 0; k < 2000; ++k) {
+    std::atomic<int64_t> sum{0};
+    pool.parallel_for(100, 7, [&](int64_t b, int64_t e) {
+      for (auto i = b; i < e; ++i) sum += i;
+    });
+    REQUIRE(sum.load() == 4950);
+    std::this_thread::sleep_for(std::chrono::microseconds((k * 37) % 101));
+  }
 }
 
 // Hidden: run with `nibble_tests "[.dispatch]"`. Reports per-call latency of an empty parallel_for.

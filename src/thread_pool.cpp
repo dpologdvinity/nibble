@@ -67,7 +67,7 @@ void ThreadPool::worker_loop() {
     uint32_t g = generation_.load(std::memory_order_acquire);
     if (g == seen) {
       const auto deadline = std::chrono::steady_clock::now() + kSpin;
-      for (int i = 1; g == seen; ++i) {
+      for (unsigned i = 1; g == seen; ++i) {
         cpu_relax();
         g = generation_.load(std::memory_order_acquire);
         if (g == seen && i % 64 == 0 && std::chrono::steady_clock::now() > deadline) {
@@ -101,7 +101,7 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
   publish();  // release: the stores above are visible to any worker that acquires the new generation
   run_chunks();
   // Every worker acks every generation, so none can still touch fn_ or the fields once this returns.
-  for (int i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {
+  for (unsigned i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {  // unsigned: wraps, no UB
     if (i % 1024 == 0) std::this_thread::yield(); else cpu_relax();
   }
 }
