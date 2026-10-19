@@ -93,8 +93,10 @@ void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float*
 #ifdef NIBBLE_HAVE_AVX2
   if (table.type == DType::F16) {
     const int64_t d = table.ne[0];
-    for (size_t t = 0; t < ids.size(); ++t)
+    for (size_t t = 0; t < ids.size(); ++t) {
+      if (ids[t] < 0 || ids[t] >= table.rows()) throw Error("embed: token id " + std::to_string(ids[t]) + " out of range (n_vocab " + std::to_string(table.rows()) + ")");
       simd::embed_row_f16(static_cast<const uint16_t*>(table.data) + ids[t] * d, out + static_cast<int64_t>(t) * d, d);
+    }
     return;
   }
 #endif
