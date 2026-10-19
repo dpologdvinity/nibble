@@ -1,5 +1,5 @@
 // Reference tool built against pinned llama.cpp (see tools/llama_cpp_version.txt).
-//   llama_ref tokenize <model.gguf> <corpus.txt> <out.txt>
+//   llama_ref tokenize [--special] <model.gguf> <corpus.txt> <out.txt>   (--special: parse_special, no bos)
 //   llama_ref eog      <model.gguf> <out.txt>   (ascending ids with llama_vocab_is_eog, vocab only)
 //   llama_ref logits   <model.gguf> <prompt.txt> <n_gen> <out.bin>
 #include <algorithm>
@@ -27,12 +27,13 @@ static std::string read_file(const std::string& p) {
   return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
-static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, bool special) {
+static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, bool add_special,
+                                    bool parse_special) {
   std::vector<llama_token> t(s.size() + 16);
-  int n = llama_tokenize(v, s.data(), int32_t(s.size()), t.data(), int32_t(t.size()), special, special);
+  int n = llama_tokenize(v, s.data(), int32_t(s.size()), t.data(), int32_t(t.size()), add_special, parse_special);
   if (n < 0) {
     t.resize(size_t(-n));
-    n = llama_tokenize(v, s.data(), int32_t(s.size()), t.data(), int32_t(t.size()), special, special);
+    n = llama_tokenize(v, s.data(), int32_t(s.size()), t.data(), int32_t(t.size()), add_special, parse_special);
   }
   if (n < 0) die("tokenize failed");
   t.resize(size_t(n));
@@ -47,7 +48,7 @@ static llama_model* load(const char* path) {
   return m;
 }
 
-static int cmd_tokenize(char** a) {
+static int cmd_tokenize(char** a, bool parse_special) {
   llama_model* m = load(a[0]);
   const llama_vocab* v = llama_model_get_vocab(m);
   std::vector<std::string> entries;
@@ -55,7 +56,7 @@ static int cmd_tokenize(char** a) {
   std::ofstream out(a[2], std::ios::binary);
   if (!out) die(std::string("cannot write ") + a[2]);
   for (auto& e : entries) {
-    auto t = tok(v, e, false);
+    auto t = tok(v, e, false, parse_special);
     for (size_t i = 0; i < t.size(); ++i) out << (i ? " " : "") << t[i];
     out << "\n";
   }
@@ -89,7 +90,7 @@ static int cmd_logits(char** a) {
   if (n_gen < 0) die("bad n_gen");
   llama_model* m = load(a[0]);
   const llama_vocab* v = llama_model_get_vocab(m);
-  std::vector<llama_token> toks = tok(v, read_file(a[1]), true);
+  std::vector<llama_token> toks = tok(v, read_file(a[1]), true, true);
   const int n_prompt = int(toks.size());
   if (n_prompt == 0) die("empty prompt");
   const int n_vocab = llama_vocab_n_tokens(v);
@@ -165,10 +166,13 @@ static int cmd_logits(char** a) {
 }
 
 int main(int argc, char** argv) {
-  if (argc == 5 && std::string(argv[1]) == "tokenize") return cmd_tokenize(argv + 2);
+  if (argc == 5 && std::string(argv[1]) == "tokenize") return cmd_tokenize(argv + 2, false);
+  if (argc == 6 && std::string(argv[1]) == "tokenize" && std::string(argv[2]) == "--special")
+    return cmd_tokenize(argv + 3, true);
   if (argc == 7 && std::string(argv[1]) == "logits" && std::string(argv[6]) == "--kv-f32") g_kv_f32 = true, argc = 6;
   if (argc == 4 && std::string(argv[1]) == "eog") return cmd_eog(argv + 2);
   if (argc == 2 && std::string(argv[1]) == "sysinfo") return std::puts(llama_print_system_info()), 0;
   if (argc == 6 && std::string(argv[1]) == "logits") return cmd_logits(argv + 2);
-  die("usage: llama_ref eog <model> <out> | tokenize <model> <corpus> <out> | logits <model> <prompt> <n_gen> <out> [--kv-f32] | sysinfo");
+  die("usage: llama_ref eog <model> <out> | tokenize [--special] <model> <corpus> <out> | "
+      "logits <model> <prompt> <n_gen> <out> [--kv-f32] | sysinfo");
 }

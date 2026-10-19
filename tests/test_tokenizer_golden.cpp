@@ -93,3 +93,38 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
   CHECK(ran == expected);
   if (ran == 0) SKIP("no model with eog golden");
 }
+
+TEST_CASE("special-parsed tokenize matches llama.cpp golden", "[e2e][tokenizer][special]") {
+  struct M { const char *file, *dir; };
+  const M models[] = {{"qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16"},
+                      {"qwen2.5-0.5b-instruct-q8_0.gguf", "qwen2.5-0.5b-q8_0"},
+                      {"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-q4_0"},
+                      {"llama-3.2-1b-instruct-f16.gguf", "llama32-1b-f16"},
+                      {"tinyllama-1.1b-chat-f16.gguf", "tinyllama-1.1b-f16"}};
+  const std::string root = NIBBLE_SOURCE_DIR;
+  const auto corpus = read_corpus(root + "/tests/tokenizer/corpus_special.txt");
+  REQUIRE(corpus.size() == 5);
+  int ran = 0, expected = 0;
+  for (const M& m : models) {
+    const std::string gguf = root + "/models/" + m.file;
+    const std::string gold = root + "/models/golden/" + m.dir + "/tokenize_special.txt";
+    if (!std::filesystem::exists(gguf) || !std::filesystem::exists(gold)) continue;
+    ++expected;
+    auto file = nibble::gguf::File::open(gguf);
+    auto tok = nibble::tok::Tokenizer::from_gguf(file);
+    std::ifstream gf(gold);
+    std::string line;
+    for (size_t i = 0; i < corpus.size(); ++i) {
+      REQUIRE(std::getline(gf, line));
+      std::vector<int32_t> want;
+      std::istringstream ls(line);
+      for (int32_t x; ls >> x;) want.push_back(x);
+      auto got = tok.encode(corpus[i], true);
+      INFO(m.dir << " entry " << i << "\nwant: " << join(want) << "\ngot:  " << join(got));
+      CHECK(got == want);
+    }
+    ++ran;
+  }
+  CHECK(ran == expected);
+  if (ran == 0) SKIP("no model with tokenize_special golden");
+}

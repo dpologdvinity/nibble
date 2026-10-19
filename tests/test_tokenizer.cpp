@@ -92,6 +92,20 @@ TEST_CASE("eog by name", "[tokenizer]") {
   CHECK_FALSE(t.is_eog(265));
 }
 
+TEST_CASE("eog name hits are promoted to control", "[tokenizer]") {
+  TinyTokOpts o;
+  o.extra = {"</s>", "<|fim_pad|>", "plain"};  // 261..263, all Normal-typed in the GGUF
+  auto t = make(o);
+  // llama-vocab.cpp:3056-3060 ORs CONTROL in, so special parsing matches the whole text ...
+  CHECK(t.encode("a</s>b", true) == Ids{'a', 261, 'b'});
+  CHECK(t.encode("x<|fim_pad|>", true) == Ids{'x', 262});
+  // ... and token_to_piece(special=false) returns nothing for CONTROL (llama-vocab.cpp:3827-3828).
+  CHECK(t.decode_token(261) == "");
+  CHECK(t.decode_token(262) == "");
+  CHECK(t.decode_token(263) == "plain");
+  CHECK(t.encode("a</s>b", false).size() > 3);  // not special-parsed without special
+}
+
 // ---- SentencePiece ("llama") ----
 static const std::string SP = "\xE2\x96\x81";  // U+2581
 

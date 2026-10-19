@@ -31,11 +31,16 @@ struct BigramCmp {
   }
 };
 
-
 // Builds llama.cpp's special_eog_ids (llama-vocab.cpp:2993-3173). Names are matched against the
-// LAST id carrying that text (token_to_id[word] = i, :2651). Not mirrored: attribute rewrites
-// (CONTROL/NORMAL overrides) and the FIM pre/suf/mid ids, which never enter the EOG set.
-std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>& tokens, int32_t eos) {
+// LAST id carrying that text (token_to_id[word] = i, :2651). Also mirrors the attribute rewrites
+// that touch EOG ids: a FIM pad/rep/sep id found by name (:2932-2981) and every EOG-name hit
+// (:3056-3060) gain CONTROL; FIM ids from keys and the eos/eot/eom ids (:3015-3025, :3086-3099)
+// are not promoted; a dropped "<|end|>" becomes USER_DEFINED (:3138-3139) and a dropped "</s>"
+// NORMAL (:3169-3170). Not mirrored: the eot/eom name searches (:2828-2864), whose names are all
+// in the EOG list below; the CONTROL promotion of FIM pre/suf/mid name hits (:2866-2930); the
+// gpt-oss USER_DEFINED override (:3073-3083).
+std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>& tokens,
+                            std::vector<TokenType>& types, int32_t eos) {
   const int32_t n = static_cast<int32_t>(tokens.size());
   std::unordered_map<std::string_view, int32_t> by_text;
   for (int32_t k = 0; k < n; ++k) by_text[tokens[static_cast<size_t>(k)]] = k;
@@ -55,10 +60,14 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
     const int64_t* i = v ? std::get_if<int64_t>(v) : nullptr;
     return i && *i >= 0 && *i < n ? static_cast<int32_t>(*i) : -1;
   };
+  std::set<int32_t> promote;  // ids llama.cpp ORs LLAMA_TOKEN_ATTR_CONTROL into
   // FIM pad/rep/sep: key, else first name match (:2932-2975; names from :2909-2973).
   auto fim = [&](const char* key, std::initializer_list<const char*> names) {
     int32_t id = key_id(key);
-    return id >= 0 ? id : named(names);
+    if (id >= 0) return id;
+    id = named(names);
+    if (id >= 0) promote.insert(id);
+    return id;
   };
   std::set<int32_t> eog;
   auto add = [&](int32_t id) { if (id >= 0) eog.insert(id); };
@@ -75,9 +84,9 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
                                       "[e~[", "<|ifm|im_end|>"};
   for (const char* nm : names) {
     auto it = by_text.find(nm);
-    if (it != by_text.end()) eog.insert(it->second);
+    if (it != by_text.end()) eog.insert(it->second), promote.insert(it->second);
   }
-  // eos / eot / eom ids always join the set (:3079-3093).
+  // eos / eot / eom ids always join the set (:3086-3099).
   add(eos);
   add(key_id("tokenizer.ggml.eot_token_id"));
   add(key_id("tokenizer.ggml.eom_token_id"));
@@ -89,11 +98,17 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
     auto it = by_text.find(nm);
     return it != by_text.end() && eog.count(it->second) > 0;
   };
+  for (int32_t id : promote) types[static_cast<size_t>(id)] = TokenType::Control;
   if (in_eog("<|end|>") && ((in_eog("<|return|>") && (in_eog("<|call|>") || in_eog("<|calls|>"))) ||
-                            ((in_eog("<|call|>") || in_eog("<|calls|>")) && in_eog("<|flush|>"))))
+                            ((in_eog("<|call|>") || in_eog("<|calls|>")) && in_eog("<|flush|>")))) {
     eog.erase(by_text.at("<|end|>"));
-  if (in_eog("</s>") && (by_text.count("<rfl:parameter name=\"") || in_eog("<|tool_response>") || in_eog("<|plamo:eos|>")))
+    types[static_cast<size_t>(by_text.at("<|end|>"))] = TokenType::UserDefined;
+  }
+  if (in_eog("</s>") && (by_text.count("<rfl:parameter name=\"") || in_eog("<|tool_response>") ||
+                         in_eog("<|plamo:eos|>"))) {
     eog.erase(by_text.at("</s>"));
+    types[static_cast<size_t>(by_text.at("</s>"))] = TokenType::Normal;
+  }
   std::vector<bool> out(tokens.size(), false);
   for (int32_t id : eog) out[static_cast<size_t>(id)] = true;
   return out;
@@ -180,7 +195,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     t.add_bos_ = *b;
   }
 
-  t.eog_ = build_eog(f, t.tokens_, t.eos_);
+  // Before specials_: promoted EOG ids are then special-parsed and decode to "" like llama.cpp.
+  t.eog_ = build_eog(f, t.tokens_, t.types_, t.eos_);
 
   for (size_t k = 0; k < t.tokens_.size(); ++k) {
     auto ty = t.types_[k];

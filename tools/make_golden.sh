@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Usage: tools/make_golden.sh [--eog-only] <model-name>
-#   --eog-only: write only eog.txt (vocab-only load, default build); leaves tokenize/logits goldens alone.   (model: models/<model-name>.gguf-resolved below)
+# Usage: tools/make_golden.sh [--eog-only | --special-only] <model-name>
+#   --eog-only: write only eog.txt (vocab-only load, default build); leaves tokenize/logits goldens alone.
+#   --special-only: write only tokenize_special.txt (corpus_special.txt with parse_special, no bos).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EOG_ONLY=0
+SPECIAL_ONLY=0
 [ "${1:-}" = "--eog-only" ] && { EOG_ONLY=1; shift; }
-NAME="${1:?usage: make_golden.sh [--eog-only] <model-name>}"
+[ "${1:-}" = "--special-only" ] && { SPECIAL_ONLY=1; shift; }
+NAME="${1:?usage: make_golden.sh [--eog-only | --special-only] <model-name>}"
 case "$NAME" in
   qwen2.5-0.5b-f16) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-fp16.gguf" ;;
   qwen2.5-0.5b-q8_0) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-q8_0.gguf" ;;
@@ -18,6 +21,12 @@ esac
 if [ "$EOG_ONLY" = 1 ]; then
   mkdir -p "$ROOT/models/golden/$NAME"
   "$ROOT/third_party/build/bin/llama_ref" eog "$GGUF" "$ROOT/models/golden/$NAME/eog.txt"
+  exit 0
+fi
+if [ "$SPECIAL_ONLY" = 1 ]; then
+  mkdir -p "$ROOT/models/golden/$NAME"
+  "$ROOT/third_party/build/bin/llama_ref" tokenize --special "$GGUF" "$ROOT/tests/tokenizer/corpus_special.txt" \
+    "$ROOT/models/golden/$NAME/tokenize_special.txt"
   exit 0
 fi
 # F16 golden: default (native AVX2) build. Quantized goldens: the generic build with an F32 KV cache,
@@ -34,6 +43,7 @@ OUT="$ROOT/models/golden/$NAME"
 mkdir -p "$OUT"
 "$REF" tokenize "$GGUF" "$ROOT/tests/tokenizer/corpus.txt" "$OUT/tokenize.txt"
 "$REF" eog "$GGUF" "$OUT/eog.txt"
+"$REF" tokenize --special "$GGUF" "$ROOT/tests/tokenizer/corpus_special.txt" "$OUT/tokenize_special.txt"
 CHAT=chat   # chat prompt per model family; the output is always chat.bin
 case "$NAME" in
   llama32-1b-*) CHAT=chat_llama3 ;;
