@@ -127,10 +127,9 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
   const Tensor& w0 = *ws[0];
   int64_t total = 0;
   for (size_t i = 0; i < ws.size(); ++i) {
-    NIBBLE_DCHECK(ys[i] && ws[i]->data && ws[i]->ne[0] == w0.ne[0], "matmul: y=%p w=%p ne0=%lld vs %lld",
-                  static_cast<void*>(ys[i]), ws[i]->data, static_cast<long long>(ws[i]->ne[0]),
-                  static_cast<long long>(w0.ne[0]));
-    if (ws[i]->type != w0.type) return Backend::matmul_multi(ws, x, ys, n);  // one matmul per weight
+    NIBBLE_DCHECK(ys[i] && ws[i]->data, "matmul: y=%p w=%p", static_cast<void*>(ys[i]), ws[i]->data);
+    if (ws[i]->type != w0.type || ws[i]->ne[0] != w0.ne[0])
+      return Backend::matmul_multi(ws, x, ys, n);  // one matmul per weight
     total += ws[i]->rows();
   }
   // Unsupported dtype throws here on the calling thread (pool tasks must not throw);

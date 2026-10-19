@@ -101,7 +101,8 @@ static inline __m256 round_half_away_ps(__m256 v) {
 // e^x per lane: max relative error vs exp about 1e-7 over [-88, 88] (measured in test_ops.cpp), one
 // rounding into the subnormal range, 0 below about -104, inf above ln(FLT_MAX); NaN stays NaN.
 // x = n*ln2 + r (Cody-Waite, |r| <= ~0.35), e^r - 1 by degree-7 Taylor, then fma(t, 2^n, 2^n) rounds
-// once even when 2^n is subnormal (n >= -149 is exact as a float). Only explicit fma/mul: contraction-safe.
+// once even when 2^n is subnormal (n >= -149 is exact as a float). Its last op is a mul, so a translation unit
+// that adds exp_ps results (a softmax sum) must build with -ffp-contract=off or g++ may fuse the two.
 static inline __m256 exp_ps(__m256 x) {
   x = _mm256_max_ps(_mm256_set1_ps(-104.0f), _mm256_min_ps(_mm256_set1_ps(89.0f), x));  // NaN in x passes through
   const __m256 fn = _mm256_round_ps(_mm256_mul_ps(x, _mm256_set1_ps(1.44269504f)),

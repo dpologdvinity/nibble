@@ -29,7 +29,7 @@ class CpuBackend final : public Backend {
   void embed(const Tensor& table, std::span<const int32_t> ids, float* out) override;
   void matmul(const Tensor& w, const float* x, float* y, int64_t n) override;
   // Quantizes (and packs) x once and runs all weights in one parallel_for over their combined rows;
-  // mixed dtypes fall back to one matmul per weight.
+  // mixed dtypes or input widths fall back to one matmul per weight.
   void matmul_multi(std::span<const Tensor* const> ws, const float* x, std::span<float* const> ys, int64_t n) override;
   void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) override;
   void add(float* x, const float* y, int64_t count) override;

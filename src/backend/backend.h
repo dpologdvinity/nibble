@@ -43,7 +43,7 @@ class Backend {
   virtual void read(float* host_dst, const float* src, int64_t n) = 0;
   virtual void embed(const Tensor& table, std::span<const int32_t> ids, float* out) = 0;  // out[n, ne0]
   virtual void matmul(const Tensor& w, const float* x, float* y, int64_t n) = 0;  // y[n, w.ne1] = x[n, w.ne0] . W^T
-  // ys[i] = matmul(*ws[i], x, n) for weights sharing one input (same ne0); results equal separate calls.
+  // ys[i] = matmul(*ws[i], x, n) for weights sharing one input; results equal separate calls.
   virtual void matmul_multi(std::span<const Tensor* const> ws, const float* x, std::span<float* const> ys, int64_t n) {
     for (size_t i = 0; i < ws.size(); ++i) matmul(*ws[i], x, ys[i], n);
   }
