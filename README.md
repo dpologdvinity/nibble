@@ -167,7 +167,9 @@ than the load average shows; clock speed, temperature and background work are no
 in it. Two single-session runs at t = 8, both with load average below 2, put llama.cpp
 at 1.31× nibble's Qwen2.5-0.5B Q4_0 decode speed and then at 0.69× an hour later
 (the first session alternated which tool ran first per (model, t), which put nibble
-first in every t = 8 pair; the second ran llama.cpp first). So the comparison uses
+first in every t = 8 pair; the second ran llama.cpp first). The second session's rows
+are kept, unused by the charts and tables, in `bench/results/session2-discarded.jsonl`.
+So the comparison uses
 ratios from paired blocks, which cancel slow drift, and absolute tok/s are only
 shown per block or per session.
 
@@ -233,7 +235,7 @@ Thread sweep, Qwen2.5-0.5B Q4_0, tok/s: single session (2026-10-19 11:57–13:00
 
 ![llama.cpp ÷ nibble ratios](docs/bench/vs-llamacpp.svg)
 
-**Roofline** (single session, the one the thread sweep comes from). Decode reads every
+**Roofline** (single session, nibble `2ca56ef`, the one the thread sweep comes from). Decode reads every
 weight once per token, so `model bytes × tg128 tok/s` is the weight-read bandwidth
 it achieves. The GGUF file size stands in for the weight bytes; for TinyLlama that
 includes an untied `token_embd` (~131 MB) that decode does not read in full.
@@ -241,7 +243,9 @@ includes an untied `token_embd` (~131 MB) that decode does not read in full.
 highest probe across that session's models at the same thread count. That probe is
 a plain streaming sum and does not reach the machine's peak. In that session Q8_0
 and F16 Qwen decode slightly exceed it (106% and 107%), so they are memory-bound.
-Q4_0, at 36%, is still compute- or overhead-bound.
+Q4_0 reached 36% there (40.8 tok/s at t = 8). The ABBA blocks measured about 88.8
+tok/s for it at t = 8, so that session's figure likely understates how close Q4_0
+decode gets to the memory bound.
 
 ![weight-read bandwidth](docs/bench/roofline.svg)
 

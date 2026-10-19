@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="440" viewBox="0 0 900 440">
 <rect width="900" height="440" fill="white"/>
-<text x="450.0" y="22.0" font-family="sans-serif" font-size="15" text-anchor="middle" font-weight="bold" fill="#222">Decode weight-read bandwidth, % of membw probe (single session, 2026-10-19 11:57–13:00 UTC)</text>
+<text x="450.0" y="22.0" font-family="sans-serif" font-size="15" text-anchor="middle" font-weight="bold" fill="#222">Decode weight-read BW, % of membw probe (single session, 2026-10-19 11:57–13:00 UTC, nibble 2ca56ef)</text>
 <line x1="60.0" y1="350.0" x2="860.0" y2="350.0" stroke="#ccc" stroke-width="1"/>
 <text x="55.0" y="354.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0</text>
 <line x1="60.0" y1="290.0" x2="860.0" y2="290.0" stroke="#ccc" stroke-width="1"/>
