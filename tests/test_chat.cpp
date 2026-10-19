@@ -468,6 +468,22 @@ TEST_CASE("chat: llama3 token sequences", "[chat]") {
   CHECK(s.n_past() == past + s.n_prompt_tokens() + s.n_generated());
 }
 
+TEST_CASE("chat: llama3 trims system and user text like the template's |trim", "[chat]") {
+  auto text = [](const std::vector<PromptPart>& v) {
+    std::string o;
+    for (const auto& p : v) o += std::string(p.text) + (p.special ? "|S|" : "|P|");
+    return o;
+  };
+  CHECK(text(chat_turn(ChatFormat::Llama3, "\t be brief \n", " \r\nhello\v\f ", true)) ==
+        text(chat_turn(ChatFormat::Llama3, "be brief", "hello", true)));
+  CHECK(text(chat_turn(ChatFormat::Llama3, "", "  more\n", false)) == text(chat_turn(ChatFormat::Llama3, "", "more", false)));
+  CHECK(text(chat_turn(ChatFormat::Llama3, " ", " \n ", true)) == text(chat_turn(ChatFormat::Llama3, "", "", true)));
+  CHECK(chat_turn(ChatFormat::Llama3, "", " a  b\n", false)[1].text == "a  b");  // inner whitespace kept
+  // ChatML and Zephyr templates do not trim.
+  CHECK(text(chat_turn(ChatFormat::ChatML, " s ", " u ", true)) != text(chat_turn(ChatFormat::ChatML, "s", "u", true)));
+  CHECK(text(chat_turn(ChatFormat::Zephyr, " s ", " u ", true)) != text(chat_turn(ChatFormat::Zephyr, "s", "u", true)));
+}
+
 TEST_CASE("chat: llama3 default system is empty and user text cannot inject", "[chat]") {
   ChatFixture fx(llama_opts(kLlama3Tmpl, false));
   const int32_t eot = fx.tk.find("<|eot_id|>");

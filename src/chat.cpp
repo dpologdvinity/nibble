@@ -13,6 +13,15 @@ ChatFormat chat_format_for(std::string_view arch, std::string_view tmpl) {
   throw Error("no chat template for architecture " + escape_control(arch));
 }
 
+namespace {
+// Jinja |trim on ASCII whitespace; the Llama 3.2 template trims system and user content.
+std::string_view trim(std::string_view s) {
+  const size_t b = s.find_first_not_of(" \t\n\r\f\v");
+  if (b == std::string_view::npos) return {};
+  return s.substr(b, s.find_last_not_of(" \t\n\r\f\v") - b + 1);
+}
+}  // namespace
+
 std::vector<PromptPart> chat_turn(ChatFormat f, std::string_view system, std::string_view user, bool first) {
   switch (f) {
     case ChatFormat::ChatML:
@@ -22,20 +31,28 @@ std::vector<PromptPart> chat_turn(ChatFormat f, std::string_view system, std::st
                 {"<|im_end|>\n<|im_start|>user\n", true},
                 {user, false},
                 {"<|im_end|>\n<|im_start|>assistant\n", true}};
-      return {{"<|im_end|>\n<|im_start|>user\n", true}, {user, false}, {"<|im_end|>\n<|im_start|>assistant\n", true}};
+      return {{"<|im_end|>\n<|im_start|>user\n", true},
+              {user, false},
+              {"<|im_end|>\n<|im_start|>assistant\n", true}};
     case ChatFormat::Llama3:
       if (first)
-        return {{"<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n", true},
-                {system, false},
+        return {{"<|start_header_id|>system<|end_header_id|>\n\n"
+                 "Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n",
+                 true},
+                {trim(system), false},
                 {"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n", true},
-                {user, false},
+                {trim(user), false},
                 {"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", true}};
       return {{"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n", true},
-              {user, false},
+              {trim(user), false},
               {"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", true}};
     case ChatFormat::Zephyr:
       if (first && !system.empty())
-        return {{"<|system|>\n", true}, {system, false}, {"</s>\n<|user|>\n", true}, {user, false}, {"</s>\n<|assistant|>\n", true}};
+        return {{"<|system|>\n", true},
+                {system, false},
+                {"</s>\n<|user|>\n", true},
+                {user, false},
+                {"</s>\n<|assistant|>\n", true}};
       if (first) return {{"<|user|>\n", true}, {user, false}, {"</s>\n<|assistant|>\n", true}};
       return {{"</s>\n<|user|>\n", true}, {user, false}, {"</s>\n<|assistant|>\n", true}};
   }
@@ -44,7 +61,9 @@ std::vector<PromptPart> chat_turn(ChatFormat f, std::string_view system, std::st
 
 namespace {
 // Only Qwen has a default system prompt; the Llama 3 and Zephyr ones are empty.
-std::string default_system(ChatFormat f) { return f == ChatFormat::ChatML ? std::string(kQwenDefaultSystem) : std::string(); }
+std::string default_system(ChatFormat f) {
+  return f == ChatFormat::ChatML ? std::string(kQwenDefaultSystem) : std::string();
+}
 }  // namespace
 
 Chat::Chat(Session& s, std::string system_prompt) {
@@ -60,7 +79,8 @@ StopReason Chat::send(std::string_view user, const GenParams& gp,
                       const std::function<bool(std::string_view)>& on_token) {
   if (!impl_) throw Error("use of moved-from Chat");
   Impl& c = *impl_;
-  if (c.started && (c.session.n_past() != c.expected_past || c.session.generations() != c.expected_gens)) throw Error("chat context lost");
+  if (c.started && (c.session.n_past() != c.expected_past || c.session.generations() != c.expected_gens))
+    throw Error("chat context lost");
   if (c.full) return StopReason::ContextFull;
   // Records how this send left the cache, on return or throw. The prompt counts
   // as sent once prefilled (max_tokens <= 0 and early ContextFull skip that). A
