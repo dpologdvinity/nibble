@@ -67,6 +67,7 @@ static inline __m256i mul_sum_i8(__m256i x, __m256i y) {
 // roundf on each lane (round half away from zero), exact for every finite float: trunc(v) is exact,
 // v - trunc(v) is exact (same binade or t == 0), so adding sign(v) where |v - trunc(v)| >= 0.5 is roundf
 // by definition. _mm256_round_ps(_MM_FROUND_TO_NEAREST_INT) alone would round ties to even.
+// Callers passing a product must build with -ffp-contract=off: a fused x*id - t breaks the exactness.
 static inline __m256 round_half_away_ps(__m256 v) {
   const __m256 sign = _mm256_set1_ps(-0.0f);
   const __m256 t = _mm256_round_ps(v, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
