@@ -266,7 +266,7 @@ def ratio_chart(blocks):
     panels = [TG, PP]
     pw = (w - 80) / len(panels)
     svg = Svg(w, h, "llama.cpp ÷ nibble tok/s, paired ABBA blocks (median, bar = min–max over blocks)")
-    hi = nice_max(max([r for bs in blocks.values() for r, *_ in bs] + [1.5]) * 1.1)
+    hi = math.ceil(max([r for bs in blocks.values() for r, *_ in bs] + [1.5]) * 1.1 * 2) / 2  # 0.5 steps
     y_of = lambda v: top + (h - top - bottom) * (1 - v / hi)
     for pi, test in enumerate(panels):
         x0 = 60 + pi * pw
