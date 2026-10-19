@@ -8,8 +8,7 @@ pthreads.
 
 ## Status
 
-Milestones M0–M5 are done and M6 is implemented, with its final verification
-pending: Qwen2.5 (F16, Q8_0, Q4_0), Llama 3.2 1B and TinyLlama
+Milestones M0–M6 are done: Qwen2.5 (F16, Q8_0, Q4_0), Llama 3.2 1B and TinyLlama
 1.1B (F16) run on the CPU with AVX2/AVX-VNNI kernels (scalar twins kept as the
 reference) on a thread pool, with a sampler and a multi-turn `nibble chat`. See
 [Performance](#performance) for numbers against llama.cpp.
@@ -270,9 +269,8 @@ been measured on native Linux. `nibble bench -t` still defaults to 1.
 
 ## Roadmap
 
-Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama. Implemented,
-verification pending: M6 SIMD kernels, threading and benchmarks. Next: Phase 2:
-CUDA backend.
+Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama · M6 SIMD
+kernels, threading and benchmarks. Next: Phase 2: CUDA backend.
 
 ## License
 
