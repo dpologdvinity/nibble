@@ -152,7 +152,7 @@ B rand_block(std::mt19937& g, bool unit_scale) {
   for (auto& q : b.qs) q = static_cast<std::remove_reference_t<decltype(q)>>(g());
   return b;
 }
-BlockQ8_0 rand_act(std::mt19937& g, bool unit_scale) {  // activations: never -128, like quantize_row_q8_0 for normal id
+BlockQ8_0 rand_act(std::mt19937& g, bool unit_scale) {  // activations: never -128, like quantize_row_q8_0 for normal d
   BlockQ8_0 b = rand_block<BlockQ8_0>(g, unit_scale);
   for (auto& q : b.qs) if (q == -128) q = -127;
   return b;
@@ -257,27 +257,29 @@ TEST_CASE("simd q4_0/q8_0 dots equal scalar bitwise", "[simd][quant]") {
     }
 }
 
-TEST_CASE("tiny-amax activation blocks contribute exactly 0 to scalar and simd dots", "[simd][quant]") {
-  // amax 1e-40: id = 1/d overflows, qs are unspecified (scalar UB), but fp16(d) == 0 so the dot is 0.
+TEST_CASE("activation blocks with fp16 scale 0 contribute exactly 0 to scalar and simd dots", "[simd][quant]") {
+  // Blocks from rows with tiny amax have fp16(d) == 0; in-contract qs (no -128) must still dot to exactly 0.
   std::mt19937 g(5);
   const int64_t nb = 3;
-  std::vector<float> x(nb * 32);
-  for (auto& v : x) v = std::uniform_real_distribution<float>(-1e-40f, 1e-40f)(g);
-  x[0] = 1e-40f;
-  std::vector<BlockQ8_0> as(nb), av(nb);
-  simd::quantize_row_q8_0(x.data(), av.data(), nb * 32);
-  for (auto& b : av) REQUIRE(fp16_to_fp32(b.d) == 0.f);
-  as = av;  // scalar quantizer is UB here; reuse the simd blocks (same d) for the scalar dot
   std::vector<BlockQ4_0> w4;
-  std::vector<BlockQ8_0> w8;
+  std::vector<BlockQ8_0> w8, a;
   for (int64_t b = 0; b < nb; ++b) {
     w4.push_back(rand_block<BlockQ4_0>(g, true));
     w8.push_back(rand_block<BlockQ8_0>(g, true));
+    a.push_back(rand_act(g, true));
+    a.back().d = fp32_to_fp16(0.0f);
   }
-  REQUIRE(simd::dot_q8_0_q8_0(w8.data(), av.data(), nb) == 0.f);
-  REQUIRE(dot_q8_0_q8_0(w8.data(), as.data(), nb) == 0.f);
-  REQUIRE(simd::dot_q4_0_q8_0(w4.data(), av.data(), nb) == 0.f);
-  REQUIRE(dot_q4_0_q8_0(w4.data(), as.data(), nb) == 0.f);
+  REQUIRE(simd::dot_q8_0_q8_0(w8.data(), a.data(), nb) == 0.f);
+  REQUIRE(dot_q8_0_q8_0(w8.data(), a.data(), nb) == 0.f);
+  REQUIRE(simd::dot_q4_0_q8_0(w4.data(), a.data(), nb) == 0.f);
+  REQUIRE(dot_q4_0_q8_0(w4.data(), a.data(), nb) == 0.f);
+
+  // The documented d-bit equality holds for an amax = 1e-40 row (qs are not compared: scalar is UB there).
+  std::vector<float> x(32, 1e-40f);
+  BlockQ8_0 qs{}, qv{};
+  nibble::quantize_row_q8_0(x.data(), &qs, 32);
+  simd::quantize_row_q8_0(x.data(), &qv, 32);
+  REQUIRE(qs.d == qv.d);
 }
 
 TEST_CASE("simd dots give exact integer sums on unit-scale extreme blocks", "[simd][quant]") {

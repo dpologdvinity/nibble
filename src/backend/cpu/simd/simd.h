@@ -50,7 +50,7 @@ static inline __m256 load_f16x8(const uint16_t* p) {
 // int8 dot per group of 4 consecutive bytes: lane k = sum of x[i]*y[i] for i in [4k, 4k+4), as 8 int32 lanes.
 // Sign trick after llama.cpp's mul_sum_i8_pairs_float (ggml-cpu/arch/x86/quants.c, MIT).
 // Exact unless some y[i] == -128 where x[i] < 0 (sign(-128) wraps). Q4_0 passes the activation as x (y in
-// [-8,7]: always exact); Q8_0 passes it as y, which is safe because quantize_row_q8_0 never emits -128 when id is finite (amax >~ 1.5e-36; below that the block's fp16 scale is 0).
+// [-8,7]: always exact); Q8_0 passes it as y, which is safe because quantize_row_q8_0 never emits -128 when d = amax/127 is a normal float (amax >~ 1.5e-36).
 static inline __m256i mul_sum_i8_maddubs(__m256i x, __m256i y) {
   // maddubs pair sums are at most 2*128*127 = 32512 in magnitude: no int16 saturation.
   return _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_sign_epi8(x, x), _mm256_sign_epi8(y, x)),
@@ -76,9 +76,10 @@ static inline __m256 round_half_away_ps(__m256 v) {
   return _mm256_add_ps(t, _mm256_or_ps(up, _mm256_and_ps(v, sign)));
 }
 
-// Bit-identical to nibble::quantize_row_q8_0 for finite x whose block amax gives a normal, finite id
-// (amax >~ 1.5e-36); below that scalar is UB (roundf(inf) cast) and the block's fp16 scale is 0, so dot
-// results are unaffected (d bits still match). Throws on bad n.
+// Bit-identical to nibble::quantize_row_q8_0 for finite x whose block d = amax/127 is a normal float
+// (amax >~ 1.5e-36). Below that, rounding of tiny d and id can differ from scalar, and below ~3.7e-37 id
+// overflows and scalar is UB (roundf(inf) cast). Such blocks contribute 0 to dots: their fp16 scale is 0.
+// Throws on bad n.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n);
 // Bit-identical to the scalar dots in quant.cpp: exact integer block sums, then the scalar's per-block
 // float products accumulated in the scalar's order. Blocks may be unaligned. For Q8_0, a must not contain
