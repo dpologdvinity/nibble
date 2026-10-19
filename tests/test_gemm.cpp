@@ -71,21 +71,24 @@ TEST_CASE("cpu backend prefill matmul matches scalar for all dtypes", "[gemm][cp
           }
           cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, xq.empty() ? nullptr : xq.data());
           be.matmul(w.t, x.data(), got.data(), n);
+          int64_t mismatches = 0;
           for (int64_t t = 0; t < n; ++t)
             for (int64_t r = 0; r < rows; ++r) {
               const size_t i = size_t(t * rows + r);
               if (quant(type)) {
-                if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]))
-                  FAIL("t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i]);
+                if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]) && mismatches++ == 0)
+                  UNSCOPED_INFO("first mismatch t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i]);
                 continue;
               }
               double mag = 0;
               for (int64_t k = 0; k < in; ++k)
                 mag += std::fabs(double(x[size_t(t * in + k)]) *
                                  (type == DType::F16 ? fp16_to_fp32(w.f16[size_t(r * in + k)]) : w.f32[size_t(r * in + k)]));
-              if (!(std::fabs(double(got[i]) - want[i]) <= 1e-5 * mag))
-                FAIL("t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i] << " mag=" << mag);
+              if (!(std::fabs(double(got[i]) - want[i]) <= 1e-5 * mag) && mismatches++ == 0)
+                UNSCOPED_INFO("first mismatch t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i]
+                                                  << " mag=" << mag);
             }
+          CHECK(mismatches == 0);
         }
 }
 
@@ -103,9 +106,11 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
   }
   // Shift the weight one element / byte off its allocation's alignment.
   const size_t bytes = size_t(w.t.row_bytes() * rows);
-  std::vector<uint8_t> shifted(bytes + 1);
-  std::memcpy(shifted.data() + 1, w.t.data, bytes);
-  w.t.data = shifted.data() + 1;
+  const size_t off = type == DType::F32 ? 4 : type == DType::F16 ? 2 : 1;  // keeps elements aligned
+  std::vector<uint8_t> shifted(bytes + 64 + off);
+  uint8_t* base = shifted.data() + (64 - reinterpret_cast<uintptr_t>(shifted.data()) % 64) % 64;
+  std::memcpy(base + off, w.t.data, bytes);
+  w.t.data = base + off;
   const auto xv = rnd(size_t(n * in) + 1, g);
   const float* x = xv.data() + 1;
   std::vector<BlockQ8_0> xq(size_t(n * in / 32));
@@ -120,9 +125,11 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
     simd::matmul_rows_f(w.t, x, want.data(), n, rb, re);
     simd::gemm_f(w.t, x, got.data(), n, rb, re);
   }
+  int64_t mismatches = 0;
   for (size_t i = 0; i < want.size(); ++i)
-    if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]))
-      FAIL("i=" << i << " want=" << want[i] << " got=" << got[i]);
+    if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]) && mismatches++ == 0)
+      UNSCOPED_INFO("first mismatch i=" << i << " want=" << want[i] << " got=" << got[i]);
+  CHECK(mismatches == 0);
 }
 }  // namespace
 
