@@ -1,11 +1,12 @@
 #pragma once
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
-#include <atomic>
+
+#include "util/function_ref.h"
 
 namespace nibble {
 
@@ -19,7 +20,7 @@ class ThreadPool {
 
   int size() const { return n_threads_; }
   void parallel_for(int64_t n, int64_t chunk,
-                    const std::function<void(int64_t begin, int64_t end)>& fn);
+                    FunctionRef<void(int64_t begin, int64_t end)> fn);
 
  private:
   void worker_loop();
@@ -32,7 +33,7 @@ class ThreadPool {
   uint64_t generation_ = 0;
   int pending_ = 0;
   bool stop_ = false;
-  const std::function<void(int64_t, int64_t)>* fn_ = nullptr;
+  const FunctionRef<void(int64_t, int64_t)>* fn_ = nullptr;
   int64_t n_ = 0, chunk_ = 1;
   std::atomic<int64_t> next_{0};
 };

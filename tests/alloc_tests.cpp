@@ -17,7 +17,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include "backend/cpu/cpu_backend.h"
 #include "gguf/gguf.h"
+#include "model/transformer.h"
+#include "thread_pool.h"
 #include "gguf_writer.h"
 #include "nibble/nibble.h"
 #include "sampler.h"
@@ -183,4 +186,51 @@ TEST_CASE("Sampler::sample does not allocate", "[sampler][alloc]") {
   }
   REQUIRE(n == 0);
   REQUIRE(sink >= 0);
+}
+
+namespace {
+struct LoadedTiny {
+  std::vector<uint8_t> bytes;
+  nibble::gguf::File file;
+  nibble::model::LlamaConfig cfg;
+  nibble::model::Weights w;
+  LoadedTiny(std::vector<uint8_t> b, const nibble::Backend& be)
+      : bytes(std::move(b)), file(nibble::gguf::File::parse(bytes)),
+        cfg(nibble::model::LlamaConfig::from_gguf(file)), w(nibble::model::Weights::bind(file, cfg, be)) {}
+};
+}  // namespace
+
+TEST_CASE("Transformer::forward decode and CpuBackend::matmul do not allocate", "[model][alloc]") {
+  using nibble::DType;
+  for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {
+    DYNAMIC_SECTION(nibble::dtype_info(t).name) {
+      nibble::ThreadPool pool(4);
+      nibble::cpu::CpuBackend be(pool);
+      TinyModelOpts mo;
+      mo.quant_dims = true;
+      LoadedTiny m(tiny_model_gguf(3, t, false, 259, mo), be);
+      nibble::model::Transformer tr(m.cfg, m.w, be, 64, 8);
+      std::vector<float> logits(static_cast<size_t>(m.cfg.n_vocab));
+      const std::vector<int32_t> prompt = {1, 50, 257, 3};
+      tr.forward(prompt, 0, logits.data());
+      float* x = be.alloc(8 * m.w.layers[0].w_up.ne[0]);
+      float* y = be.alloc(m.w.layers[0].w_up.rows() * 8);
+      const int32_t one[1] = {7};
+      int64_t n_fwd = -1, n_mm = -1;
+      {
+        Armed a;
+        for (int i = 0; i < 16; ++i) tr.forward(one, 4 + i, logits.data());
+        n_fwd = g_count.load();
+      }
+      {
+        Armed a;
+        be.matmul(m.w.layers[0].w_up, x, y, 8);
+        n_mm = g_count.load();
+      }
+      be.free(x);
+      be.free(y);
+      CHECK(n_fwd == 0);
+      CHECK(n_mm == 0);
+    }
+  }
 }

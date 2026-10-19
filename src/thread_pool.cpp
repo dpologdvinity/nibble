@@ -59,7 +59,7 @@ void ThreadPool::worker_loop() {
 }
 
 void ThreadPool::parallel_for(int64_t n, int64_t chunk,
-                              const std::function<void(int64_t, int64_t)>& fn) {
+                              FunctionRef<void(int64_t, int64_t)> fn) {
   if (n <= 0) return;
   if (chunk < 1) chunk = 1;
   if (workers_.empty()) {

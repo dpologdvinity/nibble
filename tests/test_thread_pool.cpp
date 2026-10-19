@@ -48,3 +48,15 @@ TEST_CASE("1000 back-to-back calls complete") {
 TEST_CASE("non-positive thread count throws") {
   REQUIRE_THROWS_AS(nibble::ThreadPool(0), nibble::Error);
 }
+
+TEST_CASE("more threads than chunks") {
+  nibble::ThreadPool pool(12);
+  for (int k = 0; k < 1000; ++k) {
+    std::atomic<int> hits[2] = {0, 0};
+    pool.parallel_for(2, 16, [&](int64_t b, int64_t e) {
+      for (auto i = b; i < e; ++i) hits[i]++;
+    });
+    REQUIRE(hits[0].load() == 1);
+    REQUIRE(hits[1].load() == 1);
+  }
+}
