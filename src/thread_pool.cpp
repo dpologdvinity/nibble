@@ -1,10 +1,31 @@
 #include "thread_pool.h"
 
 #include <algorithm>
+#include <chrono>
+
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 
 #include "nibble/error.h"
 
 namespace nibble {
+
+namespace {
+
+// How long a worker polls for the next call before sleeping. A decode step issues ~200 calls with
+// short serial gaps between them; this covers the gaps but not the time between tokens.
+constexpr auto kSpin = std::chrono::microseconds(50);
+
+inline void cpu_relax() {
+#if defined(__x86_64__) || defined(__i386__)
+  _mm_pause();
+#else
+  std::this_thread::yield();
+#endif
+}
+
+}  // namespace
 
 ThreadPool::ThreadPool(int n_threads) : n_threads_(n_threads) {
   if (n_threads <= 0) throw Error("ThreadPool: n_threads must be positive, got " + std::to_string(n_threads));
@@ -14,47 +35,53 @@ ThreadPool::ThreadPool(int n_threads) : n_threads_(n_threads) {
     workers_.reserve(static_cast<size_t>(n_threads - 1));
     for (int i = 1; i < n_threads; ++i) workers_.emplace_back([this] { worker_loop(); });
   } catch (const std::exception& e) {
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      stop_ = true;
-    }
-    cv_work_.notify_all();
+    stop_.store(true);
+    publish();
     for (auto& t : workers_) t.join();
     throw Error("ThreadPool: cannot create " + std::to_string(n_threads) + " threads: " + e.what());
   }
 }
 
 ThreadPool::~ThreadPool() {
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    stop_ = true;
-  }
-  cv_work_.notify_all();
+  stop_.store(true);
+  publish();
   for (auto& t : workers_) t.join();
+}
+
+void ThreadPool::publish() {
+  generation_.fetch_add(1);  // seq_cst: pairs with the sleeper's sleeping_ increment (Dekker)
+  if (sleeping_.load() > 0) generation_.notify_all();
 }
 
 void ThreadPool::run_chunks() {
   for (;;) {
-    int64_t b = next_.fetch_add(chunk_);
+    int64_t b = next_.fetch_add(chunk_, std::memory_order_relaxed);
     if (b >= n_) break;
     (*fn_)(b, std::min(b + chunk_, n_));
   }
 }
 
 void ThreadPool::worker_loop() {
-  uint64_t seen = 0;
+  uint32_t seen = 0;  // generation_ starts at 0; a worker that starts late must still ack the first call
   for (;;) {
-    {
-      std::unique_lock<std::mutex> lk(mu_);
-      cv_work_.wait(lk, [&] { return stop_ || generation_ != seen; });
-      if (stop_) return;
-      seen = generation_;
+    uint32_t g = generation_.load(std::memory_order_acquire);
+    if (g == seen) {
+      const auto deadline = std::chrono::steady_clock::now() + kSpin;
+      for (int i = 1; g == seen; ++i) {
+        cpu_relax();
+        g = generation_.load(std::memory_order_acquire);
+        if (g == seen && i % 64 == 0 && std::chrono::steady_clock::now() > deadline) {
+          // Either publish() sees our increment and notifies, or we see its bump here.
+          sleeping_.fetch_add(1);
+          while ((g = generation_.load()) == seen) generation_.wait(seen);
+          sleeping_.fetch_sub(1);
+        }
+      }
     }
+    seen = g;
+    if (stop_.load(std::memory_order_acquire)) return;
     run_chunks();
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      if (--pending_ == 0) cv_done_.notify_one();
-    }
+    pending_.fetch_sub(1, std::memory_order_acq_rel);
   }
 }
 
@@ -66,19 +93,17 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
     for (int64_t b = 0; b < n; b += chunk) fn(b, std::min(b + chunk, n));
     return;
   }
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    fn_ = &fn;  // dangles after return; workers read it only after seeing a new generation
-    n_ = n;
-    chunk_ = chunk;
-    next_.store(0);
-    pending_ = static_cast<int>(workers_.size());
-    ++generation_;
-  }
-  cv_work_.notify_all();
+  fn_ = &fn;  // dangles after return; workers read it only between a new generation and their pending_ ack
+  n_ = n;
+  chunk_ = chunk;
+  next_.store(0, std::memory_order_relaxed);
+  pending_.store(static_cast<int>(workers_.size()), std::memory_order_relaxed);
+  publish();  // release: the stores above are visible to any worker that acquires the new generation
   run_chunks();
-  std::unique_lock<std::mutex> lk(mu_);
-  cv_done_.wait(lk, [&] { return pending_ == 0; });
+  // Every worker acks every generation, so none can still touch fn_ or the fields once this returns.
+  for (int i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {
+    if (i % 1024 == 0) std::this_thread::yield(); else cpu_relax();
+  }
 }
 
 }  // namespace nibble

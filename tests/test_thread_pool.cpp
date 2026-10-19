@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <thread>
 #include <vector>
@@ -58,5 +60,37 @@ TEST_CASE("more threads than chunks") {
     });
     REQUIRE(hits[0].load() == 1);
     REQUIRE(hits[1].load() == 1);
+  }
+}
+
+TEST_CASE("idle workers go to sleep within the spin bound") {
+  using clock = std::chrono::steady_clock;
+  nibble::ThreadPool pool(4);
+  std::atomic<int64_t> sum{0};
+  auto add = [&](int64_t b, int64_t e) { sum += e - b; };
+  for (int round = 0; round < 3; ++round) {
+    pool.parallel_for(64, 4, add);
+    // Loose: the spin bound is tens of microseconds; one second absorbs scheduler noise and sanitizers.
+    const auto t0 = clock::now();
+    while (pool.sleeping_workers() < 3 && clock::now() - t0 < std::chrono::seconds(1)) std::this_thread::yield();
+    REQUIRE(pool.sleeping_workers() == 3);
+  }
+  REQUIRE(sum.load() == 3 * 64);  // sleeping workers still wake for each call
+}
+
+// Hidden: run with `nibble_tests "[.dispatch]"`. Reports per-call latency of an empty parallel_for.
+TEST_CASE("dispatch latency", "[.dispatch]") {
+  using clock = std::chrono::steady_clock;
+  for (const int t : {2, 4, 8, 12}) {
+    nibble::ThreadPool pool(t);
+    std::atomic<int64_t> sink{0};
+    auto fn = [&](int64_t b, int64_t e) { sink.fetch_add(e - b, std::memory_order_relaxed); };
+    for (int k = 0; k < 1000; ++k) pool.parallel_for(t, 1, fn);  // warm up
+    constexpr int kCalls = 20000;
+    const auto t0 = clock::now();
+    for (int k = 0; k < kCalls; ++k) pool.parallel_for(t, 1, fn);
+    const double ns = std::chrono::duration<double, std::nano>(clock::now() - t0).count() / kCalls;
+    std::printf("dispatch t=%d: %.0f ns/call\n", t, ns);
+    REQUIRE(sink.load() == int64_t{kCalls + 1000} * t);
   }
 }
