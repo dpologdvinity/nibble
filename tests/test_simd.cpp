@@ -85,7 +85,7 @@ void check_matmul(DType type, int64_t in, int64_t rows, int64_t nt, int64_t rb, 
     };
   };
   test::compare_kernels(run(false), run(true), {n}, {1, 2}, 1e-5f,
-                       1e-6f * std::sqrt(float(in)) * scale * scale);  // atol: the oracle's own sequential-sum error under cancellation
+                       1e-6f * std::sqrt(float(in)) * scale);  // atol: the oracle's own sequential-sum error under cancellation
 }
 }  // namespace
 

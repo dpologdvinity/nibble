@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <cmath>
 #include <cstring>
 #include <random>
@@ -180,3 +181,51 @@ TEST_CASE("cpu backend reserve prevents quantized matmul allocation", "[cpu_back
     REQUIRE(be.quant_scratch_capacity() == cap);
   }
 }
+
+TEST_CASE("cpu backend F16 and F32 embed match the scalar oracle for several ids", "[cpu_backend]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(11);
+  const int64_t d = 21, vocab = 9;  // d not a multiple of 8: exercises the tail
+  auto f = rnd(size_t(d * vocab), g);
+  std::vector<uint16_t> h(f.size());
+  for (size_t i = 0; i < f.size(); ++i) h[i] = fp32_to_fp16(f[i]);
+  std::vector<int32_t> ids = {8, 0, 5, 5, 2};
+  for (DType t : {DType::F16, DType::F32}) {
+    Tensor tab;
+    tab.type = t;
+    tab.n_dims = 2;
+    tab.ne = {d, vocab, 1, 1};
+    tab.data = t == DType::F16 ? static_cast<const void*>(h.data()) : static_cast<const void*>(f.data());
+    std::vector<float> want(ids.size() * size_t(d)), got(want.size());
+    cpu::embed(tab, ids, want.data());
+    be.embed(tab, ids, got.data());
+    CHECK(std::memcmp(want.data(), got.data(), want.size() * sizeof(float)) == 0);
+  }
+}
+
+// Debug/ASan builds abort in the DCHECK at the top of CpuBackend::embed before the throw is reached,
+// so the release-mode range check is only testable under NDEBUG.
+#ifdef NDEBUG
+TEST_CASE("cpu backend embed throws on out-of-range token ids", "[cpu_backend]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(12);
+  const int64_t d = 16, vocab = 4;
+  auto f = rnd(size_t(d * vocab), g);
+  std::vector<uint16_t> h(f.size());
+  for (size_t i = 0; i < f.size(); ++i) h[i] = fp32_to_fp16(f[i]);
+  std::vector<float> out(size_t(2 * d));
+  for (DType t : {DType::F16, DType::F32}) {
+    Tensor tab;
+    tab.type = t;
+    tab.n_dims = 2;
+    tab.ne = {d, vocab, 1, 1};
+    tab.data = t == DType::F16 ? static_cast<const void*>(h.data()) : static_cast<const void*>(f.data());
+    for (int32_t bad : {-1, 4}) {
+      std::vector<int32_t> ids = {1, bad};
+      CHECK_THROWS_WITH(be.embed(tab, ids, out.data()), Catch::Matchers::ContainsSubstring("out of range"));
+    }
+  }
+}
+#endif
