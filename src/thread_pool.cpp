@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
+#include <string>
+#include <system_error>
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -104,6 +107,26 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
   for (unsigned i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {  // unsigned: wraps, no UB
     if (i % 1024 == 0) std::this_thread::yield(); else cpu_relax();
   }
+}
+
+int default_thread_count(const std::filesystem::path& cpu_dir, unsigned hw) {
+  const int fallback = std::max(1, static_cast<int>(hw) * 2 / 3);
+  std::vector<long> caps;
+  std::error_code ec;
+  for (std::filesystem::directory_iterator it(cpu_dir, ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string name = it->path().filename().string();
+    if (name.size() < 4 || name.compare(0, 3, "cpu") != 0 ||
+        name.find_first_not_of("0123456789", 3) != std::string::npos)
+      continue;
+    long c = -1;
+    std::ifstream(it->path() / "cpu_capacity") >> c;
+    if (c <= 0) return fallback;
+    caps.push_back(c);
+  }
+  if (ec || caps.empty()) return fallback;
+  const auto [lo, hi] = std::minmax_element(caps.begin(), caps.end());
+  if (*lo == *hi) return fallback;
+  return static_cast<int>(std::count(caps.begin(), caps.end(), *hi));
 }
 
 }  // namespace nibble

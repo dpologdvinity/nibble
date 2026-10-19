@@ -63,7 +63,7 @@ struct Model::Impl {
         cfg(load_config(file, p)),
         tokenizer(tok::Tokenizer::from_gguf(check_vocab_matches_embd(file))),
         pool(p.n_threads > 0 ? p.n_threads
-                             : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()))),
+                             : default_thread_count("/sys/devices/system/cpu", std::thread::hardware_concurrency())),
         backend(pool),
         weights(model::Weights::bind(file, cfg, backend)),
         n_ctx(p.n_ctx > 0 ? p.n_ctx : std::min<int64_t>(4096, cfg.n_ctx_train)) {

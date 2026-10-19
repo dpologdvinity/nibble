@@ -4,8 +4,13 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 #include "nibble/error.h"
 #include "thread_pool.h"
@@ -107,4 +112,45 @@ TEST_CASE("dispatch latency", "[.dispatch]") {
     std::printf("dispatch t=%d: %.0f ns/call\n", t, ns);
     REQUIRE(sink.load() == int64_t{kCalls + 1000} * t);
   }
+}
+
+namespace {
+
+// Fake /sys/devices/system/cpu: one cpuN/cpu_capacity per entry (-1 = no capacity file).
+struct FakeSysfs {
+  std::filesystem::path root;
+  explicit FakeSysfs(const std::vector<int>& capacity) {
+    static std::atomic<int> n{0};
+    root = std::filesystem::temp_directory_path() /
+           ("nibble_sysfs_" + std::to_string(::getpid()) + "_" + std::to_string(n++));
+    std::filesystem::create_directories(root / "cpufreq");  // non-cpuN entries are ignored
+    for (size_t i = 0; i < capacity.size(); ++i) {
+      const auto dir = root / ("cpu" + std::to_string(i));
+      std::filesystem::create_directories(dir);
+      if (capacity[i] >= 0) std::ofstream(dir / "cpu_capacity") << capacity[i] << "\n";
+    }
+  }
+  ~FakeSysfs() { std::filesystem::remove_all(root); }
+};
+
+}  // namespace
+
+TEST_CASE("default thread count: hybrid capacity picks the fastest CPUs") {
+  FakeSysfs fs({1024, 1024, 1024, 1024, 512, 512, 512, 512, 512, 512, 512, 512});
+  REQUIRE(nibble::default_thread_count(fs.root, 12) == 4);
+}
+
+TEST_CASE("default thread count: uniform or missing capacity falls back to the fraction") {
+  FakeSysfs uniform(std::vector<int>(12, 1024));  // what WSL2 reports on a hybrid host
+  REQUIRE(nibble::default_thread_count(uniform.root, 12) == 8);
+  FakeSysfs missing(std::vector<int>(12, -1));
+  REQUIRE(nibble::default_thread_count(missing.root, 12) == 8);
+  REQUIRE(nibble::default_thread_count("/nonexistent/sysfs", 12) == 8);
+  REQUIRE(nibble::default_thread_count("/nonexistent/sysfs", 1) == 1);
+  REQUIRE(nibble::default_thread_count("/nonexistent/sysfs", 0) == 1);  // hardware_concurrency unknown
+}
+
+TEST_CASE("default thread count: unreadable capacity on one CPU falls back") {
+  FakeSysfs partial({1024, 1024, -1, 512});
+  REQUIRE(nibble::default_thread_count(partial.root, 4) == 2);
 }
