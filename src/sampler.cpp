@@ -1,6 +1,7 @@
 #include "sampler.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -8,7 +9,14 @@
 #include "nibble/error.h"
 
 namespace nibble {
+
 namespace {
+// Shortest round-trip form ("0.5", "nan"), like %g without padding noise.
+std::string fmt(float v) {
+  char buf[32];
+  return std::string(buf, std::to_chars(buf, buf + sizeof buf, v).ptr);
+}
+}  // namespace
 
 uint64_t splitmix64(uint64_t& x) {
   uint64_t z = (x += 0x9E3779B97F4A7C15ULL);
@@ -16,6 +24,18 @@ uint64_t splitmix64(uint64_t& x) {
   z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
   return z ^ (z >> 31);
 }
+
+size_t pick_index(const double* prob, size_t n, double u) {
+  double cum = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    cum += prob[i];
+    if (cum > u) return i;
+  }
+  while (n > 1 && prob[n - 1] <= 0.0) --n;  // rounding fallback: last token that can be drawn
+  return n - 1;
+}
+
+namespace {
 
 // NaN sorts as -inf so orderings stay total.
 float key(float x) { return std::isnan(x) ? -std::numeric_limits<float>::infinity() : x; }
@@ -26,10 +46,10 @@ uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 
 Sampler::Sampler(const SamplerParams& p, int64_t n_vocab) : params_(p), n_vocab_(n_vocab) {
   if (std::isnan(p.temperature) || p.temperature < 0.0f)
-    throw Error("sampler: invalid temperature " + std::to_string(p.temperature) +
+    throw Error("sampler: invalid temperature " + fmt(p.temperature) +
                 " (must be >= 0)");
   if (std::isnan(p.top_p) || p.top_p < 0.0f)
-    throw Error("sampler: invalid top_p " + std::to_string(p.top_p) + " (must be >= 0)");
+    throw Error("sampler: invalid top_p " + fmt(p.top_p) + " (must be >= 0)");
   if (n_vocab <= 0) throw Error("sampler: invalid n_vocab " + std::to_string(n_vocab));
   uint64_t x = p.seed;
   for (auto& s : state_) s = splitmix64(x);
@@ -105,12 +125,7 @@ int32_t Sampler::sample(std::span<const float> logits) {
   }
 
   const double u = static_cast<double>(next() >> 11) * 0x1p-53;
-  double cum = 0.0;
-  for (size_t i = 0; i < keep; ++i) {
-    cum += prob_[i];
-    if (cum > u) return idx[i];
-  }
-  return idx[keep - 1];  // rounding fallback
+  return idx[pick_index(prob_.data(), keep, u)];
 }
 
 }  // namespace nibble

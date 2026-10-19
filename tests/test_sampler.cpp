@@ -114,3 +114,45 @@ TEST_CASE("sampler: NaN and inf logits", "[sampler]") {
   Sampler y({1.0f, 3, 0.5f, 1}, 6);
   for (int i = 0; i < 100; ++i) REQUIRE(y.sample(single) == 3);
 }
+
+TEST_CASE("sampler: validation messages use shortest float form", "[sampler]") {
+  using Catch::Matchers::Equals;
+  CHECK_THROWS_WITH(Sampler({-0.5f, 0, 1.0f, 1}, 3), Equals("sampler: invalid temperature -0.5 (must be >= 0)"));
+  CHECK_THROWS_WITH(Sampler({1.0f, 0, -0.25f, 1}, 3), Equals("sampler: invalid top_p -0.25 (must be >= 0)"));
+  CHECK_THROWS_WITH(Sampler({std::nanf(""), 0, 1.0f, 1}, 3), Equals("sampler: invalid temperature nan (must be >= 0)"));
+}
+
+TEST_CASE("sampler: top-k tie goes to the lower index", "[sampler]") {
+  // Four equal logits, k = 2: only indices 0 and 1 may ever be drawn.
+  Sampler s({1.0f, 2, 1.0f, 5}, 4);
+  std::vector<float> l{3, 3, 3, 3};
+  for (int i = 0; i < 300; ++i) REQUIRE(s.sample(l) < 2);
+}
+
+TEST_CASE("sampler: logits size mismatch throws", "[sampler]") {
+  Sampler s({1.0f, 0, 1.0f, 1}, 4);
+  std::vector<float> l{1, 2, 3};
+  CHECK_THROWS_WITH(s.sample(l), Catch::Matchers::Equals("sampler: got 3 logits, expected 4"));
+}
+
+TEST_CASE("sampler: top_k and top_p combine", "[sampler]") {
+  // p = .5 .3 .1 .1; top_k 3 keeps .5 .3 .1 (renormalised to .556 .333 .111), then
+  // top_p .8 keeps the first two. Index 2 and 3 are never drawn, 0 and 1 both are.
+  auto l = logits_of({0.5, 0.3, 0.1, 0.1});
+  Sampler s({1.0f, 3, 0.8f, 11}, 4);
+  int seen[4] = {};
+  for (int i = 0; i < 2000; ++i) ++seen[s.sample(l)];
+  CHECK(seen[0] > 0);
+  CHECK(seen[1] > 0);
+  CHECK(seen[2] == 0);
+  CHECK(seen[3] == 0);
+}
+
+TEST_CASE("sampler: pick_index falls back to the last token with probability", "[sampler]") {
+  const double p[] = {0.5, 0.5, 0.0, 0.0};
+  CHECK(pick_index(p, 4, 0.25) == 0);
+  CHECK(pick_index(p, 4, 0.75) == 1);
+  CHECK(pick_index(p, 4, 1.0) == 1);  // rounding: cumulative sum never exceeds u
+  const double q[] = {0.0};
+  CHECK(pick_index(q, 1, 1.0) == 0);
+}
