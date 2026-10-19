@@ -34,6 +34,17 @@ void CpuBackend::reserve(const ReserveParams& rp) {
       throw Error("reserve: cannot allocate " + std::to_string(need * sizeof(float)) + " bytes of attention scratch");
     }
   }
+#ifdef NIBBLE_HAVE_AVX2
+  const uint64_t xp_need = (static_cast<uint64_t>(rp.max_rows) + 7) / 8 * (static_cast<uint64_t>(rp.max_width) / kQK);
+  if (xp_.size() < xp_need) {
+    try {
+      xp_.resize(static_cast<size_t>(xp_need));
+    } catch (const std::exception&) {
+      throw Error("reserve: cannot allocate " + std::to_string(xp_need * sizeof(simd::BlockQ8_0x8)) +
+                  " bytes of packed activation scratch");
+    }
+  }
+#endif
   if (xq_.size() < xq_need) {
     try {
       xq_.resize(static_cast<size_t>(xq_need));
@@ -125,7 +136,18 @@ void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
   }
 #ifdef NIBBLE_HAVE_AVX2
   if (w.type == DType::F32 || w.type == DType::F16) {
-    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::matmul_rows_f(w, x, y, n, b, e); });
+    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) {
+      n >= 4 ? simd::gemm_f(w, x, y, n, b, e) : simd::matmul_rows_f(w, x, y, n, b, e);
+    });
+    return;
+  }
+  if (xq && n >= 4) {
+    const int64_t nb = w.ne[0] / kQK;
+    const size_t need = static_cast<size_t>((n + 7) / 8 * nb);
+    if (xp_.size() < need) xp_.resize(need);  // beyond reserve(), like xq_
+    simd::pack_q8_0_x8(xq, n, nb, xp_.data());
+    const simd::BlockQ8_0x8* xp = xp_.data();
+    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::gemm_q(w, xp, y, n, b, e); });
     return;
   }
   if (xq) {

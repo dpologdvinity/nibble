@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "backend/backend.h"
+#include "backend/cpu/simd/simd.h"
 #include "quant.h"
 #include "thread_pool.h"
 
@@ -47,6 +48,9 @@ class CpuBackend final : public Backend {
   // only read it. Sized by reserve() to max_rows * max_width / 32 blocks; matmul() only grows it
   // if called beyond that, which is outside the no-allocation guarantee (like attention).
   std::vector<BlockQ8_0> xq_;
+  // xq_ interleaved 8 tokens per block for the prefill GEMM (n >= 4, SIMD builds); sized by reserve() to
+  // ceil(max_rows / 8) * max_width / 32 blocks, same growth rule as xq_.
+  std::vector<simd::BlockQ8_0x8> xp_;
 };
 
 }  // namespace nibble::cpu

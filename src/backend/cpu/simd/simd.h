@@ -18,6 +18,14 @@ struct BlockQ8_0;
 
 namespace nibble::simd {
 
+// One 32-wide Q8_0 block of 8 tokens, interleaved for the tiled GEMM: qs[g][j] holds token j's quants
+// 4g..4g+3, d[j] its scale as float, sum[j] the sum of its 32 quants. Tokens past n are zero.
+struct alignas(32) BlockQ8_0x8 {
+  int8_t qs[8][8][4];
+  float d[8];
+  int32_t sum[8];
+};
+
 inline const char* kernel_set() {
 #if defined(NIBBLE_HAVE_AVXVNNI)
   return "avx2+fma+f16c+avxvnni";
@@ -93,6 +101,12 @@ void matmul_rows_q(const Tensor& w, const BlockQ8_0* xq, float* y, int64_t n, in
 // Same contract as cpu::matmul_rows for F32/F16 weights (matmul_f.cpp); sums are reordered, so results
 // match the scalar oracle to ~1e-6 relative, not bit-exactly.
 void matmul_rows_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end);
+// Tiled GEMM for prefill (gemm.cpp): same contracts as matmul_rows_f / matmul_rows_q and bit-identical
+// to them for any n (each output keeps the row kernel's operation order); faster once n >= 4.
+void gemm_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end);
+// xp: the n activation rows (nb blocks each) packed by pack_q8_0_x8, (n+7)/8 * nb blocks.
+void pack_q8_0_x8(const BlockQ8_0* xq, int64_t n, int64_t nb, BlockQ8_0x8* xp);
+void gemm_q(const Tensor& w, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 // out[k] = fp16_to_fp32(row[k]) for k < d.
 void embed_row_f16(const uint16_t* row, float* out, int64_t d);
 #endif
