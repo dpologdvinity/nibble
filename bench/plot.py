@@ -5,6 +5,8 @@ usage: bench/plot.py [--results DIR] [--out DIR] [--markdown]
 
 Writes OUT/ladder.svg, OUT/vs-llamacpp.svg and OUT/roofline.svg (default docs/bench), or with --markdown
 prints the README tables instead. Rows with load1 > 2 are noisy: drawn hollow, marked † in tables.
+nibble vs llama.cpp comes from the paired ABBA blocks in abba.jsonl (tools/bench_final.sh --abba); the
+thread sweep and roofline come from the single session in m6-final.jsonl / llamacpp-b11715-final.jsonl.
 Rows without a "model" (the hand-recorded dispatch-empty timings) are left out.
 """
 import argparse
@@ -13,6 +15,8 @@ import html
 import json
 import math
 import os
+import re
+import statistics
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +39,8 @@ MODEL_BYTES = {
 }
 TOOLS = [("nibble", "#1f77b4"), ("llama.cpp", "#ff7f0e")]
 TG, PP = "tg128", "pp512"
+FINAL = ("m6-final", "llamacpp-b11715-final")
+ABBA_NOTE = re.compile(r"^abba block (\S+) (A1|B1|B2|A2)$")
 
 
 def load(results):
@@ -58,8 +64,32 @@ def latest(rows):
 
 
 def final_rows(data):
-    rows = [r for stem, rs in data.items() if "final" in stem for r in rs]
+    rows = [r for stem, rs in data.items() if stem in FINAL for r in rs]
     return latest(rows)
+
+
+def session(final):
+    """'YYYY-MM-DD HH:MM–HH:MM UTC' span of the single-session rows."""
+    dates = sorted(r["date"] for r in final.values())
+    return f"{dates[0][:10]} {dates[0][11:16]}–{dates[-1][11:16]} UTC" if dates else "no data"
+
+
+def abba(data):
+    """{(model, test, threads): [block]} from complete ABBA blocks; block = (ratio, nibble, llama.cpp, noisy).
+    ratio = mean(llama.cpp A1, A2) / mean(nibble B1, B2), each run's median tok/s."""
+    runs = {}
+    for r in data.get("abba", []):
+        m = ABBA_NOTE.match(r.get("note", ""))
+        if m and r["unit"] == "tok/s":
+            runs.setdefault((r["model"], r["test"], r["threads"], m[1]), {})[m[2]] = r
+    out = {}
+    for (model, test, t, _), pos in sorted(runs.items(), key=lambda kv: min(r["date"] for r in kv[1].values())):
+        if len(pos) < 4:
+            continue  # incomplete block
+        a = (pos["A1"]["median"] + pos["A2"]["median"]) / 2
+        b = (pos["B1"]["median"] + pos["B2"]["median"]) / 2
+        out.setdefault((model, test, t), []).append((a / b, b, a, any(noisy(r) for r in pos.values())))
+    return out
 
 
 def pick(final, tool, model, test, threads=None):
@@ -157,7 +187,7 @@ def ladder(data):
             if k not in pts or rank(r) > rank(pts[k]):
                 pts[k] = r
     w, h, left, right, top, bottom = 900, 460, 60, 170, 40, 90
-    svg = Svg(w, h, "nibble decode tok/s per M6 step (best thread count per step, log scale)")
+    svg = Svg(w, h, "nibble decode tok/s per M6 step (each step one session, best t, log scale)")
     vals = [r["median"] for r in pts.values()] or [1]
     lo = 10 ** math.floor(math.log10(min(vals)))
     hi = nice_max(max(vals))
@@ -228,6 +258,50 @@ def bars(final, title, panels, value, unit, ref=None, caption=None):
     return str(svg)
 
 
+def ratio_chart(blocks):
+    """Per model and test: median llama.cpp/nibble block ratio per t, with the min-max range."""
+    ts = sorted({t for (_, _, t) in blocks})
+    tcol = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+    w, h, top, bottom = 900, 440, 50, 90
+    panels = [TG, PP]
+    pw = (w - 80) / len(panels)
+    svg = Svg(w, h, "llama.cpp ÷ nibble tok/s, paired ABBA blocks (median, bar = min–max over blocks)")
+    hi = nice_max(max([r for bs in blocks.values() for r, *_ in bs] + [1.5]) * 1.1)
+    y_of = lambda v: top + (h - top - bottom) * (1 - v / hi)
+    for pi, test in enumerate(panels):
+        x0 = 60 + pi * pw
+        y_axis(svg, x0, x0 + pw - 20, y_of, [hi * i / 5 for i in range(6)], lambda v: f"{v:.2g}")
+        svg.add(svg.text(x0 + (pw - 20) / 2, top - 8, test, size=12, anchor="middle", weight="bold"))
+        svg.line(x0, y_of(1), x0 + pw - 20, y_of(1), stroke="#444", width=1.5)
+        svg.line(x0, y_of(1.5), x0 + pw - 20, y_of(1.5), stroke="#b00", width=1.5, dash="4 3")
+        gw = (pw - 20) / len(MODELS)
+        bw = gw * 0.7 / max(len(ts), 1)
+        for mi, (model, label, _) in enumerate(MODELS):
+            gx = x0 + mi * gw
+            for ti, t in enumerate(ts):
+                bs = blocks.get((model, test, t))
+                if not bs:
+                    continue
+                rs = [r for r, *_ in bs]
+                med, colour = statistics.median(rs), tcol[ti % len(tcol)]
+                bx = gx + gw * 0.15 + ti * bw
+                svg.rect(bx, y_of(med), bw - 3, y_of(0) - y_of(med), colour, any(n for *_, n in bs))
+                cx = bx + (bw - 3) / 2
+                svg.line(cx, y_of(min(rs)), cx, y_of(max(rs)), stroke="#222", width=1.5)
+                svg.line(cx - 4, y_of(min(rs)), cx + 4, y_of(min(rs)), stroke="#222", width=1.5)
+                svg.line(cx - 4, y_of(max(rs)), cx + 4, y_of(max(rs)), stroke="#222", width=1.5)
+                svg.add(svg.text(cx, y_of(max(rs)) - 4, f"{med:.2f}", size=9, anchor="middle"))
+            svg.add(svg.text(gx + gw / 2, h - bottom + 14, label.split(" ")[0], size=9, anchor="middle"))
+            svg.add(svg.text(gx + gw / 2, h - bottom + 26, label.split(" ")[1], size=9, anchor="middle"))
+    svg.legend(70, h - 42, [(f"t = {t}", tcol[i % len(tcol)]) for i, t in enumerate(ts)])
+    svg.add(svg.text(170, h - 42, "Above 1: llama.cpp faster. Solid line = parity; dashed red = the 1.5× target.",
+                     size=10, fill="#555"))
+    svg.add(svg.text(170, h - 26, "Block = llama.cpp, nibble, nibble, llama.cpp back to back; ratio = mean A ÷ mean B.",
+                     size=10, fill="#555"))
+    svg.note("Hollow = some run in the blocks was noisy (1-min load average > 2 when it started).")
+    return str(svg)
+
+
 def membw(final, threads):
     """The highest nibble membw probe at `threads` across all models' runs, else the highest at any t."""
     rs = [r for (t, m, te, th), r in final.items() if te == "membw"]
@@ -247,34 +321,32 @@ def weight_bw_pct(final, r):
 
 
 def markdown(data):
-    final = final_rows(data)
+    final, blocks = final_rows(data), abba(data)
     mark = lambda r: "†" if noisy(r) else ""
-    cell = lambda r: f"{r['median']:.1f} (t{r['threads']}){mark(r)}" if r else "–"
-    ratio = lambda a, b: f"{b['median'] / a['median']:.2f}×" if a and b else "–"
-    out = ["| model | test | nibble, best t | llama.cpp, best t | llama.cpp ÷ nibble | "
-           "llama.cpp at nibble's t | ÷ nibble, same t | nibble weight BW |",
+    out = ["Paired ABBA blocks (llama.cpp ÷ nibble; tok/s are medians of the per-block means):", "",
+           "| model | test | t | blocks | llama.cpp ÷ nibble, median | range | nibble tok/s | llama.cpp tok/s |",
            "|---|---|---|---|---|---|---|---|"]
     for model, label, _ in MODELS:
         for test in (TG, PP):
-            n, l = pick(final, "nibble", model, test), pick(final, "llama.cpp", model, test)
-            if not n and not l:
-                continue
-            same = pick(final, "llama.cpp", model, test, n["threads"]) if n else None
-            pct = weight_bw_pct(final, n) if n and test == TG else None
-            bw = f"{pct:.0f}% of membw" if pct is not None else ""
-            out.append(f"| {label} | {test} | {cell(n)} | {cell(l)} | {ratio(n, l)} | {cell(same)} | "
-                       f"{ratio(n, same)} | {bw} |")
+            for t in sorted({t for (m, te, t) in blocks if (m, te) == (model, test)}):
+                bs = blocks[(model, test, t)]
+                rs = [r for r, *_ in bs]
+                med = lambda i: statistics.median(b[i] for b in bs)
+                nz = "†" if any(n for *_, n in bs) else ""
+                out.append(f"| {label} | {test} | {t} | {len(bs)}{nz} | {statistics.median(rs):.2f}× | "
+                           f"{min(rs):.2f}–{max(rs):.2f}× | {med(1):.1f} | {med(2):.1f} |")
     for model, label, _ in MODELS:
         ts = sorted({th for (t, m, te, th) in final if m == model and te == TG})
         if len(ts) < 3:
             continue
-        out += ["", f"Thread sweep, {label} (tok/s):", "",
+        out += ["", f"Thread sweep, {label}, tok/s: single session ({session(final)}), used only to choose "
+                "the default thread count:", "",
                 "| t | nibble tg128 | llama.cpp tg128 | nibble pp512 | llama.cpp pp512 |", "|---|---|---|---|---|"]
         for th in ts:
             c = [pick(final, tool, model, test, th) for test in (TG, PP) for tool in ("nibble", "llama.cpp")]
             f = lambda r: f"{r['median']:.1f}{mark(r)}" if r else "–"
             out.append(f"| {th} | {f(c[0])} | {f(c[1])} | {f(c[2])} | {f(c[3])} |")
-    out += ["", "† noisy: 1-minute load average > 2 when the run started."]
+    out += ["", "† noisy: 1-minute load average > 2 when a run started (for blocks: in any of its runs)."]
     return "\n".join(out) + "\n"
 
 
@@ -291,9 +363,8 @@ def main(argv):
     final = final_rows(data)
     charts = {
         "ladder.svg": ladder(data),
-        "vs-llamacpp.svg": bars(final, "nibble vs llama.cpp b11715, final M6 runs", [TG, PP],
-                                lambda r: r["median"], "tok/s"),
-        "roofline.svg": bars(final, "Decode weight-read bandwidth: model bytes × tg128 tok/s, % of measured membw",
+        "vs-llamacpp.svg": ratio_chart(abba(data)),
+        "roofline.svg": bars(final, f"Decode weight-read bandwidth, % of membw probe (single session, {session(final)})",
                              [TG], lambda r: weight_bw_pct(final, r), "% of membw", ref=100,
                              caption="membw = highest probe across models at that t. Bytes = GGUF file size; "
                                      "TinyLlama's untied token_embd (~131 MB) is counted but not read per token."),

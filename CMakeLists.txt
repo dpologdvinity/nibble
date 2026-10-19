@@ -180,14 +180,14 @@ nibble_cli_test(cli_bench_mem 0 ARGS bench -m ${NIBBLE_TINY} -t 1 -p 8 -n 4 -r 1
 add_test(NAME cli_bench_load_warning COMMAND ${CMAKE_COMMAND} -E env NIBBLE_LOADAVG_PATH=${NIBBLE_CLI_DIR}/loadavg_high.txt
   ${CMAKE_COMMAND} -DCMD=${NIBBLE_EXE} "-DARGS=bench$<SEMICOLON>-m$<SEMICOLON>${NIBBLE_TINY}$<SEMICOLON>-t$<SEMICOLON>1$<SEMICOLON>-p$<SEMICOLON>8$<SEMICOLON>-n$<SEMICOLON>4$<SEMICOLON>-r$<SEMICOLON>1"
   -DEXPECT_EXIT=0 "-DEXPECT_REGEX=warning: load average 3.5" -P ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
-# bench/plot.py on a fixture: table values, clean rows beat a faster noisy one, newest duplicate row wins,
-# model-less rows skipped.
+# bench/plot.py on a fixture: ABBA block ratios (incomplete block ignored, noisy run flagged), sweep rows
+# (newest duplicate wins), model-less rows skipped.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME bench_plot_markdown COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/bench/plot.py
     --results ${CMAKE_SOURCE_DIR}/tests/data/plot --markdown)
   set_tests_properties(bench_plot_markdown PROPERTIES PASS_REGULAR_EXPRESSION
-    "tg128 \\| 30.0 \\(t2\\) \\| 60.0 \\(t8\\) \\| 2.00× \\| 40.0 \\(t2\\) \\| 1.33× \\| 36% of membw \\|.*\\| 2 \\| 30.0 \\| 40.0 \\|.*\\| 8 \\| 50.0† \\|")
+    "tg128 \\| 8 \\| 2† \\| 1.25× \\| 1.00–1.50× \\| 45.0 \\| 55.0 \\|.*\\| 2 \\| 30.0 \\| 40.0 \\|.*\\| 8 \\| 50.0† \\|")
   add_test(NAME bench_plot_svg COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/bench/plot.py
     --results ${CMAKE_SOURCE_DIR}/tests/data/plot --out ${CMAKE_BINARY_DIR}/plot_test)
 endif()
