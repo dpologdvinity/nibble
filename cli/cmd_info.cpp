@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "commands.h"
+#include "backend/cpu/simd/simd.h"
 #include "gguf/gguf.h"
 #include "nibble/error.h"
 #include "tensor.h"
@@ -71,6 +72,7 @@ int cmd_info(int argc, char** argv) {
   if (argc != 2) throw Error("usage: nibble info <model.gguf>");
   const gguf::File f = gguf::File::open(argv[1]);
 
+  std::printf("kernels: %s\n", simd::kernel_set());
   std::printf("GGUF v%u\n\n", f.version());
   for (const auto& [key, val] : f.metadata()) std::printf("%s = %s\n", escape_control(key).c_str(), fmt_value(val).c_str());
 

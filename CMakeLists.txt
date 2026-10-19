@@ -6,12 +6,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(NIBBLE_NATIVE "Build with -march=native" ON)
+option(NIBBLE_SIMD "Enable hand-written SIMD kernels when the target supports them" ON)
 set(NIBBLE_SANITIZE "" CACHE STRING "Value for -fsanitize=")
 
 add_library(nibble_flags INTERFACE)
 target_compile_options(nibble_flags INTERFACE -Wall -Wextra -Wpedantic -Werror)
 if(NIBBLE_NATIVE)
   target_compile_options(nibble_flags INTERFACE -march=native)
+endif()
+if(NIBBLE_SIMD)
+  target_compile_definitions(nibble_flags INTERFACE NIBBLE_SIMD_ENABLED=1)
 endif()
 if(NIBBLE_SANITIZE)
   target_compile_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE} -fno-omit-frame-pointer)
@@ -22,7 +26,8 @@ find_package(Threads REQUIRED)
 file(GLOB_RECURSE NIBBLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 # The quant dot products are pinned bitwise to ggml goldens; clang contracts a*b+c
 # into FMA by default (g++ does not under -std=c++20), which changes the rounding.
-set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+# ref_ops.cpp is the scalar oracle for the SIMD kernels and must stay uncontracted too.
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/ref_ops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 add_library(nibble STATIC ${NIBBLE_SOURCES})
 target_include_directories(nibble PUBLIC include PRIVATE src)
 target_link_libraries(nibble PUBLIC nibble_flags Threads::Threads)
@@ -192,3 +197,5 @@ set_tests_properties(cli_info_big_u8_ulimit PROPERTIES FIXTURES_REQUIRED big_u8)
 add_test(NAME cli_info_big_u8_clean COMMAND ${CMAKE_COMMAND} -E rm -f ${NIBBLE_BIG_U8})
 set_tests_properties(cli_info_big_u8_clean PROPERTIES FIXTURES_CLEANUP big_u8)
 endif()
+
+nibble_cli_test(cli_info_kernels 0 ARGS info ${NIBBLE_DATA}/small.gguf REGEX "kernels: (avx2\\+fma\\+f16c(\\+avxvnni)?|scalar)\n")
