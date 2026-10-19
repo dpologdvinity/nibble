@@ -1,0 +1,10 @@
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":1,"reps":5,"median":20,"min":20,"max":20,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp512","threads":1,"reps":5,"median":100,"min":100,"max":100,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"membw","threads":1,"reps":5,"median":30,"min":30,"max":30,"unit":"GB/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":2,"reps":5,"median":30,"min":30,"max":30,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp512","threads":2,"reps":5,"median":150,"min":150,"max":150,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"membw","threads":2,"reps":5,"median":30,"min":30,"max":30,"unit":"GB/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":8,"reps":5,"median":50,"min":50,"max":50,"unit":"tok/s","load1":3.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp512","threads":8,"reps":5,"median":400,"min":400,"max":400,"unit":"tok/s","load1":3.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"membw","threads":8,"reps":5,"median":30,"min":30,"max":30,"unit":"GB/s","load1":3.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":2,"reps":5,"median":10,"min":10,"max":10,"unit":"tok/s","load1":1.0,"date":"2026-10-18T00:00:00Z"}

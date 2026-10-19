@@ -1,0 +1,2 @@
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg16","threads":8,"reps":5,"median":40,"min":40,"max":40,"unit":"tok/s","load1":1,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x-dirty","test":"dispatch-empty","threads":2,"reps":3,"median":192,"min":1,"max":2,"unit":"ns/call","load1":3,"date":"2026-10-19T00:00:00Z"}

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="440" viewBox="0 0 900 440">
+<rect width="900" height="440" fill="white"/>
+<text x="450.0" y="22.0" font-family="sans-serif" font-size="15" text-anchor="middle" font-weight="bold" fill="#222">Decode weight-read bandwidth: model bytes × tg128 tok/s, % of measured membw</text>
+<line x1="60.0" y1="350.0" x2="860.0" y2="350.0" stroke="#ccc" stroke-width="1"/>
+<text x="55.0" y="354.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0</text>
+<line x1="60.0" y1="290.0" x2="860.0" y2="290.0" stroke="#ccc" stroke-width="1"/>
+<text x="55.0" y="294.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">40</text>
+<line x1="60.0" y1="230.0" x2="860.0" y2="230.0" stroke="#ccc" stroke-width="1"/>
+<text x="55.0" y="234.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">80</text>
+<line x1="60.0" y1="170.0" x2="860.0" y2="170.0" stroke="#ccc" stroke-width="1"/>
+<text x="55.0" y="174.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">120</text>
+<line x1="60.0" y1="110.0" x2="860.0" y2="110.0" stroke="#ccc" stroke-width="1"/>
+<text x="55.0" y="114.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">160</text>
+<line x1="60.0" y1="50.0" x2="860.0" y2="50.0" stroke="#ccc" stroke-width="1"/>
+<text x="55.0" y="54.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">200</text>
+<text x="460.0" y="42.0" font-family="sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#222">tg128 (% of membw)</text>
+<line x1="60.0" y1="200.0" x2="860.0" y2="200.0" stroke="#b00" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="79.2" y="295.5" width="54.0" height="54.5" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<text x="107.2" y="281.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">36.3</text>
+<text x="107.2" y="291.5" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<rect x="135.2" y="278.5" width="54.0" height="71.5" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<text x="163.2" y="264.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">47.7</text>
+<text x="163.2" y="274.5" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<text x="140.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="140.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_0</text>
+<rect x="239.2" y="191.1" width="54.0" height="158.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<text x="267.2" y="177.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">106</text>
+<text x="267.2" y="187.1" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<rect x="295.2" y="192.1" width="54.0" height="157.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<text x="323.2" y="178.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">105</text>
+<text x="323.2" y="188.1" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<text x="300.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="300.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q8_0</text>
+<rect x="399.2" y="189.0" width="54.0" height="161.0" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<text x="427.2" y="175.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">107</text>
+<text x="427.2" y="185.0" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<rect x="455.2" y="196.7" width="54.0" height="153.3" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<text x="483.2" y="182.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">102</text>
+<text x="483.2" y="192.7" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<text x="460.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="460.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="559.2" y="229.7" width="54.0" height="120.3" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<text x="587.2" y="215.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">80.2</text>
+<text x="587.2" y="225.7" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<rect x="615.2" y="258.0" width="54.0" height="92.0" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<text x="643.2" y="244.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">61.3</text>
+<text x="643.2" y="254.0" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<text x="620.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="620.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="719.2" y="258.9" width="54.0" height="91.1" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<text x="747.2" y="244.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">60.7</text>
+<text x="747.2" y="254.9" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<rect x="775.2" y="244.1" width="54.0" height="105.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<text x="803.2" y="230.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">70.6</text>
+<text x="803.2" y="240.1" font-family="sans-serif" font-size="8" text-anchor="middle" font-weight="normal" fill="#555">t8</text>
+<text x="780.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="780.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="70.0" y="389.0" width="10" height="10" fill="#1f77b4"/>
+<text x="85.0" y="398.0" font-family="sans-serif" font-size="11" text-anchor="start" font-weight="normal" fill="#222">nibble</text>
+<rect x="70.0" y="405.0" width="10" height="10" fill="#ff7f0e"/>
+<text x="85.0" y="414.0" font-family="sans-serif" font-size="11" text-anchor="start" font-weight="normal" fill="#222">llama.cpp</text>
+<text x="170.0" y="398.0" font-family="sans-serif" font-size="10" text-anchor="start" font-weight="normal" fill="#555">Each tool at its own best thread count (t under the value).</text>
+<text x="10.0" y="432.0" font-family="sans-serif" font-size="10" text-anchor="start" font-weight="normal" fill="#555">Hollow = noisy (1-min load average &gt; 2 when the run started).</text>
+</svg>

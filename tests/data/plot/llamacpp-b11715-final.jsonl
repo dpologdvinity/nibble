@@ -1,0 +1,6 @@
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":1,"reps":5,"median":25,"min":25,"max":25,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp512","threads":1,"reps":5,"median":200,"min":200,"max":200,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":2,"reps":5,"median":40,"min":40,"max":40,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp512","threads":2,"reps":5,"median":300,"min":300,"max":300,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":8,"reps":5,"median":60,"min":60,"max":60,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp512","threads":8,"reps":5,"median":500,"min":500,"max":500,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}

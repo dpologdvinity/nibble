@@ -1,0 +1,2 @@
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg16","threads":1,"reps":5,"median":3,"min":3,"max":3,"unit":"tok/s","load1":9,"date":"2026-10-19T00:00:00Z"}
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp64","threads":1,"reps":5,"median":4,"min":4,"max":4,"unit":"tok/s","load1":9,"date":"2026-10-19T00:00:00Z"}
