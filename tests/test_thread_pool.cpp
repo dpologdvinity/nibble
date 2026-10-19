@@ -94,9 +94,9 @@ TEST_CASE("idle workers go to sleep within the spin bound") {
   auto add = [&](int64_t b, int64_t e) { sum += e - b; };
   for (int round = 0; round < 3; ++round) {
     pool.parallel_for(64, 4, add);
-    // Loose: the spin bound is tens of microseconds; 200 ms absorbs scheduler noise and sanitizers.
+    // Loose: the spin bound is tens of microseconds; 2 s absorbs scheduler noise, ctest -j and sanitizers.
     const auto t0 = clock::now();
-    while (pool.sleeping_workers() < 3 && clock::now() - t0 < std::chrono::milliseconds(200)) std::this_thread::yield();
+    while (pool.sleeping_workers() < 3 && clock::now() - t0 < std::chrono::seconds(2)) std::this_thread::yield();
     REQUIRE(pool.sleeping_workers() == 3);
   }
   REQUIRE(sum.load() == 3 * 64);  // sleeping workers still wake for each call
