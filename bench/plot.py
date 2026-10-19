@@ -24,7 +24,8 @@ MODELS = [  # (file, label, colour)
     ("llama-3.2-1b-instruct-f16.gguf", "Llama-3.2-1B F16", "#d62728"),
     ("tinyllama-1.1b-chat-f16.gguf", "TinyLlama-1.1B F16", "#9467bd"),
 ]
-# shortcut: GGUF file sizes stand in for bytes read per token (weights dominate); update if models change.
+# GGUF file sizes stand in for bytes read per token (weights dominate). The sizes of models/<file> are
+# used when present; this table is the fallback for checkouts without the models.
 MODEL_BYTES = {
     "qwen2.5-0.5b-instruct-q4_0.gguf": 360662880,
     "qwen2.5-0.5b-instruct-q8_0.gguf": 675710816,
@@ -62,15 +63,20 @@ def final_rows(data):
 
 
 def pick(final, tool, model, test, threads=None):
-    """Best row (highest median) for tool/model/test, or the row at `threads`."""
+    """Best row for tool/model/test (see rank), or the row at `threads`."""
     rs = [r for (t, m, te, th), r in final.items() if (t, m, te) == (tool, model, test)]
     if threads is not None:
         rs = [r for r in rs if r["threads"] == threads]
-    return max(rs, key=lambda r: r["median"]) if rs else None
+    return max(rs, key=rank) if rs else None
 
 
 def noisy(r):
     return r["load1"] > NOISY
+
+
+def rank(r):
+    """Clean rows beat noisy ones; then the highest median."""
+    return (not noisy(r), r["median"])
 
 
 # --- SVG ---------------------------------------------------------------------------------------------
@@ -148,7 +154,7 @@ def ladder(data):
         sizes[s] = sorted({r["test"] for r in tg})
         for r in tg:
             k = (s, r["model"])
-            if k not in pts or r["median"] > pts[k]["median"]:
+            if k not in pts or rank(r) > rank(pts[k]):
                 pts[k] = r
     w, h, left, right, top, bottom = 900, 460, 60, 170, 40, 90
     svg = Svg(w, h, "nibble decode tok/s per M6 step (best thread count per step, log scale)")
@@ -183,7 +189,7 @@ def ladder(data):
     return str(svg)
 
 
-def bars(final, title, panels, value, unit, ref=None):
+def bars(final, title, panels, value, unit, ref=None, caption=None):
     """Grouped bars: one panel per test, per model one bar per tool at that tool's best t."""
     w, h, top, bottom = 900, 440, 50, 90
     pw = (w - 80) / len(panels)
@@ -191,7 +197,8 @@ def bars(final, title, panels, value, unit, ref=None):
     for pi, test in enumerate(panels):
         x0 = 60 + pi * pw
         rows = {(m, t): pick(final, t, m, test) for m, _, _ in MODELS for t, _ in TOOLS}
-        vals = [value(r) for r in rows.values() if r]
+        rows = {k: r for k, r in rows.items() if r and value(r) is not None}
+        vals = [value(r) for r in rows.values()]
         hi = nice_max(max(vals + ([ref] if ref else []) or [1]) * 1.1)
         y_of = lambda v: top + (h - top - bottom) * (1 - v / hi)
         y_axis(svg, x0, x0 + pw - 20, y_of, [hi * i / 5 for i in range(6)], lambda v: f"{v:g}")
@@ -202,7 +209,7 @@ def bars(final, title, panels, value, unit, ref=None):
         for mi, (model, label, _) in enumerate(MODELS):
             gx = x0 + mi * gw
             for ti, (tool, colour) in enumerate(TOOLS):
-                r = rows[(model, tool)]
+                r = rows.get((model, tool))
                 if not r:
                     continue
                 bw = gw * 0.35
@@ -215,19 +222,28 @@ def bars(final, title, panels, value, unit, ref=None):
             svg.add(svg.text(gx + gw / 2, h - bottom + 26, label.split(" ")[1], size=9, anchor="middle"))
     svg.legend(70, h - 42, TOOLS)
     svg.add(svg.text(170, h - 42, "Each tool at its own best thread count (t under the value).", size=10, fill="#555"))
+    if caption:
+        svg.add(svg.text(170, h - 26, caption, size=10, fill="#555"))
     svg.note(NOISE_NOTE)
     return str(svg)
 
 
 def membw(final, threads):
-    """nibble's membw probe at `threads`, else the highest measured."""
+    """The highest nibble membw probe at `threads` across all models' runs, else the highest at any t."""
     rs = [r for (t, m, te, th), r in final.items() if te == "membw"]
     at = [r["median"] for r in rs if r["threads"] == threads]
     return max(at or [r["median"] for r in rs] or [float("nan")])
 
 
+def model_bytes(model):
+    path = os.path.join(ROOT, "models", model)
+    return os.path.getsize(path) if os.path.exists(path) else MODEL_BYTES.get(model)
+
+
 def weight_bw_pct(final, r):
-    return 100 * MODEL_BYTES[r["model"]] * r["median"] / 1e9 / membw(final, r["threads"])
+    """None if the model's size is unknown."""
+    b = model_bytes(r["model"])
+    return 100 * b * r["median"] / 1e9 / membw(final, r["threads"]) if b else None
 
 
 def markdown(data):
@@ -244,7 +260,8 @@ def markdown(data):
             if not n and not l:
                 continue
             same = pick(final, "llama.cpp", model, test, n["threads"]) if n else None
-            bw = f"{weight_bw_pct(final, n):.0f}% of membw" if n and test == TG else ""
+            pct = weight_bw_pct(final, n) if n and test == TG else None
+            bw = f"{pct:.0f}% of membw" if pct is not None else ""
             out.append(f"| {label} | {test} | {cell(n)} | {cell(l)} | {ratio(n, l)} | {cell(same)} | "
                        f"{ratio(n, same)} | {bw} |")
     for model, label, _ in MODELS:
@@ -277,7 +294,9 @@ def main(argv):
         "vs-llamacpp.svg": bars(final, "nibble vs llama.cpp b11715, final M6 runs", [TG, PP],
                                 lambda r: r["median"], "tok/s"),
         "roofline.svg": bars(final, "Decode weight-read bandwidth: model bytes × tg128 tok/s, % of measured membw",
-                             [TG], lambda r: weight_bw_pct(final, r), "% of membw", ref=100),
+                             [TG], lambda r: weight_bw_pct(final, r), "% of membw", ref=100,
+                             caption="membw = highest probe across models at that t. Bytes = GGUF file size; "
+                                     "TinyLlama's untied token_embd (~131 MB) is counted but not read per token."),
     }
     os.makedirs(a.out, exist_ok=True)
     for name, svg in charts.items():
