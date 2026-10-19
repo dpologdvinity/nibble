@@ -1,7 +1,6 @@
 // `nibble chat`: multi-turn chat, one user message per stdin line. Public API only.
 #include <unistd.h>
 
-#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
@@ -55,7 +54,6 @@ int cmd_chat(int argc, char** argv) {
   Chat chat(session, system);
 
   const bool tty = isatty(STDIN_FILENO) != 0;
-  using clock = std::chrono::steady_clock;
   std::string line;
   for (;;) {
     if (tty) {
@@ -66,21 +64,16 @@ int cmd_chat(int argc, char** argv) {
     if (!line.empty() && line.back() == '\r') line.pop_back();  // CRLF input
     if (line.empty()) continue;                // a blank line is not a user message: skip it
 
-    const auto start = clock::now();
-    clock::time_point first = start;  // prefill/decode split approximated as in `run`
-    bool seen = false;
+    ReplyTimer timer;
     const StopReason r = chat.send(line, ca.gp, [&](std::string_view piece) {
-      if (!seen) { seen = true; first = clock::now(); }
+      timer.on_piece();
       std::fwrite(piece.data(), 1, piece.size(), stdout);
       std::fflush(stdout);
       return true;
     });
-    const auto end = clock::now();
-    if (!seen) first = end;
     std::fputc('\n', stdout);
     std::fflush(stdout);
-    print_stats(r, session.n_prompt_tokens(), std::chrono::duration<double, std::milli>(first - start).count(),
-                session.n_generated(), std::chrono::duration<double, std::milli>(end - first).count());
+    timer.print(r, session);
     if (r == StopReason::ContextFull) {
       std::fputs("[context full]\n", stderr);
       return 0;

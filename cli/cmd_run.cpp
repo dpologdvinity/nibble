@@ -1,5 +1,4 @@
 // `nibble run`: stream generated text from a GGUF model. Public API only.
-#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -63,25 +62,14 @@ int cmd_run(int argc, char** argv) {
   Model model = Model::load(model_path, ca.mp);
   Session session(model);
 
-  using clock = std::chrono::steady_clock;
-  const auto start = clock::now();
-  // The API has no prefill/decode split. Approximation: prefill time = start to the
-  // first on_token call (or to return, if EOS arrives before any piece); decode time
-  // = the remainder. Tokenization and the first sampled token count as prefill.
-  clock::time_point first = start;
-  bool seen = false;
+  ReplyTimer timer;
   const StopReason r = session.generate(prompt, ca.gp, [&](std::string_view piece) {
-    if (!seen) { seen = true; first = clock::now(); }
+    timer.on_piece();
     std::fwrite(piece.data(), 1, piece.size(), stdout);
     std::fflush(stdout);
     return true;
   });
-  const auto end = clock::now();
-  if (!seen) first = end;
-  const double pre_ms = std::chrono::duration<double, std::milli>(first - start).count();
-  const double gen_ms = std::chrono::duration<double, std::milli>(end - first).count();
-  const int64_t np = session.n_prompt_tokens(), ng = session.n_generated();
-  print_stats(r, np, pre_ms, ng, gen_ms);
+  timer.print(r, session);
   return 0;
 }
 

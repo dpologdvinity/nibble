@@ -134,7 +134,6 @@ struct TinyModelOpts {
   std::string arch = "qwen2";
   std::string drop_tensor;      // omit this tensor
   std::string bad_shape;        // give this 2-D tensor a wrong ne[1]
-  std::string q4_tensor;        // store this tensor as Q4_0 (needs ne[0] % 32 == 0, e.g. blk.0.ffn_down.weight)
   int64_t vocab_delta = 0;      // token_embd rows = tokenizer vocab + delta (tokenizer unchanged)
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
   bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
@@ -200,7 +199,7 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   };
   auto mat = [&](const std::string& name, int64_t in, int64_t out) {
     if (name == mo.drop_tensor) return;
-    DType t = name == mo.q4_tensor ? DType::Q4_0 : name == mo.raw_type_tensor ? static_cast<DType>(12) : wtype;
+    DType t = name == mo.raw_type_tensor ? static_cast<DType>(12) : wtype;
     int64_t o = name == mo.bad_shape ? out + 1 : out;
     w.add_tensor(name, t, {in, o}, bytes(t, rnd(static_cast<size_t>(in * o), -0.5f, 0.5f), in));
   };
