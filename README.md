@@ -88,6 +88,13 @@ stdout (`-n` is per reply, default 512). Blank lines are skipped. It prompts wit
 `> ` on stderr only when stdin is a terminal, stops at EOF, and on a full context
 prints `[context full]` and exits 0.
 
+`nibble bench -m <model.gguf> [-t 1,2,4] [-p 512] [-n 128] [-r 5] [--mem] [--out f.jsonl]`
+measures prefill (`pp<p>`) and decode (`tg<n>`) tok/s per thread count (median, min,
+max over `-r` reps after one warm-up); `--mem` adds a memory-bandwidth probe. `--out`
+appends one JSON line per measurement. `tools/bench_llamacpp.sh <model> <threads>
+<out.jsonl>` produces the same schema from llama.cpp's `llama-bench`. Results live in
+`bench/results/`.
+
 ## Tests
 
 ```sh

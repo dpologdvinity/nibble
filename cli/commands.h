@@ -6,5 +6,6 @@ namespace nibble::cli {
 int cmd_info(int argc, char** argv);
 int cmd_run(int argc, char** argv);  // returns 2 (after printing usage) on bad flags
 int cmd_chat(int argc, char** argv);  // same
+int cmd_bench(int argc, char** argv);  // same
 
 }  // namespace nibble::cli

@@ -6,7 +6,7 @@
 
 namespace {
 void usage() {
-  std::fputs("usage: nibble <subcommand> [args]\n\nsubcommands:\n  info <model.gguf>   print GGUF metadata and tensors\n  run -m <model.gguf> (-p <prompt> | -f <file>) [-n N] [-t N] [-c N] [--temp F] [--top-k N] [--top-p F] [--seed N]   generate text\n  chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N] [sampling flags]   chat, one message per stdin line\n", stderr);
+  std::fputs("usage: nibble <subcommand> [args]\n\nsubcommands:\n  info <model.gguf>   print GGUF metadata and tensors\n  run -m <model.gguf> (-p <prompt> | -f <file>) [-n N] [-t N] [-c N] [--temp F] [--top-k N] [--top-p F] [--seed N]   generate text\n  chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N] [sampling flags]   chat, one message per stdin line\n  bench -m <model.gguf> [-t list] [-p N] [-n N] [-r N] [--mem] [--out file.jsonl]   pp/tg throughput\n", stderr);
 }
 }  // namespace
 
@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
     if (std::strcmp(argv[1], "info") == 0) return nibble::cli::cmd_info(argc - 1, argv + 1);
     if (std::strcmp(argv[1], "run") == 0) return nibble::cli::cmd_run(argc - 1, argv + 1);
     if (std::strcmp(argv[1], "chat") == 0) return nibble::cli::cmd_chat(argc - 1, argv + 1);
+    if (std::strcmp(argv[1], "bench") == 0) return nibble::cli::cmd_bench(argc - 1, argv + 1);
   } catch (const nibble::Error& e) {
     std::fprintf(stderr, "error: %s\n", e.what());
     return 1;
