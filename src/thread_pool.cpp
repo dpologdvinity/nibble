@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <utility>
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -60,7 +62,14 @@ void ThreadPool::run_chunks() {
   for (;;) {
     int64_t b = next_.fetch_add(chunk_, std::memory_order_relaxed);
     if (b >= n_) break;
-    (*fn_)(b, std::min(b + chunk_, n_));
+    try {
+      (*fn_)(b, std::min(b + chunk_, n_));
+    } catch (...) {
+      std::lock_guard<std::mutex> lock(error_mu_);
+      if (!error_) error_ = std::current_exception();
+      next_.store(n_, std::memory_order_relaxed);  // skip the chunks nobody has claimed yet
+      return;
+    }
   }
 }
 
@@ -107,6 +116,8 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
   for (unsigned i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {  // unsigned: wraps, no UB
     if (i % 1024 == 0) std::this_thread::yield(); else cpu_relax();
   }
+  // The acquire above orders every worker's error_ write before this read.
+  if (error_) std::rethrow_exception(std::exchange(error_, nullptr));
 }
 
 int default_thread_count(const std::filesystem::path& cpu_dir, unsigned hw) {

@@ -68,6 +68,25 @@ TEST_CASE("more threads than chunks") {
   }
 }
 
+TEST_CASE("an exception from fn reaches the caller after every thread finishes") {
+  nibble::ThreadPool pool(4);
+  for (int k = 0; k < 200; ++k) {
+    // Throw on one chunk (it may land on any thread), or on every chunk (all threads throw at once).
+    const bool all = k % 2 == 1;
+    std::atomic<int> running{0};
+    REQUIRE_THROWS_AS(pool.parallel_for(256, 1, [&](int64_t b, int64_t) {
+      running++;
+      std::this_thread::yield();
+      running--;
+      if (all || b == k) throw nibble::Error("chunk " + std::to_string(b));
+    }), nibble::Error);
+    REQUIRE(running.load() == 0);
+    std::atomic<int64_t> sum{0};  // the pool is still usable and the error does not leak into the next call
+    pool.parallel_for(100, 7, [&](int64_t b, int64_t e) { sum += e - b; });
+    REQUIRE(sum.load() == 100);
+  }
+}
+
 TEST_CASE("idle workers go to sleep within the spin bound") {
   using clock = std::chrono::steady_clock;
   nibble::ThreadPool pool(4);

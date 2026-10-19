@@ -1,7 +1,9 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -9,7 +11,8 @@
 
 namespace nibble {
 
-// n_threads counts the calling thread. fn must not throw.
+// n_threads counts the calling thread. If fn throws, parallel_for waits for every thread to finish,
+// skips the chunks not yet started, and rethrows the first exception on the caller.
 // Workers spin briefly on a generation counter after each call, then sleep (futex via atomic::wait),
 // so back-to-back calls skip the kernel and an idle pool burns no CPU.
 class ThreadPool {
@@ -42,6 +45,8 @@ class ThreadPool {
   const FunctionRef<void(int64_t, int64_t)>* fn_ = nullptr;
   int64_t n_ = 0, chunk_ = 1;
   std::atomic<int64_t> next_{0};
+  std::mutex error_mu_;
+  std::exception_ptr error_;  // first exception thrown by fn in the current call
 };
 
 // Thread count for n_threads = 0. cpu_dir is /sys/devices/system/cpu (injectable for tests); hw is
