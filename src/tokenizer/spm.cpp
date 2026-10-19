@@ -2,8 +2,6 @@
 
 #include <queue>
 
-#include "nibble/error.h"
-
 namespace nibble::tok {
 
 namespace {
@@ -72,10 +70,8 @@ void spm_encode(const SpmVocab& v, std::string_view text, std::vector<int32_t>& 
       continue;
     }
     for (unsigned char byte : s) {
-      int32_t id = v.byte_ids[byte];
-      if (id < 0) id = v.unk;
-      if (id < 0) throw Error("no byte token or unk token for byte " + std::to_string(byte));
-      out.push_back(id);
+      const int32_t id = v.byte_ids[byte];
+      out.push_back(id >= 0 ? id : v.unk);
     }
   }
 }
