@@ -20,11 +20,20 @@ multi-turn `nibble chat`. This is a scalar baseline; optimization comes in M6.
 | Llama-3.2-1B-Instruct | F16 | `tools/convert_hf.sh llama32-1b` |
 | TinyLlama-1.1B-Chat-v1.0 | F16 | `tools/convert_hf.sh tinyllama-1.1b` |
 
-`convert_hf.sh` downloads the Hugging Face weights and converts them with the
-pinned llama.cpp converter. `nibble chat` picks the chat format from the model's
-chat template: ChatML (Qwen2.5), Llama 3 header format (Llama 3.2) or Zephyr
-(TinyLlama). The Llama 3.2 prompt carries llama.cpp's fixed knowledge-cutoff
-system header.
+`convert_hf.sh` downloads the Hugging Face weights at a pinned commit, checks
+every file against the hashes the Hugging Face API lists for that commit, and
+converts them offline with the pinned llama.cpp converter. It refuses repos whose
+config could make the converter run repo code (`auto_map`, or an unexpected
+`tokenizer_class`). `nibble chat` picks the chat format from the model's chat
+template: ChatML (Qwen2.5), Llama 3 header format (Llama 3.2) or Zephyr
+(TinyLlama). The Llama 3.2 prompt carries the official template's default
+knowledge-cutoff and date lines, and trims system and user text as that template
+does.
+
+Changes for Qwen since M4: a given `--seed` now gives different output than in
+M4, because each reply derives its own seed; generation also stops on `</s>` and
+the FIM pad, repo-name and file-separator tokens, as in llama.cpp; and with
+special parsing, `</s>` is now a control token.
 
 ## Build
 
@@ -98,7 +107,8 @@ tools/build_llama_cpp.sh && tools/build_llama_cpp.sh --generic && tools/make_qua
 
 Against llama.cpp on Qwen2.5-0.5B-Instruct F16:
 
-- Tokenizer: 37/37 corpus cases tokenize exactly as llama.cpp does.
+- Tokenizer: 37/37 corpus cases tokenize exactly as llama.cpp does, and so do
+  5/5 special-parsing cases on all five models.
 - Logits: minimum cosine similarity 0.99996 over all positions.
 - Greedy decoding: 64/64, 64/64 and 46/64 tokens match on the three e2e prompts.
   The third diverges at a near-tie, where an fp64 reference implementation agrees
