@@ -79,10 +79,10 @@ class Session {
 
   // Encodes the parts (in order, as one string: adjacent plain text is tokenized together, so
   // "a" + "b" equals "ab"; the exception is that a special token's text never spans
-  // parts, so Control text split across two parts stays plain) and samples with GenParams. append = false starts
-  // at position 0 (n_past() becomes 0); append = true prefills the new tokens at
-  // n_past(). Every sampled token except EOS is forwarded into the KV cache, so
-  // after any return (not a throw)
+  // parts, so Control text split across two parts stays plain) and samples with
+  // GenParams. append = false starts at position 0 (n_past() becomes 0); append = true
+  // prefills the new tokens at n_past(). Every sampled token except EOS is forwarded
+  // into the KV cache, so after any return (not a throw)
   //   n_past() == start + n_prompt_tokens() + n_generated().
   // Only EOS is never forwarded (it is not delivered either): callers re-supply any
   // closing markup. on_token receives valid UTF-8 pieces; return false to cancel (held
@@ -97,8 +97,9 @@ class Session {
   // == n_ctx() (the cache is then full).
   //
   // With append = false, the BOS token is prepended when the model defines one and wants it
-  // (SentencePiece models such as TinyLlama, Llama 3), unless the prompt already starts with it;
-  // append = true adds none. Qwen has no BOS. An all-empty prompt gets no BOS.
+  // (TinyLlama, a SentencePiece model, and Llama 3, a byte-level BPE one), unless the prompt
+  // already starts with it; append = true adds none. Qwen has no BOS. An all-empty prompt
+  // gets no BOS.
   //
   // Empty input: zero new tokens (an empty parts list, or parts that encode to
   // nothing) with append = false throws Error("empty prompt"). With append = true it
@@ -128,11 +129,11 @@ class Session {
 };
 
 // Multi-turn chat over a Session, formatted with the model's chat template
-// (ChatML, Llama 3 or Zephyr, chosen from the model's tokenizer.chat_template). The KV cache is kept between turns, so each send prefills
-// only the new turn's tokens. The Chat must not outlive its Session. Not
-// thread-safe; the Session's one-active-Session-per-Model rule applies. Do not use
-// the Session directly while a Chat drives it: the next send then throws
-// Error("chat context lost"). To start over (e.g. after ContextFull), construct a
+// (ChatML, Llama 3 or Zephyr, chosen from the model's tokenizer.chat_template). The KV cache is
+// kept between turns, so each send prefills only the new turn's tokens. The Chat must not
+// outlive its Session. Not thread-safe; the Session's one-active-Session-per-Model rule
+// applies. Do not use the Session directly while a Chat drives it: the next send then
+// throws Error("chat context lost"). To start over (e.g. after ContextFull), construct a
 // new Chat. Move-only.
 class Chat {
  public:
