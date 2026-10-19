@@ -1,0 +1,2 @@
+{"tool":"nibble","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":8,"reps":5,"median":999,"min":999,"max":999,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}
+{"tool":"llama.cpp","commit":"x","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg128","threads":8,"reps":5,"median":999,"min":999,"max":999,"unit":"tok/s","load1":1.0,"date":"2026-10-19T00:00:00Z"}

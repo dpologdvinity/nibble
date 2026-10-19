@@ -181,7 +181,7 @@ add_test(NAME cli_bench_load_warning COMMAND ${CMAKE_COMMAND} -E env NIBBLE_LOAD
   ${CMAKE_COMMAND} -DCMD=${NIBBLE_EXE} "-DARGS=bench$<SEMICOLON>-m$<SEMICOLON>${NIBBLE_TINY}$<SEMICOLON>-t$<SEMICOLON>1$<SEMICOLON>-p$<SEMICOLON>8$<SEMICOLON>-n$<SEMICOLON>4$<SEMICOLON>-r$<SEMICOLON>1"
   -DEXPECT_EXIT=0 "-DEXPECT_REGEX=warning: load average 3.5" -P ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
 # bench/plot.py on a fixture: ABBA block ratios (incomplete block ignored, noisy run flagged), sweep rows
-# (newest duplicate wins), model-less rows skipped.
+# (newest duplicate wins), model-less rows and session2-discarded.jsonl (999 tok/s rows) skipped.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME bench_plot_markdown COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/bench/plot.py

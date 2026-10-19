@@ -24,6 +24,7 @@ if [[ ${1:-} == --abba ]]; then abba=$2; shift 2; fi
 if ! [[ $abba =~ ^[0-9]+$ ]]; then echo "bad --abba: $abba" >&2; exit 2; fi
 case $first in nibble|llama.cpp|alternate) ;; *) echo "bad --first: $first" >&2; exit 2;; esac
 if (( $# == 0 || $# % 2 )); then sed -n 2p "$0" >&2; exit 2; fi
+for tool in jq bc; do command -v "$tool" > /dev/null || { echo "needs $tool" >&2; exit 1; }; done
 sha=$("$nibble" bench --version)
 if [[ $sha == *-dirty ]]; then echo "refusing: $nibble was built from a dirty tree ($sha)" >&2; exit 1; fi
 

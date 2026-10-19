@@ -7,6 +7,7 @@ Writes OUT/ladder.svg, OUT/vs-llamacpp.svg and OUT/roofline.svg (default docs/be
 prints the README tables instead. Rows with load1 > 2 are noisy: drawn hollow, marked † in tables.
 nibble vs llama.cpp comes from the paired ABBA blocks in abba.jsonl (tools/bench_final.sh --abba); the
 thread sweep and roofline come from the single session in m6-final.jsonl / llamacpp-b11715-final.jsonl.
+Other files (session2-discarded.jsonl, llamacpp-b11715.jsonl) are read but not plotted.
 Rows without a "model" (the hand-recorded dispatch-empty timings) are left out.
 """
 import argparse
@@ -69,9 +70,10 @@ def final_rows(data):
 
 
 def session(final):
-    """'YYYY-MM-DD HH:MM–HH:MM UTC' span of the single-session rows."""
+    """'YYYY-MM-DD HH:MM–HH:MM UTC, nibble <commit>' span of the single-session rows."""
     dates = sorted(r["date"] for r in final.values())
-    return f"{dates[0][:10]} {dates[0][11:16]}–{dates[-1][11:16]} UTC" if dates else "no data"
+    commits = ", ".join(sorted({r["commit"] for r in final.values() if r["tool"] == "nibble"}))
+    return f"{dates[0][:10]} {dates[0][11:16]}–{dates[-1][11:16]} UTC, nibble {commits}" if dates else "no data"
 
 
 def abba(data):
@@ -364,7 +366,7 @@ def main(argv):
     charts = {
         "ladder.svg": ladder(data),
         "vs-llamacpp.svg": ratio_chart(abba(data)),
-        "roofline.svg": bars(final, f"Decode weight-read bandwidth, % of membw probe (single session, {session(final)})",
+        "roofline.svg": bars(final, f"Decode weight-read BW, % of membw probe (single session, {session(final)})",
                              [TG], lambda r: weight_bw_pct(final, r), "% of membw", ref=100,
                              caption="membw = highest probe across models at that t. Bytes = GGUF file size; "
                                      "TinyLlama's untied token_embd (~131 MB) is counted but not read per token."),
