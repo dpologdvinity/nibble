@@ -205,6 +205,21 @@ TEST_CASE("quantized model matches naive on dequantized weights", "[model][quant
   }
 }
 
+TEST_CASE("quantized prefill logits do not depend on the thread count", "[model][quant]") {
+  TinyModelOpts o;
+  o.quant_dims = true;
+  for (DType ty : {DType::Q8_0, DType::Q4_0}) {
+    std::vector<std::vector<float>> got;
+    for (int t : {1, 2, 3, 4, 8}) {
+      ThreadPool pool(t);
+      cpu::CpuBackend be(pool);
+      Loaded m(tiny_model_gguf(7, ty, false, 259, o), be);
+      got.push_back(run(m, be, kToks, 512, false));  // n = 5 >= 4: the packed GEMM path
+    }
+    for (size_t i = 1; i < got.size(); ++i) CHECK(bitwise_equal(got[i], got[0]));
+  }
+}
+
 TEST_CASE("incremental and chunked prefill equal batch", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
