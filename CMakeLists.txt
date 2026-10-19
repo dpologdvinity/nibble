@@ -25,7 +25,8 @@ endif()
 find_package(Threads REQUIRED)
 file(GLOB_RECURSE NIBBLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 # The quant dot products are pinned bitwise to ggml goldens; clang contracts a*b+c
-# into FMA by default (g++ does not under -std=c++20), which changes the rounding.
+# into FMA by default and g++ does too (GCC 13 emits vfmadd for a dot loop at -O3 -march=native),
+# which changes the rounding.
 # ref_ops.cpp is the scalar oracle for the SIMD kernels and must stay uncontracted too.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/ref_ops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 add_library(nibble STATIC ${NIBBLE_SOURCES})
