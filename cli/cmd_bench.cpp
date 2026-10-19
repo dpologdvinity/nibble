@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "backend/cpu/cpu_backend.h"
+#include "backend/cpu/simd/simd.h"
 #include "bench/membw.h"
 #include "commands.h"
 #include "gguf/gguf.h"
@@ -105,7 +106,7 @@ struct Sink {
                   "\"load1\":%.2f,\"date\":\"%s\"}\n",
                   threads, reps, s.med, s.mn, s.mx, unit, load, date.c_str());
     if (len < 0 || len >= static_cast<int>(sizeof nums)) throw Error("bench: JSON line too long");
-    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"model\":\"" << json_escape(model)
+    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"kernels\":\"" << simd::kernel_set() << "\",\"model\":\"" << json_escape(model)
         << "\",\"test\":\"" << test << nums;
     out.flush();
   }

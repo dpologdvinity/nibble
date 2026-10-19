@@ -7,6 +7,7 @@
 #include <new>
 
 #include "backend/cpu/ref_ops.h"
+#include "backend/cpu/simd/simd.h"
 #include "debug_check.h"
 #include "nibble/error.h"
 
@@ -89,6 +90,14 @@ void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float*
     NIBBLE_DCHECK(ids[i] >= 0 && ids[i] < table.ne[1], "embed: ids[%zu]=%d out of range [0, %lld)", i,
                   static_cast<int>(ids[i]), static_cast<long long>(table.ne[1]));
 #endif
+#ifdef NIBBLE_HAVE_AVX2
+  if (table.type == DType::F16) {
+    const int64_t d = table.ne[0];
+    for (size_t t = 0; t < ids.size(); ++t)
+      simd::embed_row_f16(static_cast<const uint16_t*>(table.data) + ids[t] * d, out + static_cast<int64_t>(t) * d, d);
+    return;
+  }
+#endif
   cpu::embed(table, ids, out);
 }
 
@@ -107,6 +116,12 @@ void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
     cpu::quantize_rows_q8_0(x, xq_.data(), n, w.ne[0]);
     xq = xq_.data();
   }
+#ifdef NIBBLE_HAVE_AVX2
+  if (w.type == DType::F32 || w.type == DType::F16) {
+    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::matmul_rows_f(w, x, y, n, b, e); });
+    return;
+  }
+#endif
   pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { cpu::matmul_rows(w, x, y, n, b, e, xq); });
 }
 

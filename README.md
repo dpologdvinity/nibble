@@ -92,7 +92,9 @@ prints `[context full]` and exits 0.
 measures prefill (`pp<p>`) and decode (`tg<n>`) tok/s per thread count (median, min,
 max over `-r` reps after one warm-up); `--mem` adds a memory-bandwidth probe (GB/s means
 1e9 bytes per second). `--out` appends one JSON line per measurement (delete the file
-to start fresh); `nibble bench --version` prints the baked-in git SHA (`-dirty` if
+to start fresh); each line carries `"kernels"`, the same string `nibble info` prints
+(`avx2+fma+f16c+avxvnni`, `avx2+fma+f16c` or `scalar`); rows without the field predate it and are
+scalar. `nibble bench --version` prints the baked-in git SHA (`-dirty` if
 tracked files differ from HEAD). `tools/bench_llamacpp.sh <model> <threads>
 <out.jsonl>` (env `P`, `N`, `R` override prompt tokens=512, gen tokens=128, reps=5; it also appends) produces the same schema from llama.cpp's `llama-bench`. Results live in
 `bench/results/`.

@@ -10,6 +10,10 @@
 #endif
 #endif
 
+namespace nibble {
+struct Tensor;
+}
+
 namespace nibble::simd {
 
 inline const char* kernel_set() {
@@ -40,6 +44,12 @@ static inline int32_t hsum_epi32(__m256i v) {
 static inline __m256 load_f16x8(const uint16_t* p) {
   return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
 }
+
+// Same contract as cpu::matmul_rows for F32/F16 weights (matmul_f.cpp); sums are reordered, so results
+// match the scalar oracle to ~1e-6 relative, not bit-exactly.
+void matmul_rows_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end);
+// out[k] = fp16_to_fp32(row[k]) for k < d.
+void embed_row_f16(const uint16_t* row, float* out, int64_t d);
 #endif
 
 }  // namespace nibble::simd
