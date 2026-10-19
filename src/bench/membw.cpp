@@ -45,6 +45,8 @@ std::vector<double> measure_membw(ThreadPool& pool, size_t bytes, int reps) {
     const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     out.push_back(static_cast<double>(n) * sizeof(uint64_t) / s / 1e9);
   }
+  volatile uint64_t keep = sink.load();  // read after the loop so the sums cannot be elided
+  (void)keep;
   return out;
 }
 

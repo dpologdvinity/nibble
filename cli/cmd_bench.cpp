@@ -24,9 +24,7 @@
 #include "thread_pool.h"
 #include "tokenizer/tokenizer.h"
 
-#ifndef NIBBLE_GIT_SHA
-#define NIBBLE_GIT_SHA "unknown"
-#endif
+#include "nibble_git.h"  // generated at build time
 
 namespace nibble::cli {
 namespace {
@@ -83,22 +81,32 @@ Stats stats(std::vector<double> v) {
   return {n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2, v.front(), v.back()};
 }
 
+std::string json_escape(const std::string& s) {
+  std::string o;
+  for (const unsigned char ch : s) {
+    if (ch == '"' || ch == '\\') { o += '\\'; o += static_cast<char>(ch); }
+    else if (ch < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", ch); o += b; }
+    else o += static_cast<char>(ch);
+  }
+  return o;
+}
+
 struct Sink {
   std::string model, date;
   double load;
   std::ofstream out;
   void emit(const char* test, int threads, int reps, Stats s, const char* unit) {
-    std::printf("%-8s %7d %10.2f %10.2f %10.2f  %s\n", test, threads, s.med, s.mn, s.mx, unit);
+    std::printf("%-8s %7d %10.2f %10.2f %10.2f  %s%s\n", test, threads, s.med, s.mn, s.mx, unit, std::string(unit) == "GB/s" ? " (1e9 bytes/s)" : "");
     std::fflush(stdout);
     if (!out.is_open()) return;
-    char b[512];
-    std::snprintf(b, sizeof b,
-                  "{\"tool\":\"nibble\",\"commit\":\"%s\",\"model\":\"%s\",\"test\":\"%s\",\"threads\":%d,"
-                  "\"reps\":%d,\"median\":%.4f,\"min\":%.4f,\"max\":%.4f,\"unit\":\"%s\",\"load1\":%.2f,"
-                  "\"date\":\"%s\"}\n",
-                  NIBBLE_GIT_SHA, model.c_str(), test, threads, reps, s.med, s.mn, s.mx, unit, load,
-                  date.c_str());
-    out << b;
+    char nums[256];
+    const int len = std::snprintf(nums, sizeof nums,
+                  "\",\"threads\":%d,\"reps\":%d,\"median\":%.4f,\"min\":%.4f,\"max\":%.4f,\"unit\":\"%s\","
+                  "\"load1\":%.2f,\"date\":\"%s\"}\n",
+                  threads, reps, s.med, s.mn, s.mx, unit, load, date.c_str());
+    if (len < 0 || len >= static_cast<int>(sizeof nums)) throw Error("bench: JSON line too long");
+    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"model\":\"" << json_escape(model)
+        << "\",\"test\":\"" << test << nums;
     out.flush();
   }
 };
@@ -109,6 +117,10 @@ double secs(clock_::time_point a) { return std::chrono::duration<double>(clock_:
 }  // namespace
 
 int cmd_bench(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--version") {
+    std::puts(NIBBLE_GIT_SHA);
+    return 0;
+  }
   std::string model_path, out_path;
   std::vector<int> threads{1};
   long p = 512, n = 128, r = 5;

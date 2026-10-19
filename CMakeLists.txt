@@ -78,12 +78,13 @@ file(GLOB NIBBLE_CLI_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/cli/*.cpp)
 add_executable(nibble_cli ${NIBBLE_CLI_SOURCES})
 set_target_properties(nibble_cli PROPERTIES OUTPUT_NAME nibble)
 target_include_directories(nibble_cli PRIVATE cli src)
-execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  OUTPUT_VARIABLE NIBBLE_GIT_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE git_rc)
-if(NOT git_rc EQUAL 0 OR NOT NIBBLE_GIT_SHA)
-  set(NIBBLE_GIT_SHA unknown)
-endif()
-set_source_files_properties(${CMAKE_SOURCE_DIR}/cli/cmd_bench.cpp PROPERTIES COMPILE_DEFINITIONS NIBBLE_GIT_SHA="${NIBBLE_GIT_SHA}")
+add_custom_target(nibble_git_header ALL
+  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/generated/nibble_git.h
+          -P ${CMAKE_SOURCE_DIR}/tools/gen_git_header.cmake
+  BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/nibble_git.h
+  COMMENT "Generating nibble_git.h")
+add_dependencies(nibble_cli nibble_git_header)
+target_include_directories(nibble_cli PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(nibble_cli PRIVATE nibble)
 add_executable(make_test_gguf tests/make_test_gguf.cpp)
 target_include_directories(make_test_gguf PRIVATE include src tests)
@@ -157,6 +158,10 @@ nibble_cli_test(cli_chat_context_full 0 STDIN ${NIBBLE_CLI_DIR}/chat_two_turns.t
 add_test(NAME cli_bench_jsonl COMMAND ${CMAKE_COMMAND} -DCMD=${NIBBLE_EXE}
   "-DARGS=bench$<SEMICOLON>-m$<SEMICOLON>${NIBBLE_TINY}$<SEMICOLON>-t$<SEMICOLON>1$<SEMICOLON>-p$<SEMICOLON>8$<SEMICOLON>-n$<SEMICOLON>4$<SEMICOLON>-r$<SEMICOLON>2$<SEMICOLON>--out$<SEMICOLON>${CMAKE_BINARY_DIR}/bench_test.jsonl"
   -DOUT=${CMAKE_BINARY_DIR}/bench_test.jsonl -DN_LINES=2 -P ${CMAKE_SOURCE_DIR}/tests/bench_jsonl_check.cmake)
+add_test(NAME cli_bench_git_sha COMMAND ${CMAKE_COMMAND} -DCMD=${NIBBLE_EXE} -DSRC=${CMAKE_SOURCE_DIR}
+  -P ${CMAKE_SOURCE_DIR}/tests/git_sha_check.cmake)
+add_test(NAME cli_bench_quote_model COMMAND ${CMAKE_COMMAND} -DCMD=${NIBBLE_EXE} -DTINY=${NIBBLE_TINY}
+  -DDIR=${CMAKE_BINARY_DIR} -P ${CMAKE_SOURCE_DIR}/tests/bench_quote_check.cmake)
 nibble_cli_test(cli_bench_bad_threads 2 ARGS bench -m ${NIBBLE_TINY} -t 1,x -p 8 -n 4 -r 1 REGEX "usage: nibble bench")
 nibble_cli_test(cli_bench_no_model 2 ARGS bench REGEX "usage: nibble bench")
 nibble_cli_test(cli_bench_mem 0 ARGS bench -m ${NIBBLE_TINY} -t 1 -p 8 -n 4 -r 1 --mem REGEX "membw")

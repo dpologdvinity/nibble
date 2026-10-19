@@ -1,0 +1,17 @@
+# A model path containing '"' must still yield valid JSONL with the exact file name.
+set(name "q\"uote.gguf")
+file(COPY_FILE ${TINY} ${DIR}/${name})
+file(REMOVE ${DIR}/bench_quote.jsonl)
+execute_process(COMMAND ${CMD} bench -m ${DIR}/${name} -t 1 -p 8 -n 4 -r 1 --out ${DIR}/bench_quote.jsonl
+  RESULT_VARIABLE rc ERROR_VARIABLE e OUTPUT_QUIET)
+file(REMOVE ${DIR}/${name})
+if(NOT rc EQUAL 0)
+  message(FATAL_ERROR "exit ${rc}: ${e}")
+endif()
+file(STRINGS ${DIR}/bench_quote.jsonl lines)
+foreach(l IN LISTS lines)
+  string(JSON m ERROR_VARIABLE err GET "${l}" model)
+  if(err OR NOT m STREQUAL name)
+    message(FATAL_ERROR "bad model field (${err}): ${l}")
+  endif()
+endforeach()

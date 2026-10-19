@@ -90,9 +90,11 @@ prints `[context full]` and exits 0.
 
 `nibble bench -m <model.gguf> [-t 1,2,4] [-p 512] [-n 128] [-r 5] [--mem] [--out f.jsonl]`
 measures prefill (`pp<p>`) and decode (`tg<n>`) tok/s per thread count (median, min,
-max over `-r` reps after one warm-up); `--mem` adds a memory-bandwidth probe. `--out`
-appends one JSON line per measurement. `tools/bench_llamacpp.sh <model> <threads>
-<out.jsonl>` produces the same schema from llama.cpp's `llama-bench`. Results live in
+max over `-r` reps after one warm-up); `--mem` adds a memory-bandwidth probe (GB/s means
+1e9 bytes per second). `--out` appends one JSON line per measurement (delete the file
+to start fresh); `nibble bench --version` prints the baked-in git SHA (`-dirty` if
+tracked files differ from HEAD). `tools/bench_llamacpp.sh <model> <threads>
+<out.jsonl>` (env `P`, `N`, `R` override prompt tokens=512, gen tokens=128, reps=5; it also appends) produces the same schema from llama.cpp's `llama-bench`. Results live in
 `bench/results/`.
 
 ## Tests
