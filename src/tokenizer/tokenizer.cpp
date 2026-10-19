@@ -194,6 +194,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     if (!b) throw Error("tokenizer.ggml.add_bos_token is not a bool");
     t.add_bos_ = *b;
   }
+  // llama.cpp would fall back to id 11 (llama-vocab.cpp:2158), wrong for most BPE vocabs.
+  if (!spm && t.add_bos_ && t.bos_ < 0) throw Error("add_bos_token is set but tokenizer.ggml.bos_token_id is missing");
 
   // Before specials_: promoted EOG ids are then special-parsed and decode to "" like llama.cpp.
   t.eog_ = build_eog(f, t.tokens_, t.types_, t.eos_);

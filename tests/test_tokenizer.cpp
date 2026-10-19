@@ -70,7 +70,10 @@ TEST_CASE("llama-bpe pre accepted, bos and add_bos", "[tokenizer]") {
     o.add_bos = 0;
     CHECK_FALSE(make(o).add_bos());
   }
-  { TinyTokOpts o; o.add_bos = 1; CHECK(make(o).add_bos()); }
+  { TinyTokOpts o; o.add_bos = 1; o.bos = 260; CHECK(make(o).add_bos()); }
+  // add_bos without a bos id: llama.cpp would use id 11; fail closed instead.
+  { TinyTokOpts o; o.add_bos = 1; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing")); }
+  { TinyTokOpts o; o.pre = "llama-bpe"; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing")); }
   { TinyTokOpts o; o.bos = 9999; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id")); }
   { TinyTokOpts o; o.bos_as_string = true; CHECK_THROWS_AS(make(o), nibble::Error); }
 }
@@ -78,6 +81,7 @@ TEST_CASE("llama-bpe pre accepted, bos and add_bos", "[tokenizer]") {
 TEST_CASE("llama3 digits split in 3 and whole-word vocab hit", "[tokenizer]") {
   TinyTokOpts o;
   o.pre = "llama-bpe";
+  o.bos = 260;
   o.extra = {"12", "123"};  // 261, 262
   auto t = make(o);
   CHECK(t.encode("12345", false) == Ids{262, '4' , '5'});
