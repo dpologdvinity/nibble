@@ -60,7 +60,7 @@ StopReason Chat::send(std::string_view user, const GenParams& gp,
                       const std::function<bool(std::string_view)>& on_token) {
   if (!impl_) throw Error("use of moved-from Chat");
   Impl& c = *impl_;
-  if (c.started && c.session.n_past() != c.expected_past) throw Error("chat context lost");
+  if (c.started && (c.session.n_past() != c.expected_past || c.session.generations() != c.expected_gens)) throw Error("chat context lost");
   if (c.full) return StopReason::ContextFull;
   // Records how this send left the cache, on return or throw. The prompt counts
   // as sent once prefilled (max_tokens <= 0 and early ContextFull skip that). A
@@ -69,6 +69,7 @@ StopReason Chat::send(std::string_view user, const GenParams& gp,
   auto sync = [&c] {
     if (c.session.n_prompt_tokens() > 0) c.started = true;
     if (c.started) c.expected_past = c.session.n_past() > 0 ? c.session.n_past() : -1;
+    c.expected_gens = c.session.generations();
   };
   GenParams p = gp;
   p.append = c.started;

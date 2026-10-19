@@ -32,9 +32,12 @@ struct Chat::Impl {
   std::string system;
   bool started = false;  // the first turn's prompt has been prefilled
   bool full = false;     // a send returned ContextFull
-  // session.n_past() as the last send left it; -1 once the cache was lost.
-  // Checked at the top of send while started.
+  // session.n_past() and session.generations() as the last send left them;
+  // expected_past is -1 once the cache was lost. Both are checked at the top of
+  // send while started, so a direct generate call that leaves n_past unchanged
+  // (max_tokens <= 0, or a throw) still counts as lost context.
   int64_t expected_past = 0;
+  uint64_t expected_gens = 0;
 
   Impl(Session& s, ChatFormat f, std::string sys) : session(s), format(f), system(std::move(sys)) {}
 };

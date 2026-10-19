@@ -122,6 +122,7 @@ class Session {
   friend class Chat;
   const std::string& architecture() const;  // of the Session's Model
   std::string chat_template() const;        // tokenizer.chat_template, empty if absent
+  uint64_t generations() const;             // generate calls so far, including ones that threw
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

@@ -362,6 +362,23 @@ TEST_CASE("chat: direct append between sends is context lost", "[chat]") {
   CHECK_THROWS_MATCHES(c.send("more", kGreedy, keep_going), Error, MessageMatches(Equals("chat context lost")));
 }
 
+TEST_CASE("chat: a direct generate that leaves n_past unchanged is context lost", "[chat]") {
+  ChatFixture fx;
+  Model m = fx.load();
+  Session s(m);
+  Chat c(s, "s");
+  c.send("hi", kGreedy, keep_going);
+  const int64_t past = s.n_past();
+  SECTION("max_tokens 0 with append") {
+    s.generate("", {.max_tokens = 0, .append = true}, keep_going);
+  }
+  SECTION("a call that throws") {
+    CHECK_THROWS_AS(s.generate("x", {.temperature = -1.0f, .append = true}, keep_going), Error);
+  }
+  REQUIRE(s.n_past() == past);
+  CHECK_THROWS_MATCHES(c.send("more", kGreedy, keep_going), Error, MessageMatches(Equals("chat context lost")));
+}
+
 TEST_CASE("chat: callback exception is not context lost", "[chat]") {
   ChatFixture fx(256);
   Model m = fx.load();
