@@ -1,0 +1,4 @@
+{"tool":"nibble","commit":"69c304a","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"pp64","threads":12,"reps":3,"median":18.6849,"min":17.7810,"max":19.0809,"unit":"tok/s","load1":8.05,"date":"2026-10-19T05:47:41Z"}
+{"tool":"nibble","commit":"69c304a","model":"qwen2.5-0.5b-instruct-q4_0.gguf","test":"tg16","threads":12,"reps":3,"median":6.3594,"min":6.1983,"max":6.5259,"unit":"tok/s","load1":8.05,"date":"2026-10-19T05:47:41Z"}
+{"tool":"nibble","commit":"69c304a","model":"qwen2.5-0.5b-instruct-fp16.gguf","test":"pp64","threads":12,"reps":3,"median":4.0539,"min":3.9596,"max":5.5863,"unit":"tok/s","load1":8.31,"date":"2026-10-19T05:48:04Z"}
+{"tool":"nibble","commit":"69c304a","model":"qwen2.5-0.5b-instruct-fp16.gguf","test":"tg16","threads":12,"reps":3,"median":2.3116,"min":2.3020,"max":2.7707,"unit":"tok/s","load1":8.31,"date":"2026-10-19T05:48:04Z"}
