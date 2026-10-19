@@ -135,8 +135,11 @@ llama.cpp and an fp64 oracle with Q8_0 requantization disagree pairwise at about
 0.9966 cosine, so a tighter gate was not attained by any of the three
 implementations compared. Minimum cosine (capital / code / chat):
 
-- Q8_0: 0.99941 / 0.99854 / 0.99616
-- Q4_0: 0.99888 / 0.99858 / 0.99658
+- Q8_0: 0.999517 / 0.998758 / 0.997668
+- Q4_0: 0.999061 / 0.998619 / 0.995786
+
+These moved (re-recorded in M6) when the scalar oracle stopped contracting FMAs
+(`-ffp-contract=off`).
 
 Llama-3.2-1B-Instruct and TinyLlama-1.1B-Chat F16 (same strict gate as Qwen F16:
 cosine >= 0.999 at every position, argmax agreement except near-ties, greedy
