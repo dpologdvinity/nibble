@@ -88,6 +88,27 @@ TEST_CASE("matmul_multi equals separate matmul calls bitwise", "[cpu_backend][op
   }
 }
 
+TEST_CASE("matmul_multi with different input widths equals separate matmul calls", "[cpu_backend][ops]") {
+  ThreadPool pool(4);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(22);
+  for (DType a : {DType::F32, DType::Q8_0})
+    for (int64_t n : {1, 5}) {
+      Weight w0(a, 64, 24, g), w1(a, 96, 17, g);  // each reads its own ne0 floats per row of x
+      const Tensor* ws[] = {&w0.t, &w1.t};
+      float* x = be.alloc(n * 96);
+      const auto xh = rnd(size_t(n * 96), g);
+      std::copy(xh.begin(), xh.end(), x);
+      float* sep[] = {be.alloc(n * 24), be.alloc(n * 17)};
+      float* fused[] = {be.alloc(n * 24), be.alloc(n * 17)};
+      be.matmul_multi(ws, x, fused, n);  // first, so no earlier call leaves w1-width activations in scratch
+      for (int i = 0; i < 2; ++i) be.matmul(*ws[i], x, sep[i], n);
+      INFO(dtype_info(a).name << " n=" << n);
+      CHECK(std::memcmp(sep[0], fused[0], size_t(n * 24) * sizeof(float)) == 0);
+      CHECK(std::memcmp(sep[1], fused[1], size_t(n * 17) * sizeof(float)) == 0);
+    }
+}
+
 #ifdef NIBBLE_HAVE_AVX2
 namespace {
 float exp1(float x) {
@@ -98,7 +119,7 @@ float exp1(float x) {
 }  // namespace
 
 // Dense sweep (2^24 evenly spaced points) plus every float in the bands where 2^n scaling is special:
-// e^x subnormal (x < -87.34) and n = 127/128 (x > 87.68).
+// e^x subnormal (x < -87.34) and n = 127/128 up to ln(FLT_MAX) (x > 87.68; n = 128 from 88.38).
 TEST_CASE("simd exp_ps max relative error vs std::exp <= 2e-7 over [-88, 88]", "[simd][ops]") {
   double worst = 0;
   float worst_x = 0;
@@ -120,7 +141,7 @@ TEST_CASE("simd exp_ps max relative error vs std::exp <= 2e-7 over [-88, 88]", "
   const int64_t steps = int64_t{1} << 24;
   for (int64_t i = 0; i <= steps; ++i) push(float(-88.0 + 176.0 * double(i) / double(steps)));
   for (float x = -88.f; x <= -87.f; x = std::nextafter(x, 0.f)) push(x);
-  for (float x = 87.f; x <= 88.f; x = std::nextafter(x, 100.f)) push(x);
+  for (float x = 87.f; x <= 88.72f; x = std::nextafter(x, 100.f)) push(x);
   flush();
   INFO("worst relative error " << worst << " at x=" << worst_x);
   CHECK(worst <= 2e-7);
