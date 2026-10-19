@@ -115,12 +115,21 @@ void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
                   static_cast<long long>(w.ne[0]));
     const size_t need = static_cast<size_t>(n * (w.ne[0] / kQK));
     if (xq_.size() < need) xq_.resize(need);  // beyond reserve(): outside the no-allocation guarantee
+#ifdef NIBBLE_HAVE_AVX2
+    const int64_t nb = w.ne[0] / kQK;
+    for (int64_t t = 0; t < n; ++t) simd::quantize_row_q8_0(x + t * w.ne[0], xq_.data() + t * nb, w.ne[0]);
+#else
     cpu::quantize_rows_q8_0(x, xq_.data(), n, w.ne[0]);
+#endif
     xq = xq_.data();
   }
 #ifdef NIBBLE_HAVE_AVX2
   if (w.type == DType::F32 || w.type == DType::F16) {
     pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::matmul_rows_f(w, x, y, n, b, e); });
+    return;
+  }
+  if (xq) {
+    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::matmul_rows_q(w, xq, y, n, b, e); });
     return;
   }
 #endif

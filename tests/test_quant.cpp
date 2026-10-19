@@ -236,3 +236,38 @@ TEST_CASE("golden: dequantize_row Q4_0/Q8_0 bitwise equals dequantize_row_q*_0",
     REQUIRE(f32_bits(o[static_cast<size_t>(i)]) == golden::kDequantQ4_0[i]);
   }
 }
+
+#include "backend/cpu/simd/simd.h"
+#ifdef NIBBLE_HAVE_AVX2
+// Decision 3: the AVX2 quantizer must reproduce quantize_row_q8_0_ref bytes, including the tie cases
+// that _mm256_round_ps(nearest) would round to even.
+TEST_CASE("golden: simd quantize_row_q8_0 matches quantize_row_q8_0_ref bytes", "[quant][golden][simd]") {
+  for (const auto& c : golden::kQuantCases) {
+    CAPTURE(c.name);
+    BlockQ8_0 y;
+    simd::quantize_row_q8_0(c.x, &y, 32);
+    REQUIRE(y.d == c.q8_d);
+    for (int j = 0; j < 32; ++j) {
+      CAPTURE(j);
+      REQUIRE(int{y.qs[j]} == int{c.q8_qs[j]});
+    }
+  }
+}
+
+// Q8_0 x Q8_0 is not checked here: the golden activations are random bytes that include -128, which the
+// AVX2 sign trick does not support (quantize_row_q8_0 never emits it); test_simd.cpp covers it against
+// the golden-pinned scalar dot instead.
+TEST_CASE("golden: simd dot_q4_0_q8_0 bitwise equals ggml generic dot", "[quant][golden][simd]") {
+  for (const auto& c : golden::kDotCases) {
+    CAPTURE(c.seed, c.n);
+    const int nb = c.n / 32;
+    std::vector<BlockQ8_0> w8(static_cast<size_t>(nb)), a8(w8.size());
+    std::vector<BlockQ4_0> w4(static_cast<size_t>(nb));
+    golden::Rng r{c.seed};
+    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(w8.data()), nb);
+    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(a8.data()), nb);
+    golden::fill_q4_0(r, reinterpret_cast<uint8_t*>(w4.data()), nb);
+    REQUIRE(f32_bits(simd::dot_q4_0_q8_0(w4.data(), a8.data(), nb)) == c.q4q8_bits);
+  }
+}
+#endif

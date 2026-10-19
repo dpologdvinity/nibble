@@ -12,6 +12,8 @@
 
 namespace nibble {
 struct Tensor;
+struct BlockQ4_0;
+struct BlockQ8_0;
 }
 
 namespace nibble::simd {
@@ -44,6 +46,45 @@ static inline int32_t hsum_epi32(__m256i v) {
 static inline __m256 load_f16x8(const uint16_t* p) {
   return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
 }
+
+// int8 dot per group of 4 consecutive bytes: lane k = sum of x[i]*y[i] for i in [4k, 4k+4), as 8 int32 lanes.
+// Sign trick after llama.cpp's mul_sum_i8_pairs_float (ggml-cpu/arch/x86/quants.c, MIT).
+// Exact unless some y[i] == -128 where x[i] < 0 (sign(-128) wraps). Q4_0 passes the activation as x (y in
+// [-8,7]: always exact); Q8_0 passes it as y, which is safe because quantize_row_q8_0 never emits -128.
+static inline __m256i mul_sum_i8_maddubs(__m256i x, __m256i y) {
+  // maddubs pair sums are at most 2*128*127 = 32512 in magnitude: no int16 saturation.
+  return _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_sign_epi8(x, x), _mm256_sign_epi8(y, x)),
+                           _mm256_set1_epi16(1));
+}
+static inline __m256i mul_sum_i8(__m256i x, __m256i y) {
+#if defined(NIBBLE_HAVE_AVXVNNI)
+  return _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(x, x), _mm256_sign_epi8(y, x));
+#else
+  return mul_sum_i8_maddubs(x, y);
+#endif
+}
+
+// roundf on each lane (round half away from zero), exact for every finite float: trunc(v) is exact,
+// v - trunc(v) is exact (same binade or t == 0), so adding sign(v) where |v - trunc(v)| >= 0.5 is roundf
+// by definition. _mm256_round_ps(_MM_FROUND_TO_NEAREST_INT) alone would round ties to even.
+static inline __m256 round_half_away_ps(__m256 v) {
+  const __m256 sign = _mm256_set1_ps(-0.0f);
+  const __m256 t = _mm256_round_ps(v, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
+  const __m256 frac = _mm256_andnot_ps(sign, _mm256_sub_ps(v, t));
+  const __m256 up = _mm256_and_ps(_mm256_cmp_ps(frac, _mm256_set1_ps(0.5f), _CMP_GE_OQ), _mm256_set1_ps(1.0f));
+  return _mm256_add_ps(t, _mm256_or_ps(up, _mm256_and_ps(v, sign)));
+}
+
+// Bit-identical to nibble::quantize_row_q8_0 for finite x (same amax, d, id, roundf); throws on bad n.
+void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n);
+// Bit-identical to the scalar dots in quant.cpp: exact integer block sums, then the scalar's per-block
+// float products accumulated in the scalar's order. Blocks may be unaligned. For Q8_0, a must not contain
+// -128 (quantize_row_q8_0 output never does).
+float dot_q4_0_q8_0(const BlockQ4_0* w, const BlockQ8_0* a, int64_t n_blocks);
+float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks);
+// Same contract as cpu::matmul_rows for Q4_0/Q8_0 weights (xq = activations from quantize_row_q8_0),
+// bit-identical to it; 4 weight rows share each activation block.
+void matmul_rows_q(const Tensor& w, const BlockQ8_0* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 
 // Same contract as cpu::matmul_rows for F32/F16 weights (matmul_f.cpp); sums are reordered, so results
 // match the scalar oracle to ~1e-6 relative, not bit-exactly.
