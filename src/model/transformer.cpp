@@ -159,11 +159,11 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
     dcheck_vec(L.attn_norm, E, "rmsnorm attn_norm");
     be_.rmsnorm(x_, L.attn_norm, h_, n, c_.rms_eps);
     dcheck_matmul(be_, L.wq, E, Q, "attn_q");
-    be_.matmul(L.wq, h_, q_, n);
     dcheck_matmul(be_, L.wk, E, kvw, "attn_k");
-    be_.matmul(L.wk, h_, kc, n);
     dcheck_matmul(be_, L.wv, E, kvw, "attn_v");
-    be_.matmul(L.wv, h_, vc, n);
+    const Tensor* const qkv_w[] = {&L.wq, &L.wk, &L.wv};
+    float* const qkv_y[] = {q_, kc, vc};
+    be_.matmul_multi(qkv_w, h_, qkv_y, n);
     NIBBLE_DCHECK(L.bq.has_value() == c_.qkv_bias && L.bk.has_value() == c_.qkv_bias &&
                       L.bv.has_value() == c_.qkv_bias,
                   "qkv bias presence vs config qkv_bias=%d", static_cast<int>(c_.qkv_bias));
@@ -194,9 +194,10 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
     dcheck_vec(L.ffn_norm, E, "rmsnorm ffn_norm");
     be_.rmsnorm(x_, L.ffn_norm, h_, n, c_.rms_eps);
     dcheck_matmul(be_, L.w_gate, E, c_.n_ff, "ffn_gate");
-    be_.matmul(L.w_gate, h_, gate_, n);
     dcheck_matmul(be_, L.w_up, E, c_.n_ff, "ffn_up");
-    be_.matmul(L.w_up, h_, up_, n);
+    const Tensor* const ffn_w[] = {&L.w_gate, &L.w_up};
+    float* const ffn_y[] = {gate_, up_};
+    be_.matmul_multi(ffn_w, h_, ffn_y, n);
     dcheck_count(n * c_.n_ff, n, c_.n_ff, "silu_mul");
     be_.silu_mul(gate_, up_, n * c_.n_ff);
     dcheck_matmul(be_, L.w_down, c_.n_ff, E, "ffn_down");

@@ -115,59 +115,85 @@ void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float*
 }
 
 void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
-  NIBBLE_DCHECK(x && y && w.data && n > 0, "matmul: x=%p y=%p w=%p n=%lld", static_cast<const void*>(x),
-                static_cast<void*>(y), w.data, static_cast<long long>(n));
+  const Tensor* ws[] = {&w};
+  float* const ys[] = {y};
+  matmul_multi(ws, x, ys, n);
+}
+
+void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x, std::span<float* const> ys,
+                              int64_t n) {
+  NIBBLE_DCHECK(!ws.empty() && ws.size() == ys.size() && x && n > 0, "matmul: %zu weights, %zu outputs, x=%p n=%lld",
+                ws.size(), ys.size(), static_cast<const void*>(x), static_cast<long long>(n));
+  const Tensor& w0 = *ws[0];
+  int64_t total = 0;
+  for (size_t i = 0; i < ws.size(); ++i) {
+    NIBBLE_DCHECK(ys[i] && ws[i]->data && ws[i]->ne[0] == w0.ne[0], "matmul: y=%p w=%p ne0=%lld vs %lld",
+                  static_cast<void*>(ys[i]), ws[i]->data, static_cast<long long>(ws[i]->ne[0]),
+                  static_cast<long long>(w0.ne[0]));
+    if (ws[i]->type != w0.type) return Backend::matmul_multi(ws, x, ys, n);  // one matmul per weight
+    total += ws[i]->rows();
+  }
   // Unsupported dtype throws here on the calling thread (pool tasks must not throw);
   // Task 9 gates on supports() at load time so the hot path never sees one.
-  if (!supports(w.type)) cpu::matmul_rows(w, x, y, 0, 0, 0, nullptr);  // n=0: only the dtype check runs
+  if (!supports(w0.type)) cpu::matmul_rows(w0, x, ys[0], 0, 0, 0, nullptr);  // n=0: only the dtype check runs
   const BlockQ8_0* xq = nullptr;
-  if (w.type == DType::Q8_0 || w.type == DType::Q4_0) {
-    NIBBLE_DCHECK(w.ne[0] % kQK == 0, "matmul: quantized weight ne0=%lld not a multiple of 32",
-                  static_cast<long long>(w.ne[0]));
-    const size_t need = static_cast<size_t>(n * (w.ne[0] / kQK));
+  [[maybe_unused]] const simd::BlockQ8_0x8* xp = nullptr;
+  if (w0.type == DType::Q8_0 || w0.type == DType::Q4_0) {
+    NIBBLE_DCHECK(w0.ne[0] % kQK == 0, "matmul: quantized weight ne0=%lld not a multiple of 32",
+                  static_cast<long long>(w0.ne[0]));
+    const int64_t nb = w0.ne[0] / kQK;
+    const size_t need = static_cast<size_t>(n * nb);
     if (xq_.size() < need) xq_.resize(need);  // beyond reserve(): outside the no-allocation guarantee
 #ifdef NIBBLE_HAVE_AVX2
-    const int64_t nb = w.ne[0] / kQK;
-    for (int64_t t = 0; t < n; ++t) simd::quantize_row_q8_0(x + t * w.ne[0], xq_.data() + t * nb, w.ne[0]);
+    for (int64_t t = 0; t < n; ++t) simd::quantize_row_q8_0(x + t * w0.ne[0], xq_.data() + t * nb, w0.ne[0]);
+    if (n >= 4) {
+      const size_t xp_need = static_cast<size_t>((n + 7) / 8 * nb);
+      if (xp_.size() < xp_need) xp_.resize(xp_need);  // beyond reserve(), like xq_
+      simd::pack_q8_0_x8(xq_.data(), n, nb, xp_.data());
+      xp = xp_.data();
+    }
 #else
-    cpu::quantize_rows_q8_0(x, xq_.data(), n, w.ne[0]);
+    cpu::quantize_rows_q8_0(x, xq_.data(), n, w0.ne[0]);
 #endif
     xq = xq_.data();
   }
+  // Rows [b, e) of the weights stacked in order; each weight's rows go through the same kernel as a lone
+  // matmul, and every kernel's output is independent of the row range it is called with.
+  pool_.parallel_for(total, 16, [&](int64_t b, int64_t e) {
+    int64_t off = 0;
+    for (size_t i = 0; i < ws.size(); off += ws[i]->rows(), ++i) {
+      const Tensor& w = *ws[i];
+      const int64_t lo = std::max(b, off) - off, hi = std::min(e, off + w.rows()) - off;
+      if (lo >= hi) continue;
 #ifdef NIBBLE_HAVE_AVX2
-  if (w.type == DType::F32 || w.type == DType::F16) {
-    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) {
-      n >= 4 ? simd::gemm_f(w, x, y, n, b, e) : simd::matmul_rows_f(w, x, y, n, b, e);
-    });
-    return;
-  }
-  if (xq && n >= 4) {
-    const int64_t nb = w.ne[0] / kQK;
-    const size_t need = static_cast<size_t>((n + 7) / 8 * nb);
-    if (xp_.size() < need) xp_.resize(need);  // beyond reserve(), like xq_
-    simd::pack_q8_0_x8(xq, n, nb, xp_.data());
-    const simd::BlockQ8_0x8* xp = xp_.data();
-    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::gemm_q(w, xp, y, n, b, e); });
-    return;
-  }
-  if (xq) {
-    pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { simd::matmul_rows_q(w, xq, y, n, b, e); });
-    return;
-  }
+      if (!xq) n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
+      else if (xp) simd::gemm_q(w, xp, ys[i], n, lo, hi);
+      else simd::matmul_rows_q(w, xq, ys[i], n, lo, hi);
+#else
+      cpu::matmul_rows(w, x, ys[i], n, lo, hi, xq);
 #endif
-  pool_.parallel_for(w.rows(), 16, [&](int64_t b, int64_t e) { cpu::matmul_rows(w, x, y, n, b, e, xq); });
+    }
+  });
 }
 
 void CpuBackend::rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) {
   NIBBLE_DCHECK(x && y && weight.data && n > 0 && weight.type == DType::F32,
                 "rmsnorm: x=%p y=%p weight=%p n=%lld weight dtype %u (need F32)", static_cast<const void*>(x),
                 static_cast<void*>(y), weight.data, static_cast<long long>(n), static_cast<unsigned>(weight.type));
+#ifdef NIBBLE_HAVE_AVX2
+  simd::rmsnorm(x, weight, y, n, eps);
+#else
   cpu::rmsnorm(x, weight, y, n, eps);
+#endif
 }
 void CpuBackend::add(float* x, const float* y, int64_t count) {
   NIBBLE_DCHECK(x && y && count > 0, "add: x=%p y=%p count=%lld", static_cast<void*>(x),
                 static_cast<const void*>(y), static_cast<long long>(count));
+#ifdef NIBBLE_HAVE_AVX2
+  simd::add(x, y, count);
+#else
   cpu::add(x, y, count);
+#endif
 }
 void CpuBackend::add_bias(float* x, const Tensor& bias, int64_t n) {
   NIBBLE_DCHECK(x && bias.data && n > 0 && bias.type == DType::F32,
@@ -190,7 +216,11 @@ void CpuBackend::copy(float* dst, const float* src, int64_t count) {
 void CpuBackend::silu_mul(float* gate, const float* up, int64_t count) {
   NIBBLE_DCHECK(gate && up && count > 0, "silu_mul: gate=%p up=%p count=%lld", static_cast<void*>(gate),
                 static_cast<const void*>(up), static_cast<long long>(count));
+#ifdef NIBBLE_HAVE_AVX2
+  simd::silu_mul(gate, up, count);
+#else
   cpu::silu_mul(gate, up, count);
+#endif
 }
 
 void CpuBackend::attention(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
@@ -208,7 +238,11 @@ void CpuBackend::attention(const float* q, const float* k, const float* v, float
   float* scratch = scratch_.data();
   pool_.parallel_for(n_heads, 1, [&](int64_t b, int64_t e) {
     for (int64_t h = b; h < e; ++h)
+#ifdef NIBBLE_HAVE_AVX2
+      simd::attention_heads(q, k, v, out, n, pos0, n_heads, n_kv_heads, head_dim, h, h + 1, scratch + h * ctx);
+#else
       cpu::attention_heads(q, k, v, out, n, pos0, n_heads, n_kv_heads, head_dim, h, h + 1, scratch + h * ctx);
+#endif
   });
 }
 

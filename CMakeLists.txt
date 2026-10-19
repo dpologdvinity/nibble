@@ -30,9 +30,11 @@ file(GLOB_RECURSE NIBBLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp
 # ref_ops.cpp is the scalar oracle for the SIMD kernels and must stay uncontracted too, and the AVX2
 # quant kernels reproduce the scalar dots bit-for-bit, so they must not contract either. The tiled GEMM
 # reproduces the row kernels (quant_avx2.cpp, matmul_f.cpp) bit-for-bit, so all three share the setting.
+# ops.cpp (SIMD rmsnorm/silu/attention) keeps the scalar rmsnorm's per-element math and has scalar tails;
+# uncontracted, g++ and clang give identical results there too (its vector FMAs are explicit).
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/ref_ops.cpp
   ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/quant_avx2.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/matmul_f.cpp
-  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/gemm.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/gemm.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/ops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 add_library(nibble STATIC ${NIBBLE_SOURCES})
 target_include_directories(nibble PUBLIC include PRIVATE src)
 target_link_libraries(nibble PUBLIC nibble_flags Threads::Threads)

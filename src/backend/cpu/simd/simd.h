@@ -98,6 +98,35 @@ static inline __m256 round_half_away_ps(__m256 v) {
   return _mm256_add_ps(t, _mm256_or_ps(up, _mm256_and_ps(v, sign)));
 }
 
+// e^x per lane: max relative error vs exp about 1e-7 over [-88, 88] (measured in test_ops.cpp), one
+// rounding into the subnormal range, 0 below about -104, inf above ln(FLT_MAX); NaN stays NaN.
+// x = n*ln2 + r (Cody-Waite, |r| <= ~0.35), e^r - 1 by degree-7 Taylor, then fma(t, 2^n, 2^n) rounds
+// once even when 2^n is subnormal (n >= -149 is exact as a float). Only explicit fma/mul: contraction-safe.
+static inline __m256 exp_ps(__m256 x) {
+  x = _mm256_max_ps(_mm256_set1_ps(-104.0f), _mm256_min_ps(_mm256_set1_ps(89.0f), x));  // NaN in x passes through
+  const __m256 fn = _mm256_round_ps(_mm256_mul_ps(x, _mm256_set1_ps(1.44269504f)),
+                                    _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  __m256 r = _mm256_fnmadd_ps(fn, _mm256_set1_ps(0.693359375f), x);  // fn * ln2_hi is exact
+  r = _mm256_fnmadd_ps(fn, _mm256_set1_ps(-2.12194440e-4f), r);
+  __m256 q = _mm256_set1_ps(1.0f / 5040);
+  q = _mm256_fmadd_ps(q, r, _mm256_set1_ps(1.0f / 720));
+  q = _mm256_fmadd_ps(q, r, _mm256_set1_ps(1.0f / 120));
+  q = _mm256_fmadd_ps(q, r, _mm256_set1_ps(1.0f / 24));
+  q = _mm256_fmadd_ps(q, r, _mm256_set1_ps(1.0f / 6));
+  q = _mm256_fmadd_ps(q, r, _mm256_set1_ps(0.5f));
+  q = _mm256_fmadd_ps(q, r, _mm256_set1_ps(1.0f));
+  const __m256 t = _mm256_mul_ps(q, r);  // e^r - 1
+  // s = 2^min(n, 127): normal exponent bits for n >= -126, else the subnormal bit 1 << (n + 149) (0 below -149).
+  const __m256i n = _mm256_cvtps_epi32(fn), nc = _mm256_min_epi32(n, _mm256_set1_epi32(127));
+  const __m256i norm = _mm256_slli_epi32(_mm256_add_epi32(nc, _mm256_set1_epi32(127)), 23);
+  const __m256i sub = _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_add_epi32(nc, _mm256_set1_epi32(149)));
+  const __m256 s = _mm256_castsi256_ps(_mm256_blendv_epi8(sub, norm, _mm256_cmpgt_epi32(nc, _mm256_set1_epi32(-127))));
+  // n = 128: one more exact doubling, which overflows to inf only when e^x does.
+  const __m256 s2 = _mm256_castsi256_ps(
+      _mm256_slli_epi32(_mm256_add_epi32(_mm256_sub_epi32(n, nc), _mm256_set1_epi32(127)), 23));
+  return _mm256_mul_ps(_mm256_fmadd_ps(t, s, s), s2);
+}
+
 // Bit-identical to nibble::quantize_row_q8_0 for finite x whose block d = amax/127 is a normal float
 // (amax >~ 1.5e-36). Below that, rounding of tiny d and id can differ from scalar, and below ~3.7e-37 id
 // overflows and scalar is UB (roundf(inf) cast). Such blocks contribute 0 to dots: their fp16 scale is 0.
@@ -123,6 +152,17 @@ void pack_q8_0_x8(const BlockQ8_0* xq, int64_t n, int64_t nb, BlockQ8_0x8* xp);
 void gemm_q(const Tensor& w, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 // out[k] = fp16_to_fp32(row[k]) for k < d.
 void embed_row_f16(const uint16_t* row, float* out, int64_t d);
+
+// Same contracts as the cpu:: ops in ref_ops.h (ops.cpp). add is bit-identical; rmsnorm keeps the scalar's
+// double math and differs only in sum order; silu_mul and attention use exp_ps and reordered float sums.
+// Every element is computed the same way wherever it falls in a call (tails go through the vector path or
+// depend only on the row width), so results do not depend on n, chunking or threads.
+void add(float* x, const float* y, int64_t count);
+void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps);
+void silu_mul(float* gate, const float* up, int64_t count);
+void attention_heads(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
+                     int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin, int64_t head_end,
+                     float* scratch);
 #endif
 
 }  // namespace nibble::simd
