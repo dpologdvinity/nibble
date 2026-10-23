@@ -16,6 +16,7 @@ namespace nibble {
 struct Tensor;
 struct BlockQ4_0;
 struct BlockQ8_0;
+struct QuantActs;
 }
 
 namespace nibble::simd {
@@ -138,9 +139,10 @@ void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n);
 // -128 (quantize_row_q8_0 output never does).
 float dot_q4_0_q8_0(const BlockQ4_0* w, const BlockQ8_0* a, int64_t n_blocks);
 float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks);
-// Same contract as cpu::matmul_rows for Q4_0/Q8_0 weights (xq = activations from quantize_row_q8_0),
-// bit-identical to it; 4 weight rows share each activation block.
-void matmul_rows_q(const Tensor& w, const BlockQ8_0* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
+// Same contract as cpu::matmul_rows for quantized weights (xq.q8_0 from quantize_row_q8_0), bit-identical to
+// it. Q4_0/Q8_0 run the AVX2 kernel, 4 weight rows sharing each activation block; the other types call
+// cpu::matmul_rows.
+void matmul_rows_q(const Tensor& w, const QuantActs& xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 
 // Same contract as cpu::matmul_rows for F32/F16 weights (matmul_f.cpp); sums are reordered, so results
 // match the scalar oracle to ~1e-6 relative, not bit-exactly.

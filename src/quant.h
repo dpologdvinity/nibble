@@ -80,4 +80,12 @@ float dot_q6_K_q8_K(const BlockQ6_K* w, const BlockQ8_K* a, int64_t n_blocks);
 enum class ActType { None, Q8_0, Q8_1, Q8_K };
 ActType act_type(DType w);
 
+// The activation rows a quantized matmul reads: one pointer per ActType, each holding n rows of
+// ne0 / block_size blocks. Only the pointers the weights' act_type()s need are set.
+struct QuantActs {
+  const BlockQ8_0* q8_0 = nullptr;
+  const BlockQ8_1* q8_1 = nullptr;
+  const BlockQ8_K* q8_K = nullptr;
+};
+
 }  // namespace nibble

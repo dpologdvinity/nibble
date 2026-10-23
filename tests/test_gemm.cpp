@@ -69,7 +69,8 @@ TEST_CASE("cpu backend prefill matmul matches scalar for all dtypes", "[gemm][cp
             xq.resize(size_t(n * in / 32));
             cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
           }
-          cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, xq.empty() ? nullptr : xq.data());
+          const QuantActs qa{xq.data()};
+          cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, xq.empty() ? nullptr : &qa);
           be.matmul(w.t, x.data(), got.data(), n);
           int64_t mismatches = 0;
           for (int64_t t = 0; t < n; ++t)
@@ -117,7 +118,7 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
   if (quant(type)) simd::quantize_row_q8_0(x, xq.data(), n * in);
   std::vector<float> want(size_t(n * rows), -7.f), got(want);
   if (quant(type)) {
-    simd::matmul_rows_q(w.t, xq.data(), want.data(), n, rb, re);
+    simd::matmul_rows_q(w.t, QuantActs{xq.data()}, want.data(), n, rb, re);
     std::vector<simd::BlockQ8_0x8> xp(size_t((n + 7) / 8 * (in / 32)));
     simd::pack_q8_0_x8(xq.data(), n, in / 32, xp.data());
     simd::gemm_q(w.t, xp.data(), got.data(), n, rb, re);

@@ -17,10 +17,13 @@ CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool) {}
 
 void CpuBackend::reserve(const ReserveParams& rp) {
   const int64_t n_ctx = rp.n_ctx, n_heads = rp.n_heads;
-  uint64_t need, xq_need;
+  uint64_t need, xq_need, xqk_need;
   if (rp.max_rows < 0 || rp.max_width < 0 ||
       __builtin_mul_overflow(static_cast<uint64_t>(rp.max_rows), static_cast<uint64_t>(rp.max_width) / kQK, &xq_need) ||
-      xq_need > std::numeric_limits<size_t>::max() / sizeof(BlockQ8_0))
+      __builtin_mul_overflow(static_cast<uint64_t>(rp.max_rows), (static_cast<uint64_t>(rp.max_width) + kQK_K - 1) / kQK_K,
+                             &xqk_need) ||
+      xq_need > std::numeric_limits<size_t>::max() / sizeof(BlockQ8_1) ||
+      xqk_need > std::numeric_limits<size_t>::max() / sizeof(BlockQ8_K))
     throw Error("reserve: activation scratch for max_rows=" + std::to_string(rp.max_rows) +
                 " max_width=" + std::to_string(rp.max_width) + " is too large");
   if (n_ctx < 0 || n_heads < 0 || __builtin_mul_overflow(static_cast<uint64_t>(n_ctx), static_cast<uint64_t>(n_heads), &need) ||
@@ -45,13 +48,14 @@ void CpuBackend::reserve(const ReserveParams& rp) {
     }
   }
 #endif
-  if (xq_.size() < xq_need) {
-    try {
-      xq_.resize(static_cast<size_t>(xq_need));
-    } catch (const std::exception&) {
-      throw Error("reserve: cannot allocate " + std::to_string(xq_need * sizeof(BlockQ8_0)) +
-                  " bytes of activation scratch");
-    }
+  try {
+    if (xq_.size() < xq_need) xq_.resize(static_cast<size_t>(xq_need));
+    if (xq1_.size() < xq_need) xq1_.resize(static_cast<size_t>(xq_need));
+    if (xqk_.size() < xqk_need) xqk_.resize(static_cast<size_t>(xqk_need));
+  } catch (const std::exception&) {
+    throw Error("reserve: cannot allocate " +
+                std::to_string(xq_need * (sizeof(BlockQ8_0) + sizeof(BlockQ8_1)) + xqk_need * sizeof(BlockQ8_K)) +
+                " bytes of activation scratch");
   }
 }
 
@@ -126,35 +130,56 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
                 ws.size(), ys.size(), static_cast<const void*>(x), static_cast<long long>(n));
   const Tensor& w0 = *ws[0];
   int64_t total = 0;
+  bool need[4] = {};  // by ActType
+  [[maybe_unused]] bool need_pack = false;
   for (size_t i = 0; i < ws.size(); ++i) {
     NIBBLE_DCHECK(ys[i] && ws[i]->data, "matmul: y=%p w=%p", static_cast<void*>(ys[i]), ws[i]->data);
-    if (ws[i]->type != w0.type || ws[i]->ne[0] != w0.ne[0])
-      return Backend::matmul_multi(ws, x, ys, n);  // one matmul per weight
+    if (ws[i]->ne[0] != w0.ne[0]) return Backend::matmul_multi(ws, x, ys, n);  // one matmul per weight
+    // Unsupported dtype throws here on the calling thread (pool tasks must not throw);
+    // Task 9 gates on supports() at load time so the hot path never sees one.
+    if (!supports(ws[i]->type)) cpu::matmul_rows(*ws[i], x, ys[i], 0, 0, 0, nullptr);  // n=0: only the dtype check runs
+    need[static_cast<int>(act_type(ws[i]->type))] = true;
+    need_pack |= ws[i]->type == DType::Q4_0 || ws[i]->type == DType::Q8_0;
     total += ws[i]->rows();
   }
-  // Unsupported dtype throws here on the calling thread (pool tasks must not throw);
-  // Task 9 gates on supports() at load time so the hot path never sees one.
-  if (!supports(w0.type)) cpu::matmul_rows(w0, x, ys[0], 0, 0, 0, nullptr);  // n=0: only the dtype check runs
-  const BlockQ8_0* xq = nullptr;
+  const int64_t in = w0.ne[0];
+  QuantActs acts;
   [[maybe_unused]] const simd::BlockQ8_0x8* xp = nullptr;
-  if (w0.type == DType::Q8_0 || w0.type == DType::Q4_0) {
-    NIBBLE_DCHECK(w0.ne[0] % kQK == 0, "matmul: quantized weight ne0=%lld not a multiple of 32",
-                  static_cast<long long>(w0.ne[0]));
-    const int64_t nb = w0.ne[0] / kQK;
-    const size_t need = static_cast<size_t>(n * nb);
-    if (xq_.size() < need) xq_.resize(need);  // beyond reserve(): outside the no-allocation guarantee
+  if (need[static_cast<int>(ActType::Q8_0)] || need[static_cast<int>(ActType::Q8_1)]) {
+    NIBBLE_DCHECK(in % kQK == 0, "matmul: quantized weight ne0=%lld not a multiple of 32", static_cast<long long>(in));
+    const int64_t nb = in / kQK;
+    const size_t blocks = static_cast<size_t>(n * nb);
+    if (need[static_cast<int>(ActType::Q8_0)]) {
+      ++quantize_calls_;
+      if (xq_.size() < blocks) xq_.resize(blocks);  // beyond reserve(): outside the no-allocation guarantee
 #ifdef NIBBLE_HAVE_AVX2
-    for (int64_t t = 0; t < n; ++t) simd::quantize_row_q8_0(x + t * w0.ne[0], xq_.data() + t * nb, w0.ne[0]);
-    if (n >= 4) {
-      const size_t xp_need = static_cast<size_t>((n + 7) / 8 * nb);
-      if (xp_.size() < xp_need) xp_.resize(xp_need);  // beyond reserve(), like xq_
-      simd::pack_q8_0_x8(xq_.data(), n, nb, xp_.data());
-      xp = xp_.data();
-    }
+      for (int64_t t = 0; t < n; ++t) simd::quantize_row_q8_0(x + t * in, xq_.data() + t * nb, in);
+      if (n >= 4 && need_pack) {
+        const size_t xp_need = static_cast<size_t>((n + 7) / 8 * nb);
+        if (xp_.size() < xp_need) xp_.resize(xp_need);  // beyond reserve(), like xq_
+        simd::pack_q8_0_x8(xq_.data(), n, nb, xp_.data());
+        xp = xp_.data();
+      }
 #else
-    cpu::quantize_rows_q8_0(x, xq_.data(), n, w0.ne[0]);
+      cpu::quantize_rows_q8_0(x, xq_.data(), n, in);
 #endif
-    xq = xq_.data();
+      acts.q8_0 = xq_.data();
+    }
+    if (need[static_cast<int>(ActType::Q8_1)]) {
+      ++quantize_calls_;
+      if (xq1_.size() < blocks) xq1_.resize(blocks);
+      for (int64_t t = 0; t < n; ++t) quantize_row_q8_1(x + t * in, xq1_.data() + t * nb, in);
+      acts.q8_1 = xq1_.data();
+    }
+  }
+  if (need[static_cast<int>(ActType::Q8_K)]) {
+    NIBBLE_DCHECK(in % kQK_K == 0, "matmul: k-quant weight ne0=%lld not a multiple of 256", static_cast<long long>(in));
+    ++quantize_calls_;
+    const int64_t nb = in / kQK_K;
+    const size_t blocks = static_cast<size_t>(n * nb);
+    if (xqk_.size() < blocks) xqk_.resize(blocks);
+    for (int64_t t = 0; t < n; ++t) quantize_row_q8_K(x + t * in, xqk_.data() + t * nb, in);
+    acts.q8_K = xqk_.data();
   }
   // Rows [b, e) of the weights stacked in order; each weight's rows go through the same kernel as a lone
   // matmul, and every kernel's output is independent of the row range it is called with.
@@ -164,12 +189,13 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
       const Tensor& w = *ws[i];
       const int64_t lo = std::max(b, off) - off, hi = std::min(e, off + w.rows()) - off;
       if (lo >= hi) continue;
+      const bool is_float = w.type == DType::F32 || w.type == DType::F16;
 #ifdef NIBBLE_HAVE_AVX2
-      if (!xq) n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
-      else if (xp) simd::gemm_q(w, xp, ys[i], n, lo, hi);
-      else simd::matmul_rows_q(w, xq, ys[i], n, lo, hi);
+      if (is_float) n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
+      else if (xp && (w.type == DType::Q4_0 || w.type == DType::Q8_0)) simd::gemm_q(w, xp, ys[i], n, lo, hi);
+      else simd::matmul_rows_q(w, acts, ys[i], n, lo, hi);
 #else
-      cpu::matmul_rows(w, x, ys[i], n, lo, hi, xq);
+      cpu::matmul_rows(w, x, ys[i], n, lo, hi, is_float ? nullptr : &acts);
 #endif
     }
   });

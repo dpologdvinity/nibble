@@ -17,19 +17,26 @@ class CpuBackend final : public Backend {
   CpuBackend& operator=(const CpuBackend&) = delete;
 
   bool supports(DType t) const override {
-    return t == DType::F32 || t == DType::F16 || t == DType::Q8_0 || t == DType::Q4_0;
+    switch (t) {
+      case DType::F32: case DType::F16: case DType::Q4_0: case DType::Q5_0: case DType::Q5_1: case DType::Q8_0:
+      case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
+        return true;
+    }
+    return false;
   }
   void reserve(const ReserveParams&) override;
   size_t scratch_capacity() const { return scratch_.size(); }  // test hook
-  size_t quant_scratch_capacity() const { return xq_.size(); }  // test hook (blocks)
+  size_t quant_scratch_capacity() const { return xq_.size() + xq1_.size() + xqk_.size(); }  // test hook (blocks)
+  // Test hook: activation-quantization passes so far, one per activation type per matmul/matmul_multi call.
+  uint64_t quantize_calls() const { return quantize_calls_; }
   float* alloc(int64_t n_floats) override;
   void free(float* p) override;
   size_t live_allocations() const { return allocs_.size(); }  // test hook
   void read(float* host_dst, const float* src, int64_t n) override;
   void embed(const Tensor& table, std::span<const int32_t> ids, float* out) override;
   void matmul(const Tensor& w, const float* x, float* y, int64_t n) override;
-  // Quantizes (and packs) x once and runs all weights in one parallel_for over their combined rows;
-  // mixed dtypes or input widths fall back to one matmul per weight.
+  // Quantizes (and packs) x once per activation type the weights need and runs all weights in one
+  // parallel_for over their combined rows; differing input widths fall back to one matmul per weight.
   void matmul_multi(std::span<const Tensor* const> ws, const float* x, std::span<float* const> ys, int64_t n) override;
   void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) override;
   void add(float* x, const float* y, int64_t count) override;
@@ -51,6 +58,11 @@ class CpuBackend final : public Backend {
   // only read it. Sized by reserve() to max_rows * max_width / 32 blocks; matmul() only grows it
   // if called beyond that, which is outside the no-allocation guarantee (like attention).
   std::vector<BlockQ8_0> xq_;
+  // The same for Q5_1 (Q8_1 blocks, max_rows * max_width / 32) and the K quants (Q8_K blocks,
+  // max_rows * ceil(max_width / 256)).
+  std::vector<BlockQ8_1> xq1_;
+  std::vector<BlockQ8_K> xqk_;
+  uint64_t quantize_calls_ = 0;
   // xq_ interleaved 8 tokens per block for the prefill GEMM (n >= 4, SIMD builds); sized by reserve() to
   // ceil(max_rows / 8) * max_width / 32 blocks, same growth rule as xq_.
   std::vector<simd::BlockQ8_0x8> xp_;

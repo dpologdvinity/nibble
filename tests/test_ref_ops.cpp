@@ -140,7 +140,8 @@ TEST_CASE("ref quantized matmul uses q8_0 activations", "[ref][quant]") {
     std::vector<BlockQ8_0> xq(static_cast<size_t>(n * in / 32));
     cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
     std::vector<float> y(static_cast<size_t>(n * out));
-    cpu::matmul_rows(w, x.data(), y.data(), n, 0, out, xq.data());
+    const QuantActs qa{xq.data()};
+    cpu::matmul_rows(w, x.data(), y.data(), n, 0, out, &qa);
     std::vector<float> wd(static_cast<size_t>(in * out)), xd(static_cast<size_t>(in * n));
     dequantize_row(t, wb.data(), wd.data(), in * out);
     dequantize_row(DType::Q8_0, xq.data(), xd.data(), in * n);

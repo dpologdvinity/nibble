@@ -13,6 +13,40 @@ namespace {
 
 inline const uint16_t* as_f16(const Tensor& t) { return static_cast<const uint16_t*>(t.data); }
 inline const float* as_f32(const Tensor& t) { return static_cast<const float*>(t.data); }
+
+bool is_quant(DType t) {
+  switch (t) {
+    case DType::Q4_0: case DType::Q5_0: case DType::Q5_1: case DType::Q8_0:
+    case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// One weight row against activation row `ar` (nb blocks of the weight's act_type).
+float dot_row(DType t, const uint8_t* wr, const QuantActs& a, int64_t ar, int64_t nb) {
+  switch (t) {
+    case DType::Q4_0: return dot_q4_0_q8_0(reinterpret_cast<const BlockQ4_0*>(wr), a.q8_0 + ar * nb, nb);
+    case DType::Q5_0: return dot_q5_0_q8_0(reinterpret_cast<const BlockQ5_0*>(wr), a.q8_0 + ar * nb, nb);
+    case DType::Q8_0: return dot_q8_0_q8_0(reinterpret_cast<const BlockQ8_0*>(wr), a.q8_0 + ar * nb, nb);
+    case DType::Q5_1: return dot_q5_1_q8_1(reinterpret_cast<const BlockQ5_1*>(wr), a.q8_1 + ar * nb, nb);
+    case DType::Q4_K: return dot_q4_K_q8_K(reinterpret_cast<const BlockQ4_K*>(wr), a.q8_K + ar * nb, nb);
+    case DType::Q5_K: return dot_q5_K_q8_K(reinterpret_cast<const BlockQ5_K*>(wr), a.q8_K + ar * nb, nb);
+    case DType::Q6_K: return dot_q6_K_q8_K(reinterpret_cast<const BlockQ6_K*>(wr), a.q8_K + ar * nb, nb);
+    default: bad_type();
+  }
+}
+
+bool has_acts(DType t, const QuantActs& a) {
+  switch (act_type(t)) {
+    case ActType::Q8_0: return a.q8_0;
+    case ActType::Q8_1: return a.q8_1;
+    case ActType::Q8_K: return a.q8_K;
+    case ActType::None: break;
+  }
+  return false;
+}
 }  // namespace
 
 void softmax_inplace(float* x, int64_t n) {
@@ -39,7 +73,7 @@ void embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
     } else if (table.type == DType::F16) {
       const uint16_t* r = as_f16(table) + id * d;
       for (int64_t k = 0; k < d; ++k) o[k] = fp16_to_fp32(r[k]);
-    } else if (table.type == DType::Q8_0 || table.type == DType::Q4_0) {
+    } else if (is_quant(table.type)) {
       dequantize_row(table.type, static_cast<const uint8_t*>(table.data) + id * table.row_bytes(), o, d);
     } else {
       bad_type();
@@ -53,19 +87,16 @@ void quantize_rows_q8_0(const float* x, BlockQ8_0* y, int64_t n, int64_t width) 
 }
 
 void matmul_rows(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end,
-                 const BlockQ8_0* xq) {
+                 const QuantActs* xq) {
   const int64_t in = w.ne[0], out = w.rows();
-  const bool quant = w.type == DType::Q8_0 || w.type == DType::Q4_0;
+  const bool quant = is_quant(w.type);
   if (w.type != DType::F32 && w.type != DType::F16 && !quant) bad_type();
   if (quant) {
-    if (n > 0 && !xq) throw Error("matmul: quantized weight needs quantized activations");
-    const int64_t nb = in / kQK, rb = w.row_bytes();
+    if (n > 0 && !(xq && has_acts(w.type, *xq))) throw Error("matmul: quantized weight needs quantized activations");
+    const int64_t nb = in / dtype_info(w.type).block_size, rb = w.row_bytes();
     for (int64_t t = 0; t < n; ++t)
-      for (int64_t r = row_begin; r < row_end; ++r) {
-        const uint8_t* wr = static_cast<const uint8_t*>(w.data) + r * rb;
-        y[t * out + r] = w.type == DType::Q8_0 ? dot_q8_0_q8_0(reinterpret_cast<const BlockQ8_0*>(wr), xq + t * nb, nb)
-                                               : dot_q4_0_q8_0(reinterpret_cast<const BlockQ4_0*>(wr), xq + t * nb, nb);
-      }
+      for (int64_t r = row_begin; r < row_end; ++r)
+        y[t * out + r] = dot_row(w.type, static_cast<const uint8_t*>(w.data) + r * rb, *xq, t, nb);
     return;
   }
   for (int64_t t = 0; t < n; ++t) {

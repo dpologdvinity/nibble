@@ -8,6 +8,7 @@
 
 #include "fp16.h"
 #include "quant.h"
+#include "quant_golden_gen.h"
 
 // Mirrors llama.cpp quantize_row_q4_0_ref (ggml-quants.c).
 inline void test_quantize_row_q4_0(const float* x, nibble::BlockQ4_0* y, int64_t k) {
@@ -51,4 +52,52 @@ inline std::vector<uint8_t> test_quantize_rows(nibble::DType t, const std::vecto
     }
   }
   return out;
+}
+
+// Raw weight bytes for `rows` rows of width ne0 of any quantized type, from the golden generators (random
+// quants and finite scales, deterministic in seed).
+inline std::vector<uint8_t> test_weight_rows(nibble::DType t, uint64_t seed, int64_t rows, int64_t ne0) {
+  using nibble::DType;
+  const auto& info = nibble::dtype_info(t);
+  const int64_t nb = rows * ne0 / info.block_size;
+  std::vector<uint8_t> out(static_cast<size_t>(nb * info.block_bytes));
+  golden::Rng r{seed};
+  switch (t) {
+    case DType::Q4_0: golden::fill_q4_0(r, out.data(), nb); break;
+    case DType::Q5_0: golden::fill_q5_0(r, out.data(), nb); break;
+    case DType::Q5_1: golden::fill_q5_1(r, out.data(), nb); break;
+    case DType::Q8_0: golden::fill_q8_0(r, out.data(), nb); break;
+    case DType::Q4_K: golden::fill_q4_K(r, out.data(), nb); break;
+    case DType::Q5_K: golden::fill_q5_K(r, out.data(), nb); break;
+    case DType::Q6_K: golden::fill_q6_K(r, out.data(), nb); break;
+    default: break;
+  }
+  return out;
+}
+
+// n rows of x quantized to the activation type that weights of type t are multiplied against.
+struct TestActs {
+  std::vector<nibble::BlockQ8_0> q8_0;
+  std::vector<nibble::BlockQ8_1> q8_1;
+  std::vector<nibble::BlockQ8_K> q8_K;
+  nibble::QuantActs view() const { return {q8_0.data(), q8_1.data(), q8_K.data()}; }
+};
+inline TestActs test_quantize_acts(nibble::DType t, const float* x, int64_t n, int64_t ne0) {
+  TestActs a;
+  switch (nibble::act_type(t)) {
+    case nibble::ActType::Q8_0:
+      a.q8_0.resize(static_cast<size_t>(n * ne0 / 32));
+      for (int64_t i = 0; i < n; ++i) nibble::quantize_row_q8_0(x + i * ne0, a.q8_0.data() + i * ne0 / 32, ne0);
+      break;
+    case nibble::ActType::Q8_1:
+      a.q8_1.resize(static_cast<size_t>(n * ne0 / 32));
+      for (int64_t i = 0; i < n; ++i) nibble::quantize_row_q8_1(x + i * ne0, a.q8_1.data() + i * ne0 / 32, ne0);
+      break;
+    case nibble::ActType::Q8_K:
+      a.q8_K.resize(static_cast<size_t>(n * ne0 / 256));
+      for (int64_t i = 0; i < n; ++i) nibble::quantize_row_q8_K(x + i * ne0, a.q8_K.data() + i * ne0 / 256, ne0);
+      break;
+    case nibble::ActType::None: break;
+  }
+  return a;
 }

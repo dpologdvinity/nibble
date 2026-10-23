@@ -4,6 +4,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "fp16.h"
@@ -137,6 +138,9 @@ struct TinyModelOpts {
   int64_t vocab_delta = 0;      // token_embd rows = tokenizer vocab + delta (tokenizer unchanged)
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
   bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
+  bool kquant_dims = false;     // n_embd 256, n_ff 512 (head_dim 64) so every ne0 % 256 == 0; needed for K wtypes
+  // Per-tensor weight type overrides (by tensor name); the rest use the wtype argument.
+  std::vector<std::pair<std::string, nibble::DType>> tensor_types;
   std::string raw_type_tensor;  // store this tensor with unsupported ggml type 11 (Q3_K) and dummy bytes
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
   TinyTokOpts tok;              // tokenizer variant
@@ -155,7 +159,8 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   using nibble::DType;
   constexpr int64_t H = 4, KV = 2, L = 2;
   const int64_t V = tiny_tok_vocab(mo.tok);
-  const int64_t E = mo.quant_dims ? 32 : 16, HD = E / H, FF = mo.quant_dims ? 64 : 32;
+  const int64_t E = mo.kquant_dims ? 256 : mo.quant_dims ? 32 : 16, HD = E / H,
+                FF = mo.kquant_dims ? 512 : mo.quant_dims ? 64 : 32;
   GgufWriter w;
   w.add_string("general.architecture", mo.arch);
   const std::string a = mo.arch + ".";
@@ -179,7 +184,8 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
     for (auto& x : v) x = d(g);
     return v;
   };
-  auto bytes = [](DType t, const std::vector<float>& v, int64_t ne0) {
+  uint64_t n_filled = 0;  // seeds the fill_* generators per tensor
+  auto bytes = [&](DType t, const std::vector<float>& v, int64_t ne0) {
     std::vector<uint8_t> b;
     if (t == DType::F32) {
       b.resize(v.size() * 4);
@@ -192,6 +198,8 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
       }
     } else if (t == DType::Q4_0 || t == DType::Q8_0) {
       b = test_quantize_rows(t, v, ne0);
+    } else if (t == DType::Q5_0 || t == DType::Q5_1 || t == DType::Q4_K || t == DType::Q5_K || t == DType::Q6_K) {
+      b = test_weight_rows(t, uint64_t{seed} * 1000 + ++n_filled, static_cast<int64_t>(v.size()) / ne0, ne0);
     } else {  // unsupported type: contents are irrelevant (only used to test rejection)
       b.assign(110, 0);
     }
@@ -200,6 +208,8 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   auto mat = [&](const std::string& name, int64_t in, int64_t out) {
     if (name == mo.drop_tensor) return;
     DType t = name == mo.raw_type_tensor ? static_cast<DType>(11) : wtype;
+    for (const auto& [n, ty] : mo.tensor_types)
+      if (n == name) t = ty;
     int64_t o = name == mo.bad_shape ? out + 1 : out;
     w.add_tensor(name, t, {in, o}, bytes(t, rnd(static_cast<size_t>(in * o), -0.5f, 0.5f), in));
   };

@@ -7,16 +7,17 @@
 #include "tensor.h"
 
 // Scalar reference kernels: the correctness oracle for all SIMD/GPU kernels.
-// Weight dtypes: F32, F16, Q8_0, Q4_0; others throw nibble::Error.
+// Weight dtypes: F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K; others throw nibble::Error.
 namespace nibble::cpu {
 
 void softmax_inplace(float* x, int64_t n);
 void embed(const Tensor& table, std::span<const int32_t> ids, float* out);
 // Quantizes n rows of `width` floats (width % 32 == 0) into n * width/32 blocks.
 void quantize_rows_q8_0(const float* x, BlockQ8_0* y, int64_t n, int64_t width);
-// xq: x quantized with quantize_rows_q8_0; required for Q8_0/Q4_0 weights, ignored for F32/F16.
+// xq: x quantized to the weight's act_type (rows of w.ne[0] / block_size blocks); required for quantized
+// weights, ignored for F32/F16.
 void matmul_rows(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end,
-                 const BlockQ8_0* xq = nullptr);
+                 const QuantActs* xq = nullptr);
 void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps);
 void add(float* x, const float* y, int64_t count);
 void add_bias(float* x, const Tensor& bias, int64_t n);

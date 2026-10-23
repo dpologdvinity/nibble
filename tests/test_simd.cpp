@@ -340,8 +340,9 @@ void check_matmul_q(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb,
   std::vector<BlockQ8_0> xq(size_t(n * nb));
   cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
   std::vector<float> want(size_t(n * rows), -7.f), got(want);
-  cpu::matmul_rows(w, x.data(), want.data(), n, rb, re, xq.data());
-  simd::matmul_rows_q(w, xq.data(), got.data(), n, rb, re);
+  const QuantActs qa{xq.data()};
+  cpu::matmul_rows(w, x.data(), want.data(), n, rb, re, &qa);
+  simd::matmul_rows_q(w, qa, got.data(), n, rb, re);
   for (size_t i = 0; i < want.size(); ++i) {
     CAPTURE(i);
     REQUIRE(bits(got[i]) == bits(want[i]));

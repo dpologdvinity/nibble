@@ -9,6 +9,7 @@
 #ifdef NIBBLE_HAVE_AVX2
 #include <cstring>
 
+#include "backend/cpu/ref_ops.h"
 #include "fp16.h"
 #include "quant.h"
 #include "tensor.h"
@@ -138,13 +139,17 @@ float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   return dot1<Q8>(reinterpret_cast<const u8*>(w), reinterpret_cast<const u8*>(a), n_blocks);
 }
 
-void matmul_rows_q(const Tensor& w, const BlockQ8_0* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
+void matmul_rows_q(const Tensor& w, const QuantActs& xq, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
+  if (w.type != DType::Q4_0 && w.type != DType::Q8_0) {  // no AVX2 kernel yet: the scalar oracle
+    cpu::matmul_rows(w, nullptr, y, n, row_begin, row_end, &xq);
+    return;
+  }
   const auto* wd = static_cast<const u8*>(w.data);
   const int64_t nb = w.ne[0] / kQK, out = w.rows();
   if (w.type == DType::Q4_0)
-    matmul_t<Q4>(wd, nb, out, xq, y, n, row_begin, row_end);
+    matmul_t<Q4>(wd, nb, out, xq.q8_0, y, n, row_begin, row_end);
   else
-    matmul_t<Q8>(wd, nb, out, xq, y, n, row_begin, row_end);
+    matmul_t<Q8>(wd, nb, out, xq.q8_0, y, n, row_begin, row_end);
 }
 
 }  // namespace nibble::simd

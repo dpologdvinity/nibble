@@ -210,6 +210,47 @@ struct LoadedTiny {
 };
 }  // namespace
 
+// Mixed-type models: matmul_multi quantizes x once per activation type and dispatches each weight on its type.
+TEST_CASE("alloc: mixed k-quant model", "[model][alloc]") {
+  using nibble::DType;
+  struct Mix {
+    const char* name;
+    DType base;
+    DType override_type;
+    bool kdims;
+  };
+  for (const Mix& mix : {Mix{"Q4_K+Q6_K+Q5_0", DType::Q4_K, DType::Q6_K, true}, Mix{"Q5_1+Q8_0", DType::Q5_1, DType::Q8_0, false}}) {
+    DYNAMIC_SECTION(mix.name) {
+      nibble::ThreadPool pool(4);
+      nibble::cpu::CpuBackend be(pool);
+      TinyModelOpts mo;
+      (mix.kdims ? mo.kquant_dims : mo.quant_dims) = true;
+      for (const char* p : {"blk.0.", "blk.1."}) {
+        mo.tensor_types.emplace_back(std::string(p) + "attn_v.weight", mix.override_type);
+        mo.tensor_types.emplace_back(std::string(p) + "ffn_down.weight", mix.override_type);
+      }
+      if (mix.kdims) mo.tensor_types.emplace_back("token_embd.weight", DType::Q5_0);
+      LoadedTiny m(tiny_model_gguf(3, mix.base, false, 259, mo), be);
+      nibble::model::Transformer tr(m.cfg, m.w, be, 64, 8);
+      std::vector<float> logits(static_cast<size_t>(m.cfg.n_vocab));
+      const std::vector<int32_t> prompt = {1, 50, 257, 3};
+      tr.forward(prompt, 0, logits.data());
+      const int32_t one[1] = {7};
+      const size_t live = be.live_allocations(), sc = be.scratch_capacity(), xq = be.quant_scratch_capacity();
+      int64_t n_fwd = -1;
+      {
+        Armed a;
+        for (int i = 0; i < 16; ++i) tr.forward(one, 4 + i, logits.data());
+        n_fwd = g_count.load();
+      }
+      CHECK(n_fwd == 0);
+      CHECK(be.live_allocations() == live);
+      CHECK(be.scratch_capacity() == sc);
+      CHECK(be.quant_scratch_capacity() == xq);
+    }
+  }
+}
+
 TEST_CASE("Transformer::forward decode and CpuBackend::matmul do not allocate", "[model][alloc]") {
   using nibble::DType;
   for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {
