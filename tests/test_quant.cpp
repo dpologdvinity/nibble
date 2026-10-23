@@ -368,6 +368,7 @@ TEST_CASE("golden: quantize_row_q8_1 matches quantize_row_q8_1_ref bytes", "[qua
     BlockQ8_0 y8;
     quantize_row_q8_1(c.x, &y, 32);
     quantize_row_q8_0(c.x, &y8, 32);
+    REQUIRE(std::string_view(golden::kQ8_1Cases[i].name) == c.name);
     REQUIRE(y.d == golden::kQ8_1Cases[i].d);
     REQUIRE(y.d == y8.d);
     REQUIRE(y.s == golden::kQ8_1Cases[i].s);

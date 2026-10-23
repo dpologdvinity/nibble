@@ -42,6 +42,8 @@ void ggml_vec_dot_q5_1_q8_1_generic(int n, float* s, size_t bs, const void* vx, 
 
 namespace {
 
+constexpr uint64_t kDequantSeed = 7;
+
 uint32_t bits(float f) {
   uint32_t u;
   std::memcpy(&u, &f, 4);
@@ -174,7 +176,7 @@ int main(int argc, char** argv) {
   // Dequant: Rng{kDequantSeed}; fill_q8_0(q8, nb); fill_q4_0(q4, nb).
   const int nb = 8;
   std::vector<uint8_t> q8(nb * golden::kQ8Bytes), q4(nb * golden::kQ4Bytes);
-  golden::Rng r{7};
+  golden::Rng r{kDequantSeed};
   golden::fill_q8_0(r, q8.data(), nb);
   golden::fill_q4_0(r, q4.data(), nb);
   std::vector<float> d8(nb * 32), d4(nb * 32);
@@ -182,8 +184,8 @@ int main(int argc, char** argv) {
   dequantize_row_q4_0(q4.data(), d4.data(), nb * 32);
   std::fprintf(f,
                "// Inputs: Rng{kDequantSeed}; fill_q8_0(q8, kDequantBlocks); fill_q4_0(q4, kDequantBlocks).\n"
-               "inline constexpr uint64_t kDequantSeed = 7;\ninline constexpr int kDequantBlocks = %d;\n",
-               nb);
+               "inline constexpr uint64_t kDequantSeed = %" PRIu64 ";\ninline constexpr int kDequantBlocks = %d;\n",
+               kDequantSeed, nb);
   for (int t = 0; t < 2; ++t) {
     const std::vector<float>& v = t == 0 ? d8 : d4;
     std::fprintf(f, "inline constexpr uint32_t kDequant%s[%d] = {", t == 0 ? "Q8_0" : "Q4_0", nb * 32);
@@ -236,7 +238,7 @@ int main(int argc, char** argv) {
 
   // Q5 dequant: a fresh Rng{kDequantSeed}; fill_q5_0(q50, nb); fill_q5_1(q51, nb).
   std::vector<uint8_t> q50(nb * golden::kQ5_0Bytes), q51(nb * golden::kQ5_1Bytes);
-  golden::Rng r5{7};
+  golden::Rng r5{kDequantSeed};
   golden::fill_q5_0(r5, q50.data(), nb);
   golden::fill_q5_1(r5, q51.data(), nb);
   std::vector<float> d50(nb * 32), d51(nb * 32);
