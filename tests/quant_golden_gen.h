@@ -1,5 +1,5 @@
 #pragma once
-// Deterministic integer-only generator for the raw Q4_0/Q8_0 block bytes used by the golden-vector
+// Deterministic integer-only generator for the raw Q4_0/Q8_0/Q5_0/Q5_1/Q8_1 block bytes used by the golden-vector
 // tests. Shared by tests/test_quant.cpp and tools/quant_vectors (which runs llama.cpp's reference code
 // on the same bytes). Integer-only so the bytes are identical on every compiler and flag set; the
 // generated .inc also records an FNV-1a hash of the bytes so drift is caught.
@@ -10,6 +10,9 @@ namespace golden {
 
 inline constexpr int kQ4Bytes = 18;  // fp16 d + 16 nibble bytes
 inline constexpr int kQ8Bytes = 34;  // fp16 d + 32 int8
+inline constexpr int kQ5_0Bytes = 22;  // fp16 d + 4 qh + 16 nibble bytes
+inline constexpr int kQ5_1Bytes = 24;  // fp16 d, m + 4 qh + 16 nibble bytes
+inline constexpr int kQ8_1Bytes = 36;  // fp16 d, s + 32 int8
 
 struct Rng {
   uint64_t s;
@@ -49,6 +52,58 @@ inline void fill_q4_0(Rng& r, uint8_t* out, int64_t nb) {
     uint8_t* p = out + b * kQ4Bytes;
     put_d(p, rand_d(r));
     for (int j = 0; j < 16; ++j) p[2 + j] = static_cast<uint8_t>(r.next());
+  }
+}
+
+inline void fill_q5_0(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ5_0Bytes;
+    put_d(p, rand_d(r));
+    for (int j = 0; j < 20; ++j) p[2 + j] = static_cast<uint8_t>(r.next());  // qh then qs
+  }
+}
+inline void fill_q5_1(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ5_1Bytes;
+    put_d(p, rand_d(r));
+    put_d(p + 2, rand_d(r));  // m
+    for (int j = 0; j < 20; ++j) p[4 + j] = static_cast<uint8_t>(r.next());
+  }
+}
+
+// fp16 bits of sum * fp16(d), truncated toward zero: within 1 ulp of fp16(sum * d). Integer-only; d must be
+// finite and |sum * d| < 65504 (true for rand_d and |sum| <= 32 * 127).
+inline uint16_t fp16_mul_int(int sum, uint16_t d) {
+  const uint16_t sign = static_cast<uint16_t>((d & 0x8000u) ^ (sum < 0 ? 0x8000u : 0u));
+  const int e = (d >> 10) & 31;
+  uint64_t p = static_cast<uint64_t>(sum < 0 ? -static_cast<int64_t>(sum) : sum) *
+               (e ? (0x400u | (d & 0x3FFu)) : (d & 0x3FFu));
+  int ex = e ? e : 1;  // value = p * 2^(ex - 25) for normal and subnormal d alike
+  if (p == 0) return sign;
+  while (p >= 2048) {
+    p >>= 1;
+    ++ex;
+  }
+  while (p < 1024 && ex > 1) {
+    p <<= 1;
+    --ex;
+  }
+  return static_cast<uint16_t>(sign | (p >= 1024 ? (ex << 10) | (p & 0x3FFu) : p));
+}
+
+// Q8_1 activations: qs in [-127, 127] like a real quantizer's output, s = d * sum(qs).
+inline void fill_q8_1(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ8_1Bytes;
+    const uint16_t d = rand_d(r);
+    int sum = 0;
+    for (int j = 0; j < 32; ++j) {
+      const int q = static_cast<int>(r.next() % 255) - 127;
+      p[4 + j] = static_cast<uint8_t>(q);
+      sum += q;
+    }
+    put_d(p, d);
+    put_d(p + 2, fp16_mul_int(sum, d));
   }
 }
 

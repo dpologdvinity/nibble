@@ -7,6 +7,10 @@
 //     third_party/llama.cpp/ggml/src/ggml-quants.c:276, :113, :553, :459 (libggml-base)
 //   ggml_vec_dot_q8_0_q8_0_generic, ggml_vec_dot_q4_0_q8_0_generic
 //     third_party/llama.cpp/ggml/src/ggml-cpu/quants.c:451, :225 (libggml-cpu)
+//   quantize_row_q8_1_ref, dequantize_row_q5_0, dequantize_row_q5_1
+//     third_party/llama.cpp/ggml/src/ggml-quants.c:302, :500, :526 (libggml-base)
+//   ggml_vec_dot_q5_0_q8_0_generic, ggml_vec_dot_q5_1_q8_1_generic
+//     third_party/llama.cpp/ggml/src/ggml-cpu/quants.c:365, :408 (libggml-cpu)
 // They are declared here with void* block pointers (ABI-identical to the internal block_q*_0 types in
 // ggml-common.h) because ggml-quants.h and ggml-cpu/quants.h are internal headers.
 #include <cinttypes>
@@ -26,6 +30,13 @@ void dequantize_row_q4_0(const void* x, float* y, int64_t k);
 void ggml_vec_dot_q8_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
                                     size_t by, int nrc);
 void ggml_vec_dot_q4_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
+                                    size_t by, int nrc);
+void quantize_row_q8_1_ref(const float* x, void* y, int64_t k);
+void dequantize_row_q5_0(const void* x, float* y, int64_t k);
+void dequantize_row_q5_1(const void* x, float* y, int64_t k);
+void ggml_vec_dot_q5_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
+                                    size_t by, int nrc);
+void ggml_vec_dot_q5_1_q8_1_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
                                     size_t by, int nrc);
 }
 
@@ -176,6 +187,65 @@ int main(int argc, char** argv) {
   for (int t = 0; t < 2; ++t) {
     const std::vector<float>& v = t == 0 ? d8 : d4;
     std::fprintf(f, "inline constexpr uint32_t kDequant%s[%d] = {", t == 0 ? "Q8_0" : "Q4_0", nb * 32);
+    for (size_t i = 0; i < v.size(); ++i)
+      std::fprintf(f, "%s0x%08" PRIx32 "u", i % 8 ? ", " : (i ? ",\n    " : "\n    "), bits(v[i]));
+    std::fprintf(f, "};\n");
+  }
+
+  // Q8_1 quantizer: per kQuantCases input (same order), d and s; qs equal the Q8_0 qs.
+  std::fprintf(f,
+               "\n// quantize_row_q8_1_ref of kQuantCases[i].x; its qs equal kQuantCases[i].q8_qs.\n"
+               "struct Q8_1Case {\n  const char* name;\n  uint16_t d;\n  uint16_t s;\n};\n\n"
+               "inline constexpr Q8_1Case kQ8_1Cases[] = {\n");
+  for (const QCase& c : quant_cases()) {
+    uint8_t q[golden::kQ8_1Bytes];
+    quantize_row_q8_1_ref(c.x, q, 32);
+    std::fprintf(f, "    {\"%s\", 0x%04x, 0x%04x},\n", c.name, q[0] | (q[1] << 8), q[2] | (q[3] << 8));
+  }
+  std::fprintf(f, "};\n\n");
+
+  // Q5 dot cases: per (seed, n), blocks w50, a80, w51, a81 from golden::fill_* in that order.
+  std::fprintf(f,
+               "// Inputs: Rng{seed}; fill_q5_0(w50, nb); fill_q8_0(a80, nb); fill_q5_1(w51, nb); fill_q8_1(a81, nb).\n"
+               "// input_hash = FNV-1a over w50|a80|w51|a81 bytes. q5_0 = vec_dot_q5_0_q8_0_generic(w50, a80),\n"
+               "// q5_1 = vec_dot_q5_1_q8_1_generic(w51, a81).\n"
+               "struct Dot5Case {\n  uint64_t seed;\n  int n;\n  uint64_t input_hash;\n  uint32_t q5_0_bits;\n"
+               "  uint32_t q5_1_bits;\n};\n\ninline constexpr Dot5Case kDot5Cases[] = {\n");
+  for (int n : {32, 896, 4864}) {
+    for (uint64_t seed : {1ull, 2ull, 3ull}) {
+      const size_t nbs = static_cast<size_t>(n / 32);
+      std::vector<uint8_t> w50(nbs * golden::kQ5_0Bytes), a80(nbs * golden::kQ8Bytes), w51(nbs * golden::kQ5_1Bytes),
+          a81(nbs * golden::kQ8_1Bytes);
+      golden::Rng rr{seed};
+      golden::fill_q5_0(rr, w50.data(), n / 32);
+      golden::fill_q8_0(rr, a80.data(), n / 32);
+      golden::fill_q5_1(rr, w51.data(), n / 32);
+      golden::fill_q8_1(rr, a81.data(), n / 32);
+      uint64_t h = golden::fnv1a(w50.data(), w50.size());
+      h = golden::fnv1a(a80.data(), a80.size(), h);
+      h = golden::fnv1a(w51.data(), w51.size(), h);
+      h = golden::fnv1a(a81.data(), a81.size(), h);
+      float s50 = 0, s51 = 0;
+      ggml_vec_dot_q5_0_q8_0_generic(n, &s50, 0, w50.data(), 0, a80.data(), 0, 1);
+      ggml_vec_dot_q5_1_q8_1_generic(n, &s51, 0, w51.data(), 0, a81.data(), 0, 1);
+      std::fprintf(f, "    {%" PRIu64 ", %d, 0x%016" PRIx64 "ull, 0x%08" PRIx32 "u, 0x%08" PRIx32 "u},  // %a, %a\n",
+                   seed, n, h, bits(s50), bits(s51), static_cast<double>(s50), static_cast<double>(s51));
+    }
+  }
+  std::fprintf(f, "};\n\n");
+
+  // Q5 dequant: a fresh Rng{kDequantSeed}; fill_q5_0(q50, nb); fill_q5_1(q51, nb).
+  std::vector<uint8_t> q50(nb * golden::kQ5_0Bytes), q51(nb * golden::kQ5_1Bytes);
+  golden::Rng r5{7};
+  golden::fill_q5_0(r5, q50.data(), nb);
+  golden::fill_q5_1(r5, q51.data(), nb);
+  std::vector<float> d50(nb * 32), d51(nb * 32);
+  dequantize_row_q5_0(q50.data(), d50.data(), nb * 32);
+  dequantize_row_q5_1(q51.data(), d51.data(), nb * 32);
+  std::fprintf(f, "// Inputs: Rng{kDequantSeed}; fill_q5_0(q50, kDequantBlocks); fill_q5_1(q51, kDequantBlocks).\n");
+  for (int t = 0; t < 2; ++t) {
+    const std::vector<float>& v = t == 0 ? d50 : d51;
+    std::fprintf(f, "inline constexpr uint32_t kDequant%s[%d] = {", t == 0 ? "Q5_0" : "Q5_1", nb * 32);
     for (size_t i = 0; i < v.size(); ++i)
       std::fprintf(f, "%s0x%08" PRIx32 "u", i % 8 ? ", " : (i ? ",\n    " : "\n    "), bits(v[i]));
     std::fprintf(f, "};\n");
