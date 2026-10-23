@@ -9,12 +9,12 @@ SPECIAL_ONLY=0
 [ "${1:-}" = "--eog-only" ] && { EOG_ONLY=1; shift; }
 [ "${1:-}" = "--special-only" ] && { SPECIAL_ONLY=1; shift; }
 NAME="${1:?usage: make_golden.sh [--eog-only | --special-only] <model-name>}"
+# Golden names map to model files by family: <family>-<x> -> <file base>-<x> (f16 -> fp16 for Qwen).
 case "$NAME" in
   qwen2.5-0.5b-f16) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-fp16.gguf" ;;
-  qwen2.5-0.5b-q8_0) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-q8_0.gguf" ;;
-  qwen2.5-0.5b-q4_0) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-q4_0.gguf" ;;
-  llama32-1b-f16) GGUF="$ROOT/models/llama-3.2-1b-instruct-f16.gguf" ;;
-  tinyllama-1.1b-f16) GGUF="$ROOT/models/tinyllama-1.1b-chat-f16.gguf" ;;
+  qwen2.5-0.5b-*) GGUF="$ROOT/models/qwen2.5-0.5b-instruct-${NAME#qwen2.5-0.5b-}.gguf" ;;
+  llama32-1b-*) GGUF="$ROOT/models/llama-3.2-1b-instruct-${NAME#llama32-1b-}.gguf" ;;
+  tinyllama-1.1b-*) GGUF="$ROOT/models/tinyllama-1.1b-chat-${NAME#tinyllama-1.1b-}.gguf" ;;
   *) GGUF="$ROOT/models/$NAME.gguf" ;;
 esac
 [ -f "$GGUF" ] || { echo "missing model $GGUF" >&2; exit 1; }
@@ -36,7 +36,8 @@ fi
 REF="$ROOT/third_party/build/bin/llama_ref"
 KV=()
 case "$NAME" in
-  qwen2.5-0.5b-q8_0|qwen2.5-0.5b-q4_0) REF="$ROOT/third_party/build-generic/bin/llama_ref"; KV=(--kv-f32) ;;
+  *-f16) ;;
+  *) REF="$ROOT/third_party/build-generic/bin/llama_ref"; KV=(--kv-f32) ;;
 esac
 [ -x "$REF" ] || { echo "missing $REF" >&2; [ "${KV[*]:-}" ] && echo "run: tools/build_llama_cpp.sh --generic" >&2; exit 1; }
 OUT="$ROOT/models/golden/$NAME"
