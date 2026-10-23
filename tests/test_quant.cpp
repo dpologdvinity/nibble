@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iterator>
 #include <random>
+#include <string_view>
 #include <vector>
 
 #include "data/quant_golden.inc"
@@ -288,6 +289,58 @@ TEST_CASE("quantize q8_1 exact and zero", "[quant]") {
   golden::fill_q5_1(r, reinterpret_cast<uint8_t*>(&w51), 1);
   REQUIRE(dot_q5_0_q8_0(&w50, &z8, 1) == 0.f);
   REQUIRE(dot_q5_1_q8_1(&w51, &zq, 1) == 0.f);
+}
+
+// Decision 3: non-finite input has no exactness requirement but must not be UB. These are the values the
+// scalar math gives once NaN products map to 0 and out-of-range rounds saturate to +-127.
+TEST_CASE("quantize q8_0/q8_1 non-finite and tiny blocks are defined", "[quant]") {
+  const auto is_nan16 = [](uint16_t h) { return (h & 0x7C00) == 0x7C00 && (h & 0x3FF) != 0; };
+  float x[4 * 32];
+  for (int j = 0; j < 4 * 32; ++j) x[j] = static_cast<float>(j % 32 - 16);
+  // Block 0: +Inf and -Inf. amax = Inf, d = Inf, id = 0: finite x*0 = 0, Inf*0 = NaN -> 0. So d = fp16 Inf,
+  // qs all 0 and (Q8_1) s = fp16(0 * Inf) = NaN.
+  x[3] = INFINITY;
+  x[9] = -INFINITY;
+  // Block 1: NaN. fmax skips it (amax = 16), its NaN*id maps to 0: the block equals one with 0 there.
+  x[32 + 5] = NAN;
+  // Block 2: NaN, +Inf, -Inf together: same as block 0.
+  x[64 + 0] = NAN;
+  x[64 + 1] = INFINITY;
+  x[64 + 2] = -INFINITY;
+  // Block 3: amax 1e-38. d = amax/127 is subnormal so id = 1/d = Inf: nonzero x*id = +-Inf saturates to +-127,
+  // 0*Inf = NaN -> 0, and fp16(d) = 0.
+  for (int j = 0; j < 32; ++j) x[96 + j] = static_cast<float>(j - 16) * 0x1p-130f;
+  float ref1[32];
+  std::memcpy(ref1, x + 32, sizeof ref1);
+  ref1[5] = 0.f;
+
+  BlockQ8_0 y8[4], r8;
+  BlockQ8_1 y1[4], r1;
+  quantize_row_q8_0(x, y8, 4 * 32);
+  quantize_row_q8_1(x, y1, 4 * 32);
+  quantize_row_q8_0(ref1, &r8, 32);
+  quantize_row_q8_1(ref1, &r1, 32);
+  for (int b : {0, 2}) {
+    CAPTURE(b);
+    REQUIRE(y8[b].d == 0x7C00);
+    REQUIRE(y1[b].d == 0x7C00);
+    REQUIRE(is_nan16(y1[b].s));
+    for (int j = 0; j < 32; ++j) {
+      REQUIRE(y8[b].qs[j] == 0);
+      REQUIRE(y1[b].qs[j] == 0);
+    }
+  }
+  REQUIRE(std::memcmp(&y8[1], &r8, sizeof r8) == 0);
+  REQUIRE(std::memcmp(&y1[1], &r1, sizeof r1) == 0);
+  REQUIRE(y8[3].d == 0);
+  REQUIRE(y1[3].d == 0);
+  REQUIRE(y1[3].s == 0x8000);  // fp16(-127 * d) = -0
+  for (int j = 0; j < 32; ++j) {
+    CAPTURE(j);
+    const int want = j < 16 ? -127 : j == 16 ? 0 : 127;
+    REQUIRE(int{y8[3].qs[j]} == want);
+    REQUIRE(int{y1[3].qs[j]} == want);
+  }
 }
 
 TEST_CASE("golden fill_q8_1 s is within 1 ulp of fp16(d * sum)", "[quant]") {

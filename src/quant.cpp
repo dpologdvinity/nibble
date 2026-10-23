@@ -12,6 +12,15 @@ namespace {
 void check_n(int64_t n) {
   if (n < 0 || n % kQK != 0) throw Error("quant: length must be a multiple of 32");
 }
+
+// roundf (half away from zero, as ggml's Q8_0/Q8_1 refs) to int8 without the UB of casting NaN or out-of-range
+// values: NaN -> 0, saturate to [-127, 127]. Only non-finite rows or blocks with id = Inf (amax < ~3.7e-37)
+// reach either case; finite normal blocks round within [-127, 127] and stay bit-exact.
+int8_t round_q8(float v) {
+  const float r = std::roundf(v);
+  if (r != r) return 0;
+  return static_cast<int8_t>(std::fmin(127.f, std::fmax(-127.f, r)));
+}
 }  // namespace
 
 void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
@@ -90,12 +99,13 @@ void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
   check_n(n);
   for (int64_t b = 0; b < n / kQK; ++b) {
     float amax = 0.f;
+    // Differs from ggml's MAX(amax, fabsf(v)) only on NaN: fmax skips it, MAX yields it until a later element.
     for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[b * kQK + j]));
     const float d = amax / 127.f;
     const float id = d ? 1.0f / d : 0.0f;
     BlockQ8_0 blk;
     blk.d = fp32_to_fp16(d);
-    for (int j = 0; j < kQK; ++j) blk.qs[j] = static_cast<int8_t>(std::roundf(x[b * kQK + j] * id));
+    for (int j = 0; j < kQK; ++j) blk.qs[j] = round_q8(x[b * kQK + j] * id);
     std::memcpy(reinterpret_cast<unsigned char*>(y) + b * sizeof blk, &blk, sizeof blk);
   }
 }
@@ -105,6 +115,7 @@ void quantize_row_q8_1(const float* x, BlockQ8_1* y, int64_t n) {
   check_n(n);
   for (int64_t b = 0; b < n / kQK; ++b) {
     float amax = 0.f;
+    // Differs from ggml's MAX(amax, fabsf(v)) only on NaN: fmax skips it, MAX yields it until a later element.
     for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[b * kQK + j]));
     const float d = amax / 127.f;
     const float id = d ? 1.0f / d : 0.0f;
@@ -112,7 +123,7 @@ void quantize_row_q8_1(const float* x, BlockQ8_1* y, int64_t n) {
     blk.d = fp32_to_fp16(d);
     int sum = 0;
     for (int j = 0; j < kQK; ++j) {
-      blk.qs[j] = static_cast<int8_t>(std::roundf(x[b * kQK + j] * id));
+      blk.qs[j] = round_q8(x[b * kQK + j] * id);
       sum += blk.qs[j];
     }
     blk.s = fp32_to_fp16(static_cast<float>(sum) * d);
