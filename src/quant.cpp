@@ -13,13 +13,21 @@ void check_n(int64_t n) {
   if (n < 0 || n % kQK != 0) throw Error("quant: length must be a multiple of 32");
 }
 
-// roundf (half away from zero, as ggml's Q8_0/Q8_1 refs) to int8 without the UB of casting NaN or out-of-range
-// values: NaN -> 0, saturate to [-127, 127]. Only non-finite rows or blocks with id = Inf (amax < ~3.7e-37)
-// reach either case; finite normal blocks round within [-127, 127] and stay bit-exact.
-int8_t round_q8(float v) {
-  const float r = std::roundf(v);
-  if (r != r) return 0;
-  return static_cast<int8_t>(std::fmin(127.f, std::fmax(-127.f, r)));
+// Shared Q8_0/Q8_1 block core (ggml quantize_row_q8_{0,1}_ref): writes 32 qs, returns the pre-fp16 d.
+// roundf rounds half away from zero (Q8_K's nearest_int is half to even, not this). NaN maps to 0 and results
+// saturate to [-127, 127], so the int8 cast is never UB; only non-finite rows or blocks with id = Inf
+// (amax < ~3.7e-37) reach either case, and finite normal blocks stay bit-exact.
+float quantize_block_q8(const float* x, int8_t* qs) {
+  float amax = 0.f;
+  // Differs from ggml's MAX(amax, fabsf(v)) only on NaN: fmax skips it, MAX yields it until a later element.
+  for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[j]));
+  const float d = amax / 127.f;
+  const float id = d ? 1.0f / d : 0.0f;
+  for (int j = 0; j < kQK; ++j) {
+    const float r = std::roundf(x[j] * id);
+    qs[j] = r != r ? 0 : static_cast<int8_t>(std::fmin(127.f, std::fmax(-127.f, r)));
+  }
+  return d;
 }
 }  // namespace
 
@@ -98,34 +106,21 @@ void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
   check_n(n);
   for (int64_t b = 0; b < n / kQK; ++b) {
-    float amax = 0.f;
-    // Differs from ggml's MAX(amax, fabsf(v)) only on NaN: fmax skips it, MAX yields it until a later element.
-    for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[b * kQK + j]));
-    const float d = amax / 127.f;
-    const float id = d ? 1.0f / d : 0.0f;
     BlockQ8_0 blk;
-    blk.d = fp32_to_fp16(d);
-    for (int j = 0; j < kQK; ++j) blk.qs[j] = round_q8(x[b * kQK + j] * id);
+    blk.d = fp32_to_fp16(quantize_block_q8(x + b * kQK, blk.qs));
     std::memcpy(reinterpret_cast<unsigned char*>(y) + b * sizeof blk, &blk, sizeof blk);
   }
 }
 
-// ggml quantize_row_q8_1_ref: Q8_0's d and qs, plus s from the unrounded d.
+// Q8_0's d and qs, plus s = fp16(sum(qs) * d) from the unrounded d.
 void quantize_row_q8_1(const float* x, BlockQ8_1* y, int64_t n) {
   check_n(n);
   for (int64_t b = 0; b < n / kQK; ++b) {
-    float amax = 0.f;
-    // Differs from ggml's MAX(amax, fabsf(v)) only on NaN: fmax skips it, MAX yields it until a later element.
-    for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[b * kQK + j]));
-    const float d = amax / 127.f;
-    const float id = d ? 1.0f / d : 0.0f;
     BlockQ8_1 blk;
+    const float d = quantize_block_q8(x + b * kQK, blk.qs);
     blk.d = fp32_to_fp16(d);
     int sum = 0;
-    for (int j = 0; j < kQK; ++j) {
-      blk.qs[j] = round_q8(x[b * kQK + j] * id);
-      sum += blk.qs[j];
-    }
+    for (const int8_t q : blk.qs) sum += q;
     blk.s = fp32_to_fp16(static_cast<float>(sum) * d);
     std::memcpy(reinterpret_cast<unsigned char*>(y) + b * sizeof blk, &blk, sizeof blk);
   }
