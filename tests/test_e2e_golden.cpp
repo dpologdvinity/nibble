@@ -79,16 +79,22 @@ double top_gap(std::span<const float> r) {
 // (2026-10-17): activation requantization amplifies rounding-level differences, and the measured
 // three-way noise floor (nibble vs generic llama.cpp vs an fp64 oracle with Q8_0 requantization)
 // is about 0.9966 cosine, so 0.999 per position and exact argmax are not attainable. Quantized
-// goldens come from the generic llama.cpp build with an F32 KV cache (see tools/make_golden.sh).
+// goldens come from the generic llama.cpp build with an F32 KV cache and no flash attention (see
+// tools/make_golden.sh).
+// Llama-3.2 k-quant files (user decision 2026-10-23): llama.cpp's own generic and native builds differ by
+// more than 0.995 cosine at the same positions where nibble does (llama32-q6_k chat: 22 positions), so the
+// per-position floor is 0.97 (nibble's measured worst is 0.9765); the prefill last row stays at 0.995.
 struct Gate {
   double min_cos;
+  double min_cos_prefill;  // last-row cosine after batch prefill
   double min_agree;     // required fraction of positions whose argmax agrees (or near-tie)
   bool strict_argmax;   // every non-tie position must agree
   bool assert_greedy;   // greedy divergence must be a near-tie; else only WARN
 };
 Gate gate_for(const std::string& model) {
-  if (model.ends_with("f16")) return {0.999, 1.0, true, true};
-  return {0.995, 0.90, false, false};
+  if (model.ends_with("f16")) return {0.999, 0.999, 1.0, true, true};
+  if (model.starts_with("llama32-") && model != "llama32-f16") return {0.97, 0.995, 0.90, false, false};
+  return {0.995, 0.995, 0.90, false, false};
 }
 
 // One row per model file under test: id used in the case names, gguf and golden names, and the chat prompt.
@@ -181,7 +187,7 @@ void run_prompt(const std::string& model, const std::string& name) {
   {
     double c = cosine(g.row(np - 1), out.data());
     WARN(name << ": prefill last-row cosine = " << c);
-    REQUIRE(c >= gate.min_cos);
+    REQUIRE(c >= gate.min_cos_prefill);
   }
 
   // 3. greedy from prefilled state
