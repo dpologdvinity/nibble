@@ -48,7 +48,39 @@ void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
         for (int j = 0; j < 32; ++j) dst[b * kQK + j] = static_cast<float>(blk.qs[j]) * d;
       }
       return;
-    case DType::Q5_0: case DType::Q5_1: case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
+    case DType::Q5_0:
+      check_n(n);
+      for (int64_t b = 0; b < n / kQK; ++b) {
+        BlockQ5_0 blk;
+        std::memcpy(&blk, p + b * sizeof(BlockQ5_0), sizeof blk);
+        const float d = fp16_to_fp32(blk.d);
+        uint32_t qh;
+        std::memcpy(&qh, blk.qh, 4);
+        for (int j = 0; j < 16; ++j) {
+          const int x0 = ((blk.qs[j] & 0x0F) | (((qh >> j) << 4) & 0x10)) - 16;
+          const int x1 = ((blk.qs[j] >> 4) | ((qh >> (j + 12)) & 0x10)) - 16;
+          dst[b * kQK + j] = static_cast<float>(x0) * d;
+          dst[b * kQK + j + 16] = static_cast<float>(x1) * d;
+        }
+      }
+      return;
+    case DType::Q5_1:
+      check_n(n);
+      for (int64_t b = 0; b < n / kQK; ++b) {
+        BlockQ5_1 blk;
+        std::memcpy(&blk, p + b * sizeof(BlockQ5_1), sizeof blk);
+        const float d = fp16_to_fp32(blk.d), m = fp16_to_fp32(blk.m);
+        uint32_t qh;
+        std::memcpy(&qh, blk.qh, 4);
+        for (int j = 0; j < 16; ++j) {
+          const int x0 = (blk.qs[j] & 0x0F) | (((qh >> j) << 4) & 0x10);
+          const int x1 = (blk.qs[j] >> 4) | ((qh >> (j + 12)) & 0x10);
+          dst[b * kQK + j] = static_cast<float>(x0) * d + m;
+          dst[b * kQK + j + 16] = static_cast<float>(x1) * d + m;
+        }
+      }
+      return;
+    case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
       break;  // dequantizers arrive with their kernels
   }
   throw Error("dequantize_row: unsupported dtype");
@@ -64,6 +96,26 @@ void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
     BlockQ8_0 blk;
     blk.d = fp32_to_fp16(d);
     for (int j = 0; j < kQK; ++j) blk.qs[j] = static_cast<int8_t>(std::roundf(x[b * kQK + j] * id));
+    std::memcpy(reinterpret_cast<unsigned char*>(y) + b * sizeof blk, &blk, sizeof blk);
+  }
+}
+
+// ggml quantize_row_q8_1_ref: Q8_0's d and qs, plus s from the unrounded d.
+void quantize_row_q8_1(const float* x, BlockQ8_1* y, int64_t n) {
+  check_n(n);
+  for (int64_t b = 0; b < n / kQK; ++b) {
+    float amax = 0.f;
+    for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[b * kQK + j]));
+    const float d = amax / 127.f;
+    const float id = d ? 1.0f / d : 0.0f;
+    BlockQ8_1 blk;
+    blk.d = fp32_to_fp16(d);
+    int sum = 0;
+    for (int j = 0; j < kQK; ++j) {
+      blk.qs[j] = static_cast<int8_t>(std::roundf(x[b * kQK + j] * id));
+      sum += blk.qs[j];
+    }
+    blk.s = fp32_to_fp16(static_cast<float>(sum) * d);
     std::memcpy(reinterpret_cast<unsigned char*>(y) + b * sizeof blk, &blk, sizeof blk);
   }
 }
@@ -98,6 +150,50 @@ float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks) {
     int s = 0;
     for (int j = 0; j < 32; ++j) s += bw.qs[j] * ba.qs[j];
     sum += static_cast<float>(s) * (fp16_to_fp32(bw.d) * fp16_to_fp32(ba.d));  // ggml generic: sumi*(d_x*d_y)
+  }
+  return sum;
+}
+
+float dot_q5_0_q8_0(const BlockQ5_0* w, const BlockQ8_0* a, int64_t n_blocks) {
+  const auto* pw = reinterpret_cast<const unsigned char*>(w);
+  const auto* pa = reinterpret_cast<const unsigned char*>(a);
+  float sum = 0.f;
+  for (int64_t b = 0; b < n_blocks; ++b) {
+    BlockQ5_0 bw;
+    BlockQ8_0 ba;
+    std::memcpy(&bw, pw + b * sizeof bw, sizeof bw);
+    std::memcpy(&ba, pa + b * sizeof ba, sizeof ba);
+    uint32_t qh;
+    std::memcpy(&qh, bw.qh, 4);
+    int s0 = 0, s1 = 0;
+    for (int j = 0; j < 16; ++j) {
+      s0 += (((bw.qs[j] & 0x0F) | (((qh >> j) << 4) & 0x10)) - 16) * ba.qs[j];
+      s1 += (((bw.qs[j] >> 4) | ((qh >> (j + 12)) & 0x10)) - 16) * ba.qs[j + 16];
+    }
+    sum += (fp16_to_fp32(bw.d) * fp16_to_fp32(ba.d)) * static_cast<float>(s0 + s1);  // ggml generic: (d_x*d_y)*sumi
+  }
+  return sum;
+}
+
+float dot_q5_1_q8_1(const BlockQ5_1* w, const BlockQ8_1* a, int64_t n_blocks) {
+  const auto* pw = reinterpret_cast<const unsigned char*>(w);
+  const auto* pa = reinterpret_cast<const unsigned char*>(a);
+  float sum = 0.f;
+  for (int64_t b = 0; b < n_blocks; ++b) {
+    BlockQ5_1 bw;
+    BlockQ8_1 ba;
+    std::memcpy(&bw, pw + b * sizeof bw, sizeof bw);
+    std::memcpy(&ba, pa + b * sizeof ba, sizeof ba);
+    uint32_t qh;
+    std::memcpy(&qh, bw.qh, 4);
+    int s0 = 0, s1 = 0;
+    for (int j = 0; j < 16; ++j) {
+      s0 += ((bw.qs[j] & 0x0F) | (((qh >> j) << 4) & 0x10)) * ba.qs[j];
+      s1 += ((bw.qs[j] >> 4) | ((qh >> (j + 12)) & 0x10)) * ba.qs[j + 16];
+    }
+    // ggml generic: sumf += ((d_x*d_y)*sumi + m_x*s_y), the block term summed before accumulating.
+    sum += (fp16_to_fp32(bw.d) * fp16_to_fp32(ba.d)) * static_cast<float>(s0 + s1) +
+           fp16_to_fp32(bw.m) * fp16_to_fp32(ba.s);
   }
   return sum;
 }

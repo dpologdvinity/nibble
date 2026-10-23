@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <random>
 #include <vector>
 
@@ -234,6 +236,135 @@ TEST_CASE("golden: dequantize_row Q4_0/Q8_0 bitwise equals dequantize_row_q*_0",
   for (int i = 0; i < nb * 32; ++i) {
     CAPTURE(i);
     REQUIRE(f32_bits(o[static_cast<size_t>(i)]) == golden::kDequantQ4_0[i]);
+  }
+}
+
+TEST_CASE("q5_0 dequant", "[quant]") {
+  BlockQ5_0 b{};
+  b.d = fp32_to_fp16(1.0f);
+  b.qh[0] = 0x01;  // bit 0 set, bit 16 clear
+  b.qs[0] = 0x3F;
+  float o[32];
+  dequantize_row(DType::Q5_0, &b, o, 32);
+  REQUIRE(o[0] == 15.f);
+  REQUIRE(o[16] == -13.f);
+  REQUIRE(o[1] == -16.f);
+}
+
+TEST_CASE("q5_1 dequant", "[quant]") {
+  BlockQ5_1 b{};
+  b.d = fp32_to_fp16(0.5f);
+  b.m = fp32_to_fp16(-1.0f);
+  b.qh[2] = 0x01;  // bit 16 set
+  b.qs[0] = 0x10;
+  float o[32];
+  dequantize_row(DType::Q5_1, &b, o, 32);
+  REQUIRE(o[0] == -1.f);
+  REQUIRE(o[16] == 7.5f);
+  REQUIRE(o[17] == -1.f);
+}
+
+TEST_CASE("quantize q8_1 exact and zero", "[quant]") {
+  float x[32];
+  for (auto& v : x) v = 127.f;
+  BlockQ8_1 y;
+  quantize_row_q8_1(x, &y, 32);
+  REQUIRE(y.d == fp32_to_fp16(1.0f));
+  REQUIRE(y.s == fp32_to_fp16(4064.f));
+  for (auto q : y.qs) REQUIRE(q == 127);
+
+  float z[32] = {};
+  BlockQ8_1 zq;
+  quantize_row_q8_1(z, &zq, 32);
+  REQUIRE(zq.d == 0);
+  REQUIRE(zq.s == 0);
+  for (auto q : zq.qs) REQUIRE(q == 0);
+  BlockQ8_0 z8;
+  quantize_row_q8_0(z, &z8, 32);
+  golden::Rng r{9};
+  BlockQ5_0 w50;
+  BlockQ5_1 w51;
+  golden::fill_q5_0(r, reinterpret_cast<uint8_t*>(&w50), 1);
+  golden::fill_q5_1(r, reinterpret_cast<uint8_t*>(&w51), 1);
+  REQUIRE(dot_q5_0_q8_0(&w50, &z8, 1) == 0.f);
+  REQUIRE(dot_q5_1_q8_1(&w51, &zq, 1) == 0.f);
+}
+
+TEST_CASE("golden fill_q8_1 s is within 1 ulp of fp16(d * sum)", "[quant]") {
+  golden::Rng r{11};
+  std::vector<BlockQ8_1> a(64);
+  golden::fill_q8_1(r, reinterpret_cast<uint8_t*>(a.data()), 64);
+  for (const auto& b : a) {
+    int sum = 0;
+    for (auto q : b.qs) {
+      REQUIRE(q >= -127);
+      sum += q;
+    }
+    const uint16_t ref = fp32_to_fp16(static_cast<float>(sum) * fp16_to_fp32(b.d));  // exact product
+    REQUIRE((b.s & 0x8000) == (ref & 0x8000));
+    REQUIRE(std::abs((b.s & 0x7FFF) - (ref & 0x7FFF)) <= 1);
+  }
+}
+
+TEST_CASE("golden: quantize_row_q8_1 matches quantize_row_q8_1_ref bytes", "[quant][golden]") {
+  STATIC_REQUIRE(std::size(golden::kQ8_1Cases) == std::size(golden::kQuantCases));
+  for (size_t i = 0; i < std::size(golden::kQuantCases); ++i) {
+    const auto& c = golden::kQuantCases[i];
+    CAPTURE(c.name);
+    BlockQ8_1 y;
+    BlockQ8_0 y8;
+    quantize_row_q8_1(c.x, &y, 32);
+    quantize_row_q8_0(c.x, &y8, 32);
+    REQUIRE(y.d == golden::kQ8_1Cases[i].d);
+    REQUIRE(y.d == y8.d);
+    REQUIRE(y.s == golden::kQ8_1Cases[i].s);
+    for (int j = 0; j < 32; ++j) {
+      CAPTURE(j);
+      REQUIRE(int{y.qs[j]} == int{y8.qs[j]});
+    }
+  }
+}
+
+TEST_CASE("golden: dot_q5_0_q8_0 and dot_q5_1_q8_1 bitwise equal ggml generic", "[quant][golden]") {
+  for (const auto& c : golden::kDot5Cases) {
+    CAPTURE(c.seed, c.n);
+    const int nb = c.n / 32;
+    const auto nbs = static_cast<size_t>(nb);
+    std::vector<BlockQ5_0> w50(nbs);
+    std::vector<BlockQ8_0> a80(nbs);
+    std::vector<BlockQ5_1> w51(nbs);
+    std::vector<BlockQ8_1> a81(nbs);
+    golden::Rng r{c.seed};
+    golden::fill_q5_0(r, reinterpret_cast<uint8_t*>(w50.data()), nb);
+    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(a80.data()), nb);
+    golden::fill_q5_1(r, reinterpret_cast<uint8_t*>(w51.data()), nb);
+    golden::fill_q8_1(r, reinterpret_cast<uint8_t*>(a81.data()), nb);
+    uint64_t h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w50.data()), nbs * sizeof(BlockQ5_0));
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(a80.data()), nbs * sizeof(BlockQ8_0), h);
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w51.data()), nbs * sizeof(BlockQ5_1), h);
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(a81.data()), nbs * sizeof(BlockQ8_1), h);
+    REQUIRE(h == c.input_hash);
+    REQUIRE(f32_bits(dot_q5_0_q8_0(w50.data(), a80.data(), nb)) == c.q5_0_bits);
+    REQUIRE(f32_bits(dot_q5_1_q8_1(w51.data(), a81.data(), nb)) == c.q5_1_bits);
+  }
+}
+
+TEST_CASE("golden: dequantize_row Q5_0/Q5_1 bitwise equals dequantize_row_q5_*", "[quant][golden]") {
+  constexpr int nb = golden::kDequantBlocks;
+  std::vector<uint8_t> q50(nb * sizeof(BlockQ5_0)), q51(nb * sizeof(BlockQ5_1));
+  golden::Rng r{golden::kDequantSeed};
+  golden::fill_q5_0(r, q50.data(), nb);
+  golden::fill_q5_1(r, q51.data(), nb);
+  std::vector<float> o(nb * 32);
+  dequantize_row(DType::Q5_0, q50.data(), o.data(), nb * 32);
+  for (int i = 0; i < nb * 32; ++i) {
+    CAPTURE(i);
+    REQUIRE(f32_bits(o[static_cast<size_t>(i)]) == golden::kDequantQ5_0[i]);
+  }
+  dequantize_row(DType::Q5_1, q51.data(), o.data(), nb * 32);
+  for (int i = 0; i < nb * 32; ++i) {
+    CAPTURE(i);
+    REQUIRE(f32_bits(o[static_cast<size_t>(i)]) == golden::kDequantQ5_1[i]);
   }
 }
 
