@@ -39,7 +39,8 @@ file(GLOB_RECURSE NIBBLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp
 # ops.cpp (SIMD rmsnorm/silu/attention) needs it too: g++ contracts _mm256_mul_ps/_add_ps (and _pd) pairs,
 # e.g. exp_ps's final multiply into a softmax sum, and rmsnorm must keep the scalar's per-element math.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/ref_ops.cpp
-  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/quant_avx2.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/matmul_f.cpp
+  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/quant_avx2.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/kquant_avx2.cpp
+  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/matmul_f.cpp
   ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/gemm.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/ops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 add_library(nibble STATIC ${NIBBLE_SOURCES})
 target_include_directories(nibble PUBLIC include PRIVATE src)

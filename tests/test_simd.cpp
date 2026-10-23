@@ -363,4 +363,235 @@ TEST_CASE("simd matmul_rows_q equals scalar bitwise for Q4_0 and Q8_0", "[simd][
     check_matmul_q(t, 64, 37, 1, 9, 9);    // empty range
   }
 }
+
+// ---- Q5_0, Q5_1 and k-quant AVX2 kernels: bit-identical to the scalar dots ----
+#include "data/quant_golden.inc"
+#include "quant_golden_gen.h"
+#include "quant_test_util.h"
+
+namespace {
+using DotFn = float (*)(const void*, const void*, int64_t);
+template <class W, class A, float (*F)(const W*, const A*, int64_t)>
+float call(const void* w, const void* a, int64_t nb) {
+  return F(static_cast<const W*>(w), static_cast<const A*>(a), nb);
+}
+struct NewType {
+  DType t;
+  size_t act_bytes;
+  DotFn scalar, vec;
+  std::vector<int64_t> nbs;
+};
+const NewType kNew[] = {
+    {DType::Q5_0, sizeof(BlockQ8_0), call<BlockQ5_0, BlockQ8_0, dot_q5_0_q8_0>,
+     call<BlockQ5_0, BlockQ8_0, simd::dot_q5_0_q8_0>, {1, 2, 28, 152}},
+    {DType::Q5_1, sizeof(BlockQ8_1), call<BlockQ5_1, BlockQ8_1, dot_q5_1_q8_1>,
+     call<BlockQ5_1, BlockQ8_1, simd::dot_q5_1_q8_1>, {1, 2, 28, 152}},
+    {DType::Q4_K, sizeof(BlockQ8_K), call<BlockQ4_K, BlockQ8_K, dot_q4_K_q8_K>,
+     call<BlockQ4_K, BlockQ8_K, simd::dot_q4_K_q8_K>, {1, 2, 8, 19, 32}},
+    {DType::Q5_K, sizeof(BlockQ8_K), call<BlockQ5_K, BlockQ8_K, dot_q5_K_q8_K>,
+     call<BlockQ5_K, BlockQ8_K, simd::dot_q5_K_q8_K>, {1, 2, 8, 19, 32}},
+    {DType::Q6_K, sizeof(BlockQ8_K), call<BlockQ6_K, BlockQ8_K, dot_q6_K_q8_K>,
+     call<BlockQ6_K, BlockQ8_K, simd::dot_q6_K_q8_K>, {1, 2, 8, 19, 32}},
+};
+
+// Same bytes at a 1-byte offset (unaligned blocks).
+struct Shifted {
+  std::vector<uint8_t> buf;
+  explicit Shifted(const uint8_t* p, size_t n) : buf(n + 1) { std::memcpy(buf.data() + 1, p, n); }
+  const uint8_t* data() const { return buf.data() + 1; }
+};
+
+// Both NaN, or the same bits.
+bool same_or_nan(float a, float b) { return (std::isnan(a) && std::isnan(b)) || bits(a) == bits(b); }
+}  // namespace
+
+TEST_CASE("simd new-type dots and matmul_rows_q equal scalar bitwise", "[simd][quant]") {
+  for (const NewType& nt : kNew) {
+    const auto& info = dtype_info(nt.t);
+    for (int64_t nb : nt.nbs) {
+      const int64_t in = nb * info.block_size;
+      for (int64_t rows : {1, 3, 4, 5, 37})
+        for (int64_t n : {1, 5}) {
+          INFO(info.name << " in=" << in << " rows=" << rows << " n=" << n);
+          std::mt19937 g(uint32_t(in * 7 + rows * 3 + n));
+          std::uniform_real_distribution<float> u(-1.f, 1.f);
+          std::vector<float> x(size_t(n * in));
+          for (float& v : x) v = u(g);
+          const TestActs acts = test_quantize_acts(nt.t, x.data(), n, in);
+          const QuantActs qa = acts.view();
+          const auto wb = test_weight_rows(nt.t, uint64_t(in + rows), rows, in);
+          const Shifted ws(wb.data(), wb.size());
+          Tensor w;
+          w.type = nt.t;
+          w.n_dims = 2;
+          w.ne = {in, rows, 1, 1};
+          w.data = ws.data();
+          const int64_t ranges[][2] = {{0, rows}, {1, rows}, {rows / 2, rows}, {0, rows / 2}, {rows, rows}};
+          for (const auto& r : ranges) {
+            std::vector<float> want(size_t(n * rows), -7.f), got(want);
+            cpu::matmul_rows(w, x.data(), want.data(), n, r[0], r[1], &qa);
+            simd::matmul_rows_q(w, qa, got.data(), n, r[0], r[1]);
+            for (size_t i = 0; i < want.size(); ++i) REQUIRE(bits(got[i]) == bits(want[i]));
+          }
+          // Single-row dot, weight and activation blocks both unaligned.
+          const size_t arow = nt.act_bytes * size_t(in / (nt.t == DType::Q4_K || nt.t == DType::Q5_K || nt.t == DType::Q6_K ? 256 : 32));
+          const uint8_t* a0 = nullptr;
+          switch (act_type(nt.t)) {
+            case ActType::Q8_0: a0 = reinterpret_cast<const uint8_t*>(acts.q8_0.data()); break;
+            case ActType::Q8_1: a0 = reinterpret_cast<const uint8_t*>(acts.q8_1.data()); break;
+            default: a0 = reinterpret_cast<const uint8_t*>(acts.q8_K.data()); break;
+          }
+          const Shifted as(a0, arow);
+          REQUIRE(bits(nt.vec(ws.data(), as.data(), nb)) == bits(nt.scalar(wb.data(), a0, nb)));
+        }
+    }
+  }
+}
+
+TEST_CASE("simd k-quant dots on hostile blocks", "[simd][quant]") {
+  for (const NewType& nt : kNew) {
+    if (nt.act_bytes != sizeof(BlockQ8_K)) continue;
+    const auto& info = dtype_info(nt.t);
+    const size_t bb = size_t(info.block_bytes);
+    const bool q6 = nt.t == DType::Q6_K;
+    const size_t d_off = q6 ? 208 : 0, dmin_off = 2;
+    for (int variant = 0; variant < 6; ++variant) {
+      INFO(info.name << " variant=" << variant);
+      const int64_t nb = 3;
+      auto wb = test_weight_rows(nt.t, 40 + uint64_t(variant), 1, nb * 256);
+      std::vector<BlockQ8_K> a(static_cast<size_t>(nb));
+      golden::Rng r{uint64_t(variant) + 77};
+      golden::fill_q8_K(r, reinterpret_cast<uint8_t*>(a.data()), nb);
+      const uint16_t one = fp32_to_fp16(1.f);
+      for (int64_t b = 0; b < nb; ++b) {
+        uint8_t* p = wb.data() + size_t(b) * bb;
+        if (variant == 1) std::memset(p, 0xFF, bb);  // all ones everywhere: scales 63/-1, qh all set
+        if (variant == 2 && q6) std::memset(p + 192, 0x80, 16);  // every Q6_K scale = -128
+        if (variant == 2 && !q6) std::memset(p + 4, 0xFF, 12);
+        if (variant == 1 || variant == 2) {
+          std::memcpy(p + d_off, &one, 2);
+          if (!q6) std::memcpy(p + dmin_off, &one, 2);
+        }
+        if (variant == 3 || variant == 4 || variant == 5) {
+          const uint16_t bad = variant == 3 ? 0x7E00 : variant == 4 ? 0x7C00 : 0xFC00;  // NaN, +Inf, -Inf
+          std::memcpy(p + d_off, &bad, 2);
+          if (!q6) std::memcpy(p + dmin_off, &bad, 2);
+        }
+      }
+      const Shifted ws(wb.data(), wb.size());
+      const float want = nt.scalar(wb.data(), a.data(), nb), got = nt.vec(ws.data(), a.data(), nb);
+      if (variant < 3) REQUIRE(bits(got) == bits(want));
+      else REQUIRE(same_or_nan(got, want));
+    }
+  }
+}
+
+// d = dmin = 1 and activation d = 1 make every result an exact integer (small scales keep all partial sums
+// below 2^24), so the float equals an int64 dot of the dequantized integers.
+TEST_CASE("simd k-quant and q5 dots equal an exact integer dot", "[simd][quant]") {
+  for (const NewType& nt : kNew) {
+    const auto& info = dtype_info(nt.t);
+    const bool k = nt.act_bytes == sizeof(BlockQ8_K);
+    const int64_t nb = k ? 2 : 4, in = nb * info.block_size;
+    for (uint64_t seed = 1; seed <= 20; ++seed) {
+      INFO(info.name << " seed=" << seed);
+      auto wb = test_weight_rows(nt.t, seed, 1, in);
+      const uint16_t one = fp32_to_fp16(1.f);
+      for (int64_t b = 0; b < nb; ++b) {
+        uint8_t* p = wb.data() + size_t(b) * size_t(info.block_bytes);
+        if (nt.t == DType::Q6_K) {
+          std::memcpy(p + 208, &one, 2);
+          for (int i = 0; i < 16; ++i) p[192 + i] = uint8_t(int8_t(int(p[192 + i] % 7) - 3));  // scales in [-3, 3]
+        } else if (k) {
+          std::memcpy(p, &one, 2);
+          std::memcpy(p + 2, &one, 2);
+          for (int i = 0; i < 12; ++i) p[4 + i] &= 0x0F;  // unpacked scales and mins are then all <= 15
+        } else {
+          std::memcpy(p, &one, 2);
+          if (nt.t == DType::Q5_1) {
+            const uint16_t m = fp32_to_fp16(1.f);
+            std::memcpy(p + 2, &m, 2);
+          }
+        }
+      }
+      // Activations: small ints so |sum| < 2048 (Q8_1's fp16 s is then exact).
+      std::mt19937 g(static_cast<uint32_t>(seed));
+      std::vector<uint8_t> abuf(size_t(nb) * nt.act_bytes);
+      int64_t want = 0;
+      std::vector<float> deq(static_cast<size_t>(in));
+      dequantize_row(nt.t, wb.data(), deq.data(), in);
+      std::vector<int> aq(static_cast<size_t>(in));
+      for (int& v : aq) v = int(g() % 41) - 20;
+      for (int64_t b = 0; b < nb; ++b) {
+        uint8_t* p = abuf.data() + size_t(b) * nt.act_bytes;
+        const int64_t per = 32;
+        if (k) {
+          const float d1 = 1.f;
+          std::memcpy(p, &d1, 4);
+          for (int j = 0; j < 256; ++j) p[4 + j] = uint8_t(int8_t(aq[size_t(b * 256 + j)]));
+          for (int gq = 0; gq < 16; ++gq) {
+            int sum = 0;
+            for (int i = 0; i < 16; ++i) sum += aq[size_t(b * 256 + gq * 16 + i)];
+            const int16_t sv = int16_t(sum);
+            std::memcpy(p + 260 + gq * 2, &sv, 2);
+          }
+        } else {
+          std::memcpy(p, &one, 2);
+          int sum = 0;
+          const size_t off = nt.act_bytes == sizeof(BlockQ8_1) ? 4 : 2;
+          for (int j = 0; j < 32; ++j) {
+            p[off + size_t(j)] = uint8_t(int8_t(aq[size_t(b * per + j)]));
+            sum += aq[size_t(b * per + j)];
+          }
+          if (nt.act_bytes == sizeof(BlockQ8_1)) {
+            const uint16_t sh = fp32_to_fp16(float(sum));
+            std::memcpy(p + 2, &sh, 2);
+          }
+        }
+      }
+      for (int64_t i = 0; i < in; ++i) want += int64_t(deq[size_t(i)]) * aq[size_t(i)];
+      REQUIRE(nt.vec(wb.data(), abuf.data(), nb) == float(want));
+      REQUIRE(nt.scalar(wb.data(), abuf.data(), nb) == float(want));
+    }
+  }
+}
+
+TEST_CASE("golden: simd q5 and k-quant dots bitwise equal ggml generic", "[quant][golden][simd]") {
+  for (const auto& c : golden::kDot5Cases) {
+    CAPTURE(c.seed, c.n);
+    const int nb = c.n / 32;
+    const auto z = size_t(nb);
+    std::vector<BlockQ5_0> w50(z);
+    std::vector<BlockQ8_0> a80(z);
+    std::vector<BlockQ5_1> w51(z);
+    std::vector<BlockQ8_1> a81(z);
+    golden::Rng r{c.seed};
+    golden::fill_q5_0(r, reinterpret_cast<uint8_t*>(w50.data()), nb);
+    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(a80.data()), nb);
+    golden::fill_q5_1(r, reinterpret_cast<uint8_t*>(w51.data()), nb);
+    golden::fill_q8_1(r, reinterpret_cast<uint8_t*>(a81.data()), nb);
+    // The golden Q8_0 activations are random bytes and include -128, which the AVX2 sign trick cannot take as
+    // the activation of a Q8_0 *weight*; Q5_0 weights are small ([-16, 15]) and pass the activation as the
+    // sign source, so -128 is exact here.
+    REQUIRE(bits(simd::dot_q5_0_q8_0(w50.data(), a80.data(), nb)) == c.q5_0_bits);
+    REQUIRE(bits(simd::dot_q5_1_q8_1(w51.data(), a81.data(), nb)) == c.q5_1_bits);
+  }
+  for (const auto& c : golden::kKDotCases) {
+    CAPTURE(c.seed, c.n);
+    const int nb = c.n / 256;
+    const auto z = size_t(nb);
+    std::vector<BlockQ4_K> w4(z);
+    std::vector<BlockQ5_K> w5(z);
+    std::vector<BlockQ6_K> w6(z);
+    std::vector<BlockQ8_K> a8(z);
+    golden::Rng r{c.seed};
+    golden::fill_q4_K(r, reinterpret_cast<uint8_t*>(w4.data()), nb);
+    golden::fill_q5_K(r, reinterpret_cast<uint8_t*>(w5.data()), nb);
+    golden::fill_q6_K(r, reinterpret_cast<uint8_t*>(w6.data()), nb);
+    golden::fill_q8_K(r, reinterpret_cast<uint8_t*>(a8.data()), nb);
+    REQUIRE(bits(simd::dot_q4_K_q8_K(w4.data(), a8.data(), nb)) == c.q4k_bits);
+    REQUIRE(bits(simd::dot_q5_K_q8_K(w5.data(), a8.data(), nb)) == c.q5k_bits);
+    REQUIRE(bits(simd::dot_q6_K_q8_K(w6.data(), a8.data(), nb)) == c.q6k_bits);
+  }
+}
 #endif

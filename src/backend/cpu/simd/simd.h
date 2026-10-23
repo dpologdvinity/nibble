@@ -16,6 +16,13 @@ namespace nibble {
 struct Tensor;
 struct BlockQ4_0;
 struct BlockQ8_0;
+struct BlockQ8_1;
+struct BlockQ5_0;
+struct BlockQ5_1;
+struct BlockQ4_K;
+struct BlockQ5_K;
+struct BlockQ6_K;
+struct BlockQ8_K;
 struct QuantActs;
 }
 
@@ -139,9 +146,19 @@ void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n);
 // -128 (quantize_row_q8_0 output never does).
 float dot_q4_0_q8_0(const BlockQ4_0* w, const BlockQ8_0* a, int64_t n_blocks);
 float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks);
-// Same contract as cpu::matmul_rows for quantized weights (xq.q8_0 from quantize_row_q8_0), bit-identical to
-// it. Q4_0/Q8_0 run the AVX2 kernel, 4 weight rows sharing each activation block; the other types call
-// cpu::matmul_rows.
+// Q5 dots (quant_avx2.cpp) and k-quant dots (kquant_avx2.cpp): bit-identical to the scalar twins in quant.h
+// for finite inputs (NaN/Inf scales give NaN where the scalar does). Blocks may be unaligned. K-quant
+// activations must come from quantize_row_q8_K (qs never -128); Q5_0 and Q5_1 accept any activation bytes.
+float dot_q5_0_q8_0(const BlockQ5_0* w, const BlockQ8_0* a, int64_t n_blocks);
+float dot_q5_1_q8_1(const BlockQ5_1* w, const BlockQ8_1* a, int64_t n_blocks);
+float dot_q4_K_q8_K(const BlockQ4_K* w, const BlockQ8_K* a, int64_t n_blocks);
+float dot_q5_K_q8_K(const BlockQ5_K* w, const BlockQ8_K* a, int64_t n_blocks);
+float dot_q6_K_q8_K(const BlockQ6_K* w, const BlockQ8_K* a, int64_t n_blocks);
+// matmul_rows_q's k-quant half: weights of type Q4_K, Q5_K or Q6_K against xq, 4 weight rows per activation block.
+void matmul_rows_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
+// Same contract as cpu::matmul_rows for quantized weights (xq from the quantizers in quant.h), bit-identical
+// to it. Every quantized type runs an AVX2 kernel, 4 weight rows sharing each activation block, then a 1-row
+// remainder.
 void matmul_rows_q(const Tensor& w, const QuantActs& xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 
 // Same contract as cpu::matmul_rows for F32/F16 weights (matmul_f.cpp); sums are reordered, so results
