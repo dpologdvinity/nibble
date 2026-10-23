@@ -104,7 +104,10 @@ static int cmd_logits(char** a) {
     cp.type_k = cp.type_v = GGML_TYPE_F32;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
   }
-  cp.n_threads = cp.n_threads_batch = int(std::max(1u, std::thread::hardware_concurrency()));
+  // LLAMA_REF_THREADS caps the thread count: ggml's workers spin, so more threads than free cores is slower.
+  const char* env_threads = std::getenv("LLAMA_REF_THREADS");
+  cp.n_threads = cp.n_threads_batch =
+      env_threads ? std::max(1, std::atoi(env_threads)) : int(std::max(1u, std::thread::hardware_concurrency()));
   llama_context* ctx = llama_init_from_model(m, cp);
   if (!ctx) die("cannot create context");
 
