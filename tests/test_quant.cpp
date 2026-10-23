@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <nibble/error.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -419,6 +420,274 @@ TEST_CASE("golden: dequantize_row Q5_0/Q5_1 bitwise equals dequantize_row_q5_*",
   for (int i = 0; i < nb * 32; ++i) {
     CAPTURE(i);
     REQUIRE(f32_bits(o[static_cast<size_t>(i)]) == golden::kDequantQ5_1[i]);
+  }
+}
+
+// ---- K-quants: Q8_K activations and Q4_K/Q5_K/Q6_K weights ----
+TEST_CASE("quantize q8_k half-to-even, first max, sign", "[quant]") {
+  float x[256] = {};
+  x[0] = -127.f;
+  x[1] = 2.5f;
+  x[2] = 3.5f;
+  x[3] = -2.5f;
+  BlockQ8_K y;
+  quantize_row_q8_K(x, &y, 256);
+  REQUIRE(y.d == 1.0f);
+  REQUIRE(int{y.qs[0]} == -127);
+  REQUIRE(int{y.qs[1]} == 2);  // nearest_int is half to even, not roundf
+  REQUIRE(int{y.qs[2]} == 4);
+  REQUIRE(int{y.qs[3]} == -2);
+  REQUIRE(y.bsums[0] == -123);
+  for (int g = 1; g < 16; ++g) REQUIRE(y.bsums[g] == 0);
+
+  float p[256] = {};
+  p[0] = 127.f;
+  quantize_row_q8_K(p, &y, 256);
+  REQUIRE(y.d == -1.0f);
+  REQUIRE(int{y.qs[0]} == -127);
+
+  float t[256] = {};
+  t[3] = -5.f;
+  t[10] = 5.f;  // equal magnitude: the first maximum (-5) wins
+  quantize_row_q8_K(t, &y, 256);
+  REQUIRE(int{y.qs[3]} == -127);
+  REQUIRE(int{y.qs[10]} == 127);
+}
+
+TEST_CASE("quantize q8_k zero block and bad length", "[quant]") {
+  float z[256] = {};
+  BlockQ8_K zq;
+  std::memset(&zq, 0x5A, sizeof zq);
+  quantize_row_q8_K(z, &zq, 256);
+  REQUIRE(zq.d == 0.f);
+  for (auto q : zq.qs) REQUIRE(q == 0);
+  for (auto b : zq.bsums) REQUIRE(b == 0);
+  golden::Rng r{9};
+  BlockQ4_K w4;
+  BlockQ5_K w5;
+  BlockQ6_K w6;
+  golden::fill_q4_K(r, reinterpret_cast<uint8_t*>(&w4), 1);
+  golden::fill_q5_K(r, reinterpret_cast<uint8_t*>(&w5), 1);
+  golden::fill_q6_K(r, reinterpret_cast<uint8_t*>(&w6), 1);
+  REQUIRE(dot_q4_K_q8_K(&w4, &zq, 1) == 0.f);
+  REQUIRE(dot_q5_K_q8_K(&w5, &zq, 1) == 0.f);
+  REQUIRE(dot_q6_K_q8_K(&w6, &zq, 1) == 0.f);
+
+  std::vector<float> x(896);
+  std::vector<BlockQ8_K> y(4);
+  REQUIRE_THROWS_AS(quantize_row_q8_K(x.data(), y.data(), 896), Error);
+}
+
+// Ruling P1: non-finite input must not be UB and never produce -128 (the AVX2 sign trick needs |q| <= 127).
+TEST_CASE("quantize q8_k non-finite and tiny blocks are defined", "[quant]") {
+  float x[4 * 256] = {};
+  for (int j = 0; j < 4 * 256; ++j) x[j] = static_cast<float>(j % 256 - 128);
+  x[3] = INFINITY;
+  x[9] = -INFINITY;
+  x[256 + 5] = NAN;
+  x[512 + 0] = NAN;
+  x[512 + 1] = INFINITY;
+  for (int j = 0; j < 256; ++j) x[768 + j] = static_cast<float>(j - 128) * 0x1p-130f;
+  BlockQ8_K y[4];
+  quantize_row_q8_K(x, y, 4 * 256);
+  for (const auto& b : y)
+    for (auto q : b.qs) REQUIRE(q >= -127);
+  for (int g = 0; g < 4; ++g) {
+    for (int k = 0; k < 16; ++k) {
+      int sum = 0;
+      for (int i = 0; i < 16; ++i) sum += y[g].qs[k * 16 + i];
+      REQUIRE(y[g].bsums[k] == sum);
+    }
+  }
+  // Block 1: the max scan skips NaN (max = -128), and the NaN element quantizes to 0.
+  REQUIRE(y[1].qs[5] == 0);
+  // Block 3: max = -2^-123, so iscale = +Inf and d = 0: nonzero elements saturate to +-127 with their own sign.
+  REQUIRE(y[3].d == 0.f);
+  REQUIRE(int{y[3].qs[0]} == -127);
+  REQUIRE(int{y[3].qs[255]} == 127);
+  REQUIRE(int{y[3].qs[128]} == 0);
+}
+
+static void set_scale_min_k4_block(uint8_t* scales) {
+  scales[0] = 0x42;
+  scales[4] = 0x43;
+  scales[1] = scales[5] = 1;
+  scales[8] = 0x21;
+}
+
+TEST_CASE("q4_k dequant", "[quant]") {
+  BlockQ4_K b{};
+  b.d = fp32_to_fp16(1.f);
+  b.dmin = fp32_to_fp16(0.5f);
+  set_scale_min_k4_block(b.scales);
+  b.qs[0] = 0x5A;
+  b.qs[64] = 0x03;
+  float y[256];
+  dequantize_row(DType::Q4_K, &b, y, 256);
+  REQUIRE(y[0] == 18.5f);   // 2*10 - 0.5*3
+  REQUIRE(y[32] == 4.5f);   // 1*5 - 0.5*1
+  REQUIRE(y[128] == 42.f);  // sc 17, m 18: 17*3 - 0.5*18 (6-bit high-bit packing)
+}
+
+TEST_CASE("q5_k dequant", "[quant]") {
+  BlockQ5_K b{};
+  b.d = fp32_to_fp16(1.f);
+  b.dmin = fp32_to_fp16(0.5f);
+  set_scale_min_k4_block(b.scales);
+  b.qs[0] = 0x5A;
+  b.qs[64] = 0x03;
+  b.qh[0] = 0x01;
+  float y[256];
+  dequantize_row(DType::Q5_K, &b, y, 256);
+  REQUIRE(y[0] == 50.5f);  // 2*26 - 1.5
+  REQUIRE(y[32] == 4.5f);
+}
+
+TEST_CASE("q6_k dequant", "[quant]") {
+  BlockQ6_K b{};
+  b.d = fp32_to_fp16(0.5f);
+  b.scales[0] = 2;
+  b.scales[4] = -1;
+  b.ql[0] = 0x21;
+  b.qh[0] = 0x03;
+  float y[256];
+  dequantize_row(DType::Q6_K, &b, y, 256);
+  REQUIRE(y[0] == 17.f);   // 0.5*2*((1 | 3<<4) - 32)
+  REQUIRE(y[64] == 15.f);  // 0.5*(-1)*(2 - 32)
+}
+
+TEST_CASE("k-quant dequant rejects non-multiples of 256", "[quant]") {
+  std::vector<uint8_t> buf(512);
+  float y[256];
+  REQUIRE_THROWS_AS(dequantize_row(DType::Q4_K, buf.data(), y, 128), Error);
+  REQUIRE_THROWS_AS(dequantize_row(DType::Q6_K, buf.data(), y, 32), Error);
+}
+
+TEST_CASE("act_type pairs each weight type with its activation type", "[quant]") {
+  REQUIRE(act_type(DType::Q4_0) == ActType::Q8_0);
+  REQUIRE(act_type(DType::Q8_0) == ActType::Q8_0);
+  REQUIRE(act_type(DType::Q5_0) == ActType::Q8_0);
+  REQUIRE(act_type(DType::Q5_1) == ActType::Q8_1);
+  REQUIRE(act_type(DType::Q4_K) == ActType::Q8_K);
+  REQUIRE(act_type(DType::Q5_K) == ActType::Q8_K);
+  REQUIRE(act_type(DType::Q6_K) == ActType::Q8_K);
+  REQUIRE(act_type(DType::F32) == ActType::None);
+  REQUIRE(act_type(DType::F16) == ActType::None);
+}
+
+// Ruling M1: blocks made of arbitrary bytes (fp16 NaN/Inf d/dmin, all-0xFF, -128 activations) must be safe
+// (run under ASan+UBSan too). The scalar dot and the dequantized-then-summed reference agree on finiteness,
+// and finite results are within 1e-3 of the L1 magnitude of the terms.
+template <class W>
+static void check_k_dot_vs_dequant(DType t, void (*fill)(golden::Rng&, uint8_t*, int64_t),
+                                   float (*dot)(const W*, const BlockQ8_K*, int64_t), int trials) {
+  for (int trial = 0; trial < trials; ++trial) {
+    CAPTURE(trial);
+    W w;
+    BlockQ8_K a;
+    golden::Rng r{static_cast<uint64_t>(trial) + 1000};
+    if (trial == 0) {
+      std::memset(&w, 0xFF, sizeof w);
+    } else {
+      fill(r, reinterpret_cast<uint8_t*>(&w), 1);
+    }
+    golden::fill_q8_K(r, reinterpret_cast<uint8_t*>(&a), 1);
+    for (auto& q : a.qs) q = static_cast<int8_t>(r.next());  // includes -128
+    for (int g = 0; g < 16; ++g) {
+      int sum = 0;
+      for (int i = 0; i < 16; ++i) sum += a.qs[g * 16 + i];
+      a.bsums[g] = static_cast<int16_t>(sum);
+    }
+    float dw[256];
+    dequantize_row(t, &w, dw, 256);
+    double ref = 0, l1 = 0;
+    for (int i = 0; i < 256; ++i) {
+      const double term = double(dw[i]) * (double(a.d) * a.qs[i]);
+      ref += term;
+      l1 += std::fabs(term);
+    }
+    const float got = dot(&w, &a, 1);
+    REQUIRE(std::isfinite(got) == std::isfinite(ref));
+    if (std::isfinite(ref)) REQUIRE(std::fabs(double(got) - ref) <= 1e-3 * l1);
+  }
+}
+
+TEST_CASE("k-quant blocks with any bytes are safe", "[quant]") {
+  check_k_dot_vs_dequant<BlockQ4_K>(DType::Q4_K, golden::fill_q4_K, dot_q4_K_q8_K, 10000);
+  check_k_dot_vs_dequant<BlockQ5_K>(DType::Q5_K, golden::fill_q5_K, dot_q5_K_q8_K, 10000);
+  check_k_dot_vs_dequant<BlockQ6_K>(DType::Q6_K, golden::fill_q6_K, dot_q6_K_q8_K, 10000);
+}
+
+TEST_CASE("golden: quantize_row_q8_K matches quantize_row_q8_K_ref", "[quant][golden]") {
+  for (const auto& c : golden::kQ8KCases) {
+    CAPTURE(c.crafted, c.seed, c.n);
+    std::vector<float> x(static_cast<size_t>(c.n));
+    if (c.crafted >= 0) {
+      golden::crafted_q8k_row(c.crafted, x.data());
+    } else {
+      golden::Rng r{c.seed};
+      golden::q8k_rows(r, x.data(), c.n);
+    }
+    std::vector<BlockQ8_K> y(static_cast<size_t>(c.n / 256));
+    std::memset(y.data(), 0, y.size() * sizeof(BlockQ8_K));
+    quantize_row_q8_K(x.data(), y.data(), c.n);
+    uint64_t dh = 0xCBF29CE484222325ull, oh = dh;
+    for (const auto& b : y) {
+      const auto* p = reinterpret_cast<const uint8_t*>(&b);
+      dh = golden::fnv1a(p, 4, dh);
+      oh = golden::fnv1a(p + 4, 256 + 32, oh);
+    }
+    REQUIRE(dh == c.d_hash);
+    REQUIRE(oh == c.out_hash);
+  }
+}
+
+TEST_CASE("golden: dot_q{4,5,6}_K_q8_K bitwise equals ggml generic", "[quant][golden]") {
+  for (const auto& c : golden::kKDotCases) {
+    CAPTURE(c.seed, c.n);
+    const int nb = c.n / 256;
+    const auto z = static_cast<size_t>(nb);
+    std::vector<BlockQ4_K> w4(z);
+    std::vector<BlockQ5_K> w5(z);
+    std::vector<BlockQ6_K> w6(z);
+    std::vector<BlockQ8_K> a8(z);
+    golden::Rng r{c.seed};
+    golden::fill_q4_K(r, reinterpret_cast<uint8_t*>(w4.data()), nb);
+    golden::fill_q5_K(r, reinterpret_cast<uint8_t*>(w5.data()), nb);
+    golden::fill_q6_K(r, reinterpret_cast<uint8_t*>(w6.data()), nb);
+    golden::fill_q8_K(r, reinterpret_cast<uint8_t*>(a8.data()), nb);
+    uint64_t h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w4.data()), z * sizeof(BlockQ4_K));
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w5.data()), z * sizeof(BlockQ5_K), h);
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(w6.data()), z * sizeof(BlockQ6_K), h);
+    h = golden::fnv1a(reinterpret_cast<const uint8_t*>(a8.data()), z * sizeof(BlockQ8_K), h);
+    REQUIRE(h == c.input_hash);
+    REQUIRE(f32_bits(dot_q4_K_q8_K(w4.data(), a8.data(), nb)) == c.q4k_bits);
+    REQUIRE(f32_bits(dot_q5_K_q8_K(w5.data(), a8.data(), nb)) == c.q5k_bits);
+    REQUIRE(f32_bits(dot_q6_K_q8_K(w6.data(), a8.data(), nb)) == c.q6k_bits);
+  }
+}
+
+TEST_CASE("golden: dequantize_row Q4_K/Q5_K/Q6_K bitwise equals dequantize_row_q*_K", "[quant][golden]") {
+  constexpr int nb = golden::kDequantKBlocks;
+  STATIC_REQUIRE(std::size(golden::kDequantK) == 3);
+  const struct {
+    const char* name;
+    DType t;
+    void (*fill)(golden::Rng&, uint8_t*, int64_t);
+    int bytes;
+  } types[] = {{"Q4_K", DType::Q4_K, golden::fill_q4_K, golden::kQ4_KBytes},
+               {"Q5_K", DType::Q5_K, golden::fill_q5_K, golden::kQ5_KBytes},
+               {"Q6_K", DType::Q6_K, golden::fill_q6_K, golden::kQ6_KBytes}};
+  for (size_t i = 0; i < 3; ++i) {
+    CAPTURE(types[i].name);
+    REQUIRE(std::string_view(golden::kDequantK[i].name) == types[i].name);
+    std::vector<uint8_t> q(static_cast<size_t>(nb * types[i].bytes));
+    golden::Rng r{golden::kDequantSeed};
+    types[i].fill(r, q.data(), nb);
+    std::vector<float> o(static_cast<size_t>(nb * 256));
+    dequantize_row(types[i].t, q.data(), o.data(), nb * 256);
+    REQUIRE(golden::fnv1a(reinterpret_cast<const uint8_t*>(o.data()), o.size() * sizeof(float)) ==
+            golden::kDequantK[i].hash);
   }
 }
 
