@@ -98,7 +98,12 @@ static int cmd_logits(char** a) {
   llama_context_params cp = llama_context_default_params();
   cp.n_ctx = uint32_t(n_prompt + n_gen + 8);
   cp.n_batch = cp.n_ctx;
-  if (g_kv_f32) cp.type_k = cp.type_v = GGML_TYPE_F32;
+  if (g_kv_f32) {
+    // --kv-f32 is the nibble-faithful reference: F32 K/V and no flash attention, whose CPU kernel rounds K/V
+    // through F16 and (amplified by activation requantization) moves quantized-model logits by ~1e-3 cosine.
+    cp.type_k = cp.type_v = GGML_TYPE_F32;
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+  }
   cp.n_threads = cp.n_threads_batch = int(std::max(1u, std::thread::hardware_concurrency()));
   llama_context* ctx = llama_init_from_model(m, cp);
   if (!ctx) die("cannot create context");

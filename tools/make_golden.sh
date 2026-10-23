@@ -30,7 +30,8 @@ if [ "$SPECIAL_ONLY" = 1 ]; then
   exit 0
 fi
 # F16 golden: default (native AVX2) build. Quantized goldens: the generic build with an F32 KV cache,
-# because the native build (AVX2 quantizer/dot, llamafile sgemm, Q4_0 repack, F16 KV) is not the
+# and flash attention off (--kv-f32 does both: its CPU kernel rounds K/V through F16, which activation
+# requantization amplifies), because the native build (AVX2 quantizer/dot, llamafile sgemm, Q4_0 repack, F16 KV) is not the
 # generic algorithm nibble implements, and activation requantization amplifies rounding differences
 # past the fixed cosine threshold. Build it with: tools/build_llama_cpp.sh --generic
 REF="$ROOT/third_party/build/bin/llama_ref"
