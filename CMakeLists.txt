@@ -18,9 +18,14 @@ if(NIBBLE_SIMD)
   target_compile_definitions(nibble_flags INTERFACE NIBBLE_SIMD_ENABLED=1)
 endif()
 if(NIBBLE_SANITIZE)
+  set(NIBBLE_SANITIZE_FLAGS ${NIBBLE_SANITIZE})
+  # -fsanitize=undefined leaves out float-to-int casts of NaN/out-of-range values; quantizers need them checked.
+  if(NIBBLE_SANITIZE MATCHES "undefined")
+    string(APPEND NIBBLE_SANITIZE_FLAGS ",float-cast-overflow")
+  endif()
   # Fatal: without this UBSan prints "runtime error:" and the test still passes.
-  target_compile_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE} -fno-sanitize-recover=all -fno-omit-frame-pointer)
-  target_link_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE} -fno-sanitize-recover=all)
+  target_compile_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all -fno-omit-frame-pointer)
+  target_link_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all)
 endif()
 
 find_package(Threads REQUIRED)
