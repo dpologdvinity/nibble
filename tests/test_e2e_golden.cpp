@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -86,8 +87,38 @@ struct Gate {
   bool assert_greedy;   // greedy divergence must be a near-tie; else only WARN
 };
 Gate gate_for(const std::string& model) {
-  if (model == "f16" || model == "llama32-f16" || model == "tinyllama-f16") return {0.999, 1.0, true, true};
+  if (model.ends_with("f16")) return {0.999, 1.0, true, true};
   return {0.995, 0.90, false, false};
+}
+
+// One row per model file under test: id used in the case names, gguf and golden names, and the chat prompt.
+struct E2EModel {
+  const char* id;
+  const char* gguf;
+  const char* golden;
+  const char* chat;
+};
+const E2EModel kModels[] = {
+    {"f16", "qwen2.5-0.5b-instruct-fp16", "qwen2.5-0.5b-f16", "chat"},
+    {"llama32-f16", "llama-3.2-1b-instruct-f16", "llama32-1b-f16", "chat_llama3"},
+    {"tinyllama-f16", "tinyllama-1.1b-chat-f16", "tinyllama-1.1b-f16", "chat_zephyr"},
+    {"q8_0", "qwen2.5-0.5b-instruct-q8_0", "qwen2.5-0.5b-q8_0", "chat"},
+    {"q4_0", "qwen2.5-0.5b-instruct-q4_0", "qwen2.5-0.5b-q4_0", "chat"},
+    {"q4_k_m", "qwen2.5-0.5b-instruct-q4_k_m", "qwen2.5-0.5b-q4_k_m", "chat"},
+    {"q5_k_m", "qwen2.5-0.5b-instruct-q5_k_m", "qwen2.5-0.5b-q5_k_m", "chat"},
+    {"q6_k", "qwen2.5-0.5b-instruct-q6_k", "qwen2.5-0.5b-q6_k", "chat"},
+    {"llama32-q4_k_m", "llama-3.2-1b-instruct-q4_k_m", "llama32-1b-q4_k_m", "chat_llama3"},
+    {"llama32-q5_k_m", "llama-3.2-1b-instruct-q5_k_m", "llama32-1b-q5_k_m", "chat_llama3"},
+    {"llama32-q6_k", "llama-3.2-1b-instruct-q6_k", "llama32-1b-q6_k", "chat_llama3"},
+    {"tinyllama-q4_k_m", "tinyllama-1.1b-chat-q4_k_m", "tinyllama-1.1b-q4_k_m", "chat_zephyr"},
+    {"tinyllama-q5_k_m", "tinyllama-1.1b-chat-q5_k_m", "tinyllama-1.1b-q5_k_m", "chat_zephyr"},
+    {"tinyllama-q6_k", "tinyllama-1.1b-chat-q6_k", "tinyllama-1.1b-q6_k", "chat_zephyr"},
+};
+const E2EModel& model_by_id(const std::string& id) {
+  for (const E2EModel& m : kModels)
+    if (id == m.id) return m;
+  FAIL("unknown e2e model id " << id);
+  return kModels[0];
 }
 
 // Prompt file for `name`: the chat prompt differs per model family.
@@ -105,18 +136,8 @@ void check_prompt_tokens(const tok::Tokenizer& t, const Golden& g, const std::st
 void run_prompt(const std::string& model, const std::string& name) {
   const Gate gate = gate_for(model);
   const std::string root = NIBBLE_SOURCE_DIR;
-  std::string gguf = "qwen2.5-0.5b-instruct-" + (model == "f16" ? std::string("fp16") : model);
-  std::string golden = "qwen2.5-0.5b-" + model;
-  std::string chat = "chat";
-  if (model == "llama32-f16") {
-    gguf = "llama-3.2-1b-instruct-f16";
-    golden = "llama32-1b-f16";
-    chat = "chat_llama3";
-  } else if (model == "tinyllama-f16") {
-    gguf = "tinyllama-1.1b-chat-f16";
-    golden = "tinyllama-1.1b-f16";
-    chat = "chat_zephyr";
-  }
+  const E2EModel& em = model_by_id(model);
+  const std::string gguf = em.gguf, golden = em.golden, chat = em.chat;
   const std::string model_path = root + "/models/" + gguf + ".gguf";
   const std::string golden_path = root + "/models/golden/" + golden + "/" + name + ".bin";
   if (!std::filesystem::exists(model_path) || !std::filesystem::exists(golden_path)) SKIP("model or golden missing");
@@ -186,35 +207,28 @@ void run_prompt(const std::string& model, const std::string& name) {
 
 #define E2E_CASE(MODEL, PROMPT) \
   TEST_CASE("e2e golden: " PROMPT " [" MODEL "]", "[e2e]") { run_prompt(MODEL, PROMPT); }
-E2E_CASE("f16", "capital")
-E2E_CASE("f16", "code")
-E2E_CASE("f16", "chat")
-E2E_CASE("llama32-f16", "capital")
-E2E_CASE("llama32-f16", "code")
-E2E_CASE("llama32-f16", "chat")
-E2E_CASE("tinyllama-f16", "capital")
-E2E_CASE("tinyllama-f16", "code")
-E2E_CASE("tinyllama-f16", "chat")
-E2E_CASE("q8_0", "capital")
-E2E_CASE("q8_0", "code")
-E2E_CASE("q8_0", "chat")
-E2E_CASE("q4_0", "capital")
-E2E_CASE("q4_0", "code")
-E2E_CASE("q4_0", "chat")
+#define E2E_MODEL(MODEL) E2E_CASE(MODEL, "capital") E2E_CASE(MODEL, "code") E2E_CASE(MODEL, "chat")
+// Ordered by model file so engine() reloads once per file.
+E2E_MODEL("f16")
+E2E_MODEL("llama32-f16")
+E2E_MODEL("tinyllama-f16")
+E2E_MODEL("q8_0")
+E2E_MODEL("q4_0")
+E2E_MODEL("q4_k_m")
+E2E_MODEL("q5_k_m")
+E2E_MODEL("q6_k")
+E2E_MODEL("llama32-q4_k_m")
+E2E_MODEL("llama32-q5_k_m")
+E2E_MODEL("llama32-q6_k")
+E2E_MODEL("tinyllama-q4_k_m")
+E2E_MODEL("tinyllama-q5_k_m")
+E2E_MODEL("tinyllama-q6_k")
 
 // Prompt tokens only (no forward pass) for every model that has goldens.
 TEST_CASE("e2e prompt tokens match llama.cpp", "[e2e]") {
-  struct M { const char* gguf; const char* golden; const char* chat; };
-  const M models[] = {
-      {"qwen2.5-0.5b-instruct-fp16", "qwen2.5-0.5b-f16", "chat"},
-      {"qwen2.5-0.5b-instruct-q8_0", "qwen2.5-0.5b-q8_0", "chat"},
-      {"qwen2.5-0.5b-instruct-q4_0", "qwen2.5-0.5b-q4_0", "chat"},
-      {"llama-3.2-1b-instruct-f16", "llama32-1b-f16", "chat_llama3"},
-      {"tinyllama-1.1b-chat-f16", "tinyllama-1.1b-f16", "chat_zephyr"},
-  };
   const std::string root = NIBBLE_SOURCE_DIR;
   int checked = 0, expected = 0;
-  for (const M& m : models) {
+  for (const E2EModel& m : kModels) {
     const std::string gguf = root + "/models/" + m.gguf + ".gguf";
     if (!std::filesystem::exists(gguf) || !std::filesystem::is_directory(root + "/models/golden/" + m.golden)) continue;
     expected += 3;
@@ -228,4 +242,37 @@ TEST_CASE("e2e prompt tokens match llama.cpp", "[e2e]") {
     }
   }
   REQUIRE(checked == expected);
+}
+
+// The k-quant files must be llama-quantize's default mixes (fallback types next to the K types), not --pure
+// regenerations: tensor counts per type, from the mixes the M7 research recorded.
+TEST_CASE("k-quant files have the llama-quantize mix", "[e2e]") {
+  using Counts = std::map<std::string, int>;
+  const struct {
+    const char* id;
+    Counts want;
+  } mixes[] = {
+      {"q4_k_m", {{"F32", 121}, {"Q5_0", 133}, {"Q8_0", 13}, {"Q4_K", 12}, {"Q6_K", 12}}},
+      {"q5_k_m", {{"F32", 121}, {"Q5_1", 133}, {"Q8_0", 13}, {"Q5_K", 12}, {"Q6_K", 12}}},
+      {"q6_k", {{"F32", 121}, {"Q8_0", 146}, {"Q6_K", 24}}},
+      {"llama32-q4_k_m", {{"F32", 34}, {"Q4_K", 96}, {"Q6_K", 17}}},
+      {"llama32-q5_k_m", {{"F32", 34}, {"Q5_K", 96}, {"Q6_K", 17}}},
+      {"llama32-q6_k", {{"F32", 34}, {"Q6_K", 113}}},
+      {"tinyllama-q4_k_m", {{"F32", 45}, {"Q4_K", 135}, {"Q6_K", 21}}},
+      {"tinyllama-q5_k_m", {{"F32", 45}, {"Q5_K", 135}, {"Q6_K", 21}}},
+      {"tinyllama-q6_k", {{"F32", 45}, {"Q6_K", 156}}},
+  };
+  const std::string root = NIBBLE_SOURCE_DIR;
+  int checked = 0;
+  for (const auto& mix : mixes) {
+    const std::string path = root + "/models/" + model_by_id(mix.id).gguf + ".gguf";
+    if (!std::filesystem::exists(path)) continue;
+    Counts got;
+    const gguf::File file = gguf::File::open(path);
+    for (const auto& t : file.tensors()) ++got[dtype_info(t.tensor.type).name];
+    INFO(mix.id);
+    CHECK(got == mix.want);
+    ++checked;
+  }
+  if (checked == 0) SKIP("no k-quant model files");
 }
