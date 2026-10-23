@@ -293,4 +293,68 @@ inline constexpr uint32_t kDequantQ5_1[256] = {
     0x3e120800u, 0x3e648800u, 0x3e750800u, 0x3e330800u, 0x3de21000u, 0x3e540800u, 0x3ecd0400u, 0x3dc11000u,
     0xbd0de000u, 0x3e228800u, 0x3e120800u, 0x3e228800u, 0xbc97c000u, 0x3cf44000u, 0xbc97c000u, 0xbd0de000u};
 
+// quantize_row_q8_K_ref. crafted >= 0: golden::crafted_q8k_row(crafted, x), n = 256; else
+// golden::q8k_rows(Rng{seed}, x, n). d_hash = FNV-1a over the d floats' bytes, out_hash = FNV-1a over
+// each block's qs then bsums bytes, in block order.
+struct Q8KCase {
+  int crafted;
+  uint64_t seed;
+  int n;
+  uint64_t d_hash;
+  uint64_t out_hash;
+};
+
+inline constexpr Q8KCase kQ8KCases[] = {
+    {0, 0, 256, 0x4d25767f9dce13f5ull, 0x66e368127e9e89a5ull},
+    {1, 0, 256, 0x11faad7fd9cf9f28ull, 0x9678b6025c072b65ull},
+    {2, 0, 256, 0x4b72477f9c5c2f98ull, 0xfbd67755aeff686dull},
+    {3, 0, 256, 0x4b72c77f9c5d0918ull, 0x6803d2e8fe74ab94ull},
+    {-1, 1, 256, 0xd975827e43329f8full, 0xe2314b649b3ffeccull},
+    {-1, 2, 256, 0x789dff71f99b4bceull, 0xb329fb29a9669f1eull},
+    {-1, 3, 256, 0x33e49238d0180483ull, 0x290f725a3d43900eull},
+    {-1, 1, 2048, 0x58cf38c230de3120ull, 0x70bd44e3d88aee85ull},
+    {-1, 2, 2048, 0x6a10bd480af84d4eull, 0xff901b9f4d5e51d8ull},
+    {-1, 3, 2048, 0x5701b7f58f2dc97eull, 0xf80fe80f988f99b4ull},
+};
+
+// Inputs: Rng{seed}; fill_q4_K(w4, nb); fill_q5_K(w5, nb); fill_q6_K(w6, nb); fill_q8_K(a8, nb), nb = n/256.
+// input_hash = FNV-1a over w4|w5|w6|a8 bytes. qNk = vec_dot_qN_K_q8_K_generic(wN, a8).
+struct KDotCase {
+  uint64_t seed;
+  int n;
+  uint64_t input_hash;
+  uint32_t q4k_bits;
+  uint32_t q5k_bits;
+  uint32_t q6k_bits;
+};
+
+inline constexpr KDotCase kKDotCases[] = {
+    {1, 256, 0x02ff92b43e26d0c6ull, 0x458000a2u, 0x4597aaf6u, 0xc6ddd991u},
+    {2, 256, 0x0cd57f1f4b3428f0ull, 0x4a9b690au, 0xc57cec4eu, 0x4497b71cu},
+    {3, 256, 0x793967bc4982108dull, 0xc807bfc2u, 0x4732cfa2u, 0x433bd600u},
+    {1, 2048, 0xb727c1bb84b5c56full, 0xca9a9b16u, 0x4d51f016u, 0x4c641775u},
+    {2, 2048, 0x58853bad528625a7ull, 0xcc237496u, 0xca73f8b2u, 0xccbb0ddcu},
+    {3, 2048, 0xa8f524a7e580d864ull, 0x48edfa70u, 0xcc878db4u, 0xcd55987du},
+    {1, 4864, 0x5ed5e0b1d5456c9aull, 0xcd1879fcu, 0xcd9dfb23u, 0x4e5d617eu},
+    {2, 4864, 0xe461d4fa02c06dd4ull, 0x4ab2bd0cu, 0x4885ce65u, 0x4b0575cfu},
+    {3, 4864, 0x604c4d749dfab83aull, 0x4c133254u, 0xcb8c2d5au, 0xcb0c9fecu},
+    {1, 8192, 0x13e9b3f397a64d4aull, 0x4d6d0933u, 0xcc0c7d2fu, 0xcd9dc908u},
+    {2, 8192, 0xaba257fa1fffd61eull, 0xcaef7418u, 0xcd329a90u, 0xcc0708d2u},
+    {3, 8192, 0x8946f0401561ba59ull, 0xcd334195u, 0x4da74f33u, 0xcdabb9b1u},
+};
+
+// Inputs: Rng{kDequantSeed}; fill_qN_K(q, kDequantKBlocks), one fresh Rng per type. hash = FNV-1a over
+// the output floats' bytes.
+inline constexpr int kDequantKBlocks = 2;
+struct DequantKCase {
+  const char* name;
+  uint64_t hash;
+};
+
+inline constexpr DequantKCase kDequantK[] = {
+    {"Q4_K", 0x56334565c1ba1ee8ull},
+    {"Q5_K", 0x35c7f53d60bbcf07ull},
+    {"Q6_K", 0xa9c3781c500c05f0ull},
+};
+
 }  // namespace golden

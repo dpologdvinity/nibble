@@ -1,10 +1,12 @@
 #pragma once
-// Deterministic integer-only generator for the raw Q4_0/Q8_0/Q5_0/Q5_1/Q8_1 block bytes used by the golden-vector
+// Deterministic integer-only generator for the raw Q4_0/Q8_0/Q5_0/Q5_1/Q8_1/Q4_K/Q5_K/Q6_K/Q8_K block bytes used by the golden-vector
 // tests. Shared by tests/test_quant.cpp and tools/quant_vectors (which runs llama.cpp's reference code
 // on the same bytes). Integer-only so the bytes are identical on every compiler and flag set; the
 // generated .inc also records an FNV-1a hash of the bytes so drift is caught.
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace golden {
 
@@ -13,6 +15,11 @@ inline constexpr int kQ8Bytes = 34;  // fp16 d + 32 int8
 inline constexpr int kQ5_0Bytes = 22;  // fp16 d + 4 qh + 16 nibble bytes
 inline constexpr int kQ5_1Bytes = 24;  // fp16 d, m + 4 qh + 16 nibble bytes
 inline constexpr int kQ8_1Bytes = 36;  // fp16 d, s + 32 int8
+inline constexpr int kQ4_KBytes = 144;  // fp16 d, dmin + 12 scales + 128 qs
+inline constexpr int kQ5_KBytes = 176;  // fp16 d, dmin + 12 scales + 32 qh + 128 qs
+inline constexpr int kQ6_KBytes = 210;  // 128 ql + 64 qh + 16 int8 scales + fp16 d
+inline constexpr int kQ8_KBytes = 292;  // float d + 256 int8 + 16 int16 bsums
+inline constexpr int kCraftedQ8K = 4;   // crafted_q8k_row ids 0..3
 
 struct Rng {
   uint64_t s;
@@ -104,6 +111,87 @@ inline void fill_q8_1(Rng& r, uint8_t* out, int64_t nb) {
     }
     put_d(p, d);
     put_d(p + 2, fp16_mul_int(sum, d));
+  }
+}
+
+// K-quant weights: random bytes everywhere except the fp16 d (and dmin), which come from rand_d.
+inline void fill_q4_K(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ4_KBytes;
+    put_d(p, rand_d(r));
+    put_d(p + 2, rand_d(r));
+    for (int j = 4; j < kQ4_KBytes; ++j) p[j] = static_cast<uint8_t>(r.next());
+  }
+}
+inline void fill_q5_K(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ5_KBytes;
+    put_d(p, rand_d(r));
+    put_d(p + 2, rand_d(r));
+    for (int j = 4; j < kQ5_KBytes; ++j) p[j] = static_cast<uint8_t>(r.next());
+  }
+}
+inline void fill_q6_K(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ6_KBytes;
+    for (int j = 0; j < kQ6_KBytes - 2; ++j) p[j] = static_cast<uint8_t>(r.next());
+    put_d(p + kQ6_KBytes - 2, rand_d(r));
+  }
+}
+
+inline void put_f32(uint8_t* p, float f) { std::memcpy(p, &f, 4); }
+
+// Q8_K activations: qs in [-127, 127], consistent bsums, random finite float d (exact: built from bits).
+inline void fill_q8_K(Rng& r, uint8_t* out, int64_t nb) {
+  for (int64_t b = 0; b < nb; ++b) {
+    uint8_t* p = out + b * kQ8_KBytes;
+    const uint64_t v = r.next();
+    const uint32_t bits = static_cast<uint32_t>(((v & 1u) << 31) | ((120u + ((v >> 1) & 15u)) << 23) | ((v >> 8) & 0x7FFFFFu));
+    float d;
+    std::memcpy(&d, &bits, 4);
+    put_f32(p, d);
+    for (int j = 0; j < 256; ++j) p[4 + j] = static_cast<uint8_t>(static_cast<int>(r.next() % 255) - 127);
+    for (int g = 0; g < 16; ++g) {
+      int sum = 0;
+      for (int i = 0; i < 16; ++i) sum += static_cast<int8_t>(p[4 + g * 16 + i]);
+      const uint16_t s = static_cast<uint16_t>(static_cast<int16_t>(sum));
+      put_d(p + 260 + g * 2, s);
+    }
+  }
+}
+
+// Float rows for the Q8_K quantizer: per block a power-of-two scale, elements are 21-bit integers times it
+// (exact in float, no rounding or FMA contraction involved), with an occasional 8x outlier.
+inline void q8k_rows(Rng& r, float* x, int64_t n) {
+  for (int64_t b = 0; b < n / 256; ++b) {
+    const int e = static_cast<int>(r.next() % 20) - 10 - 20;
+    for (int j = 0; j < 256; ++j) {
+      const uint64_t v = r.next();
+      int k = static_cast<int>(v % (1u << 21)) - (1 << 20);
+      if (((v >> 32) & 63u) == 0) k *= 8;
+      x[b * 256 + j] = std::ldexp(static_cast<float>(k), e);
+    }
+  }
+}
+
+// Crafted 256-float rows: 0 zero; 1 sign tie (-5 first, +5 later); 2 half-way values with iscale = 1; 3 positive max.
+inline void crafted_q8k_row(int id, float* x) {
+  for (int j = 0; j < 256; ++j) x[j] = 0.f;
+  switch (id) {
+    case 1:
+      x[3] = -5.f;
+      x[10] = 5.f;
+      break;
+    case 2:
+      x[0] = -127.f;
+      for (int j = 1; j < 256; ++j) x[j] = static_cast<float>((j % 61) - 30) + 0.5f;
+      break;
+    case 3:
+      x[0] = 127.f;
+      for (int j = 1; j < 256; ++j) x[j] = static_cast<float>((j % 5) - 2) * 3.f;
+      break;
+    default:
+      break;
   }
 }
 
