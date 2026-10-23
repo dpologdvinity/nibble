@@ -8,12 +8,18 @@ namespace nibble {
 
 const DTypeInfo& dtype_info(DType t) {
   static const DTypeInfo f32{1, 4, "F32"}, f16{1, 2, "F16"}, q4_0{32, 18, "Q4_0"},
-      q8_0{32, 34, "Q8_0"};
+      q5_0{32, 22, "Q5_0"}, q5_1{32, 24, "Q5_1"}, q8_0{32, 34, "Q8_0"}, q4_k{256, 144, "Q4_K"},
+      q5_k{256, 176, "Q5_K"}, q6_k{256, 210, "Q6_K"};
   switch (t) {
     case DType::F32: return f32;
     case DType::F16: return f16;
     case DType::Q4_0: return q4_0;
+    case DType::Q5_0: return q5_0;
+    case DType::Q5_1: return q5_1;
     case DType::Q8_0: return q8_0;
+    case DType::Q4_K: return q4_k;
+    case DType::Q5_K: return q5_k;
+    case DType::Q6_K: return q6_k;
   }
   throw Error("unsupported dtype " + std::to_string(static_cast<uint32_t>(t)));
 }

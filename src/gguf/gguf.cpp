@@ -254,11 +254,11 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     ti.offset = r.read<uint64_t>("tensor offset");
 
     switch (ggml_type) {
-      case 0: case 1: case 2: case 8: ti.tensor.type = static_cast<DType>(ggml_type); break;
+      case 0: case 1: case 2: case 6: case 7: case 8: case 12: case 13: case 14: ti.tensor.type = static_cast<DType>(ggml_type); break;
       default:
         throw Error("gguf: unsupported tensor type " + std::string(ggml_type_name(ggml_type)) + " (" +
                     std::to_string(ggml_type) + ") for " + escape_control(name) +
-                    " \xe2\x80\x94 v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize");
+                    " \xe2\x80\x94 supported: " + kSupportedTypes + "; convert with llama-quantize");
     }
     const DTypeInfo& info = dtype_info(ti.tensor.type);
     if (ti.tensor.ne[0] % info.block_size != 0) {

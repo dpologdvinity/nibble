@@ -56,5 +56,10 @@ int main(int argc, char** argv) {
     w.add_string_array("evil.arr", {"\x1b[0m"});
     write_file(dir + "/escape.gguf", w.build());
   }
+  {
+    GgufWriter w;  // one Q6_K tensor, for `nibble info`
+    w.add_tensor("w", nibble::DType::Q6_K, {256}, std::vector<uint8_t>(210, 0));
+    write_file(dir + "/q6k.gguf", w.build());
+  }
   return 0;
 }

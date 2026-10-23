@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <string>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -250,9 +251,40 @@ TEST_CASE("gguf tensor placement rejects", "[gguf]") {
 }
 
 TEST_CASE("gguf unsupported tensor type names the type", "[gguf]") {
-  auto b = one_tensor(static_cast<DType>(12), {256}, 144);
-  REQUIRE_THROWS_WITH(File::parse(b), ContainsSubstring("Q4_K") && ContainsSubstring("w") &&
-                                         ContainsSubstring("llama-quantize"));
+  auto b = one_tensor(DType(11), {256}, 110);
+  REQUIRE_THROWS_WITH(File::parse(b), ContainsSubstring("Q3_K") && ContainsSubstring("(11)") && ContainsSubstring("w") &&
+                                         ContainsSubstring(kSupportedTypes));
+  struct Case { uint32_t id; const char* name; };
+  for (Case c : {Case{3, "Q4_1"}, Case{15, "Q8_K"}, Case{30, "BF16"}, Case{20, "unknown"}}) {
+    CAPTURE(c.id);
+    REQUIRE_THROWS_WITH(File::parse(one_tensor(DType(c.id), {256}, 1024)),
+                        ContainsSubstring(c.name) && ContainsSubstring("(" + std::to_string(c.id) + ")"));
+  }
+}
+
+TEST_CASE("gguf accepts the new types", "[gguf]") {
+  struct Case { DType t; int64_t bs, bb; };
+  for (Case c : {Case{DType::Q5_0, 32, 22}, Case{DType::Q5_1, 32, 24}, Case{DType::Q4_K, 256, 144},
+                 Case{DType::Q5_K, 256, 176}, Case{DType::Q6_K, 256, 210}}) {
+    CAPTURE(dtype_info(c.t).name);
+    const int64_t blocks = 2 * 256 / c.bs;  // 512 elements per row
+    auto b = one_tensor(c.t, {512, 3}, static_cast<size_t>(blocks * c.bb * 3));
+    File f = File::parse(b);
+    const auto* ti = f.find_tensor("w");
+    REQUIRE(ti != nullptr);
+    REQUIRE(ti->tensor.type == c.t);
+    REQUIRE(ti->tensor.row_bytes() == blocks * c.bb);
+    REQUIRE(ti->nbytes == static_cast<uint64_t>(blocks * c.bb * 3));
+  }
+}
+
+TEST_CASE("k-quant ne0 not a multiple of 256 is rejected", "[gguf]") {
+  REQUIRE_THROWS_WITH(File::parse(one_tensor(DType::Q4_K, {896, 2}, 1000)),
+                      ContainsSubstring("'w'") && ContainsSubstring("ne[0]=896") && ContainsSubstring("Q4_K") &&
+                          ContainsSubstring("256"));
+  REQUIRE_THROWS_WITH(File::parse(one_tensor(DType::Q5_0, {48}, 100)),
+                      ContainsSubstring("'w'") && ContainsSubstring("ne[0]=48") && ContainsSubstring("Q5_0") &&
+                          ContainsSubstring("32"));
 }
 
 TEST_CASE("gguf typed getters", "[gguf]") {

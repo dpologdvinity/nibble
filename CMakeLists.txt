@@ -137,6 +137,7 @@ nibble_cli_test(cli_info_escapes_control 0 ARGS info ${NIBBLE_DATA}/escape.gguf
   FORBID_REGEX "%ESC%"
   REGEX "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\"")
 nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*nonexistent")
+nibble_cli_test(cli_info_q6k 0 ARGS info ${NIBBLE_DATA}/q6k.gguf REGEX "w +Q6_K +\\[256\\]")
 nibble_cli_test(cli_usage 2 ARGS frobnicate REGEX "unknown subcommand")
 
 nibble_cli_test(cli_run_tiny 0 ARGS run -m ${NIBBLE_TINY} -p hello -n 4 --temp 0 REGEX "\\[max_tokens\\]")

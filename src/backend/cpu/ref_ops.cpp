@@ -9,7 +9,7 @@
 namespace nibble::cpu {
 
 namespace {
-[[noreturn]] void bad_type() { throw Error("cpu backend: unsupported weight dtype (only F32/F16/Q8_0/Q4_0)"); }
+[[noreturn]] void bad_type() { throw Error(std::string("cpu backend: unsupported weight dtype (only ") + kSupportedTypes + ")"); }
 
 inline const uint16_t* as_f16(const Tensor& t) { return static_cast<const uint16_t*>(t.data); }
 inline const float* as_f32(const Tensor& t) { return static_cast<const float*>(t.data); }

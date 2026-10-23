@@ -48,6 +48,8 @@ void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
         for (int j = 0; j < 32; ++j) dst[b * kQK + j] = static_cast<float>(blk.qs[j]) * d;
       }
       return;
+    case DType::Q5_0: case DType::Q5_1: case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
+      break;  // dequantizers arrive with their kernels
   }
   throw Error("dequantize_row: unsupported dtype");
 }

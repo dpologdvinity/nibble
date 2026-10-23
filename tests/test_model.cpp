@@ -274,7 +274,7 @@ TEST_CASE("model rejects bad files", "[model]") {
   SECTION("unsupported dtype") {
     TinyModelOpts o;
     o.raw_type_tensor = "blk.0.ffn_down.weight";
-    CHECK_THROWS_WITH(load(o), ContainsSubstring("12"));
+    CHECK_THROWS_WITH(load(o), ContainsSubstring("Q3_K"));
     CHECK_THROWS_WITH(load(o), ContainsSubstring("blk.0.ffn_down.weight"));
   }
 }

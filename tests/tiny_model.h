@@ -137,7 +137,7 @@ struct TinyModelOpts {
   int64_t vocab_delta = 0;      // token_embd rows = tokenizer vocab + delta (tokenizer unchanged)
   bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
   bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
-  std::string raw_type_tensor;  // store this tensor with unsupported ggml type 12 (Q4_K) and dummy bytes
+  std::string raw_type_tensor;  // store this tensor with unsupported ggml type 11 (Q3_K) and dummy bytes
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
   TinyTokOpts tok;              // tokenizer variant
   std::string chat_template;    // non-empty: written as tokenizer.chat_template
@@ -193,13 +193,13 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
     } else if (t == DType::Q4_0 || t == DType::Q8_0) {
       b = test_quantize_rows(t, v, ne0);
     } else {  // unsupported type: contents are irrelevant (only used to test rejection)
-      b.assign(144, 0);
+      b.assign(110, 0);
     }
     return b;
   };
   auto mat = [&](const std::string& name, int64_t in, int64_t out) {
     if (name == mo.drop_tensor) return;
-    DType t = name == mo.raw_type_tensor ? static_cast<DType>(12) : wtype;
+    DType t = name == mo.raw_type_tensor ? static_cast<DType>(11) : wtype;
     int64_t o = name == mo.bad_shape ? out + 1 : out;
     w.add_tensor(name, t, {in, o}, bytes(t, rnd(static_cast<size_t>(in * o), -0.5f, 0.5f), in));
   };

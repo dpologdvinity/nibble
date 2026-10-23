@@ -4,7 +4,9 @@
 
 namespace nibble {
 
-enum class DType : uint32_t { F32 = 0, F16 = 1, Q4_0 = 2, Q8_0 = 8 };
+enum class DType : uint32_t { F32 = 0, F16 = 1, Q4_0 = 2, Q5_0 = 6, Q5_1 = 7, Q8_0 = 8, Q4_K = 12, Q5_K = 13, Q6_K = 14 };
+
+inline constexpr const char* kSupportedTypes = "F32/F16/Q4_0/Q5_0/Q5_1/Q8_0/Q4_K/Q5_K/Q6_K";
 
 struct DTypeInfo {
   int64_t block_size;
