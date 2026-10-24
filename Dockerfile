@@ -4,7 +4,7 @@
 #   docker run --rm -v "$PWD/models:/models:ro" nibble chat -m /models/qwen2.5-0.5b-instruct-q4_k_m.gguf
 #
 # MARCH selects the instruction set the binary targets. The default, x86-64-v3, enables the AVX2/FMA/F16C
-# kernels and runs on any x86-64 CPU from about 2013 on; use --build-arg MARCH=x86-64 for a portable (but much
+# kernels and runs on x86-64-v3 CPUs (Haswell / Excavator or newer; older ones die with SIGILL); use --build-arg MARCH=x86-64 for a portable (but much
 # slower, scalar-only) image.
 ARG UBUNTU=ubuntu:24.04
 

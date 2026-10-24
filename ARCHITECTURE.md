@@ -153,8 +153,9 @@ The central engineering decision is *bit-exactness by construction*, in three li
    work is tiled or split across threads, so results do not depend on the thread count, batch size or chunking.
 
 Non-finite data is handled deliberately: blocks from a file are untrusted, so NaN/Inf scales and all-ones bytes must be
-safe to process (no undefined behaviour; the result is non-finite). Quantizers map NaN to 0 and saturate before the int8
-cast, and the AVX2 sign trick relies on activations never containing -128, which the quantizers guarantee.
+safe to process (no undefined behaviour; the result is non-finite). A NaN in an activation block gives the block a NaN
+scale (and zero quants), so every dot that reads it is NaN. Quantizers saturate before the int8 cast, and the AVX2 sign
+trick relies on activations never containing -128, which the quantizers guarantee.
 
 Elementwise float kernels (RMSNorm, SiLU, softmax/attention, float matmul) are *not* bit-identical to the scalar code
 (different summation order, a polynomial `exp`); tests bound their error instead (≈1e-6 relative).
