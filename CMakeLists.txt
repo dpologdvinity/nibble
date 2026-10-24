@@ -1,3 +1,16 @@
+# Build definition for nibble.
+#
+# Targets:
+# - nibble (static library): everything under src/, the engine itself.
+# - nibble_cli (executable `nibble`): the command-line tool in cli/.
+# - nibble_tests, nibble_alloc_tests: Catch2 unit/integration tests; end-to-end cases carry the `e2e` label.
+# - fuzz_gguf, fuzz_load, make_seed (NIBBLE_FUZZ=ON, clang only): libFuzzer targets and their seed generator.
+#
+# Options: NIBBLE_NATIVE (-march=native), NIBBLE_SIMD (use the AVX2 kernels when the target supports them),
+# NIBBLE_SANITIZE (value for -fsanitize=, e.g. address,undefined or thread), NIBBLE_FUZZ.
+#
+# Typical use: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j && ctest --test-dir
+# build -LE e2e
 cmake_minimum_required(VERSION 3.25)
 project(nibble CXX)
 
@@ -5,10 +18,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Build options (see the header comment).
 option(NIBBLE_NATIVE "Build with -march=native" ON)
 option(NIBBLE_SIMD "Enable hand-written SIMD kernels when the target supports them" ON)
 set(NIBBLE_SANITIZE "" CACHE STRING "Value for -fsanitize=")
 
+# nibble_flags carries the compile settings every target shares: strict warnings as errors, -march=native, the
+# SIMD switch and the sanitizer flags.
 add_library(nibble_flags INTERFACE)
 target_compile_options(nibble_flags INTERFACE -Wall -Wextra -Wpedantic -Werror)
 if(NIBBLE_NATIVE)
@@ -28,6 +44,7 @@ if(NIBBLE_SANITIZE)
   target_link_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all)
 endif()
 
+# The library sources are everything under src/ (globbed, re-globbed automatically when files are added).
 find_package(Threads REQUIRED)
 file(GLOB_RECURSE NIBBLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 # The quant dot products are pinned bitwise to ggml goldens; clang contracts a*b+c
@@ -42,16 +59,21 @@ set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp ${CMAKE_SOURCE_DIR
   ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/quant_avx2.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/kquant_avx2.cpp
   ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/matmul_f.cpp
   ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/gemm.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/ops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+# The engine library; its public include directory is include/ (the API), src/ stays private.
 add_library(nibble STATIC ${NIBBLE_SOURCES})
 target_include_directories(nibble PUBLIC include PRIVATE src)
 target_link_libraries(nibble PUBLIC nibble_flags Threads::Threads)
 
+# Catch2 is fetched at configure time (pinned tag).
 include(FetchContent)
 FetchContent_Declare(Catch2 GIT_REPOSITORY https://github.com/catchorg/Catch2.git GIT_TAG v3.16.1)
 FetchContent_MakeAvailable(Catch2)
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
+# Tests: every tests/test_*.cpp goes into nibble_tests. The first discovery registers all non-e2e cases, the
+# second the end-to-end cases with a label, a long timeout, and tolerance for builds where the models are
+# missing.
 enable_testing()
 file(GLOB NIBBLE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/test_*.cpp)
 add_executable(nibble_tests ${NIBBLE_TEST_SOURCES})
@@ -68,6 +90,7 @@ target_include_directories(nibble_alloc_tests PRIVATE include src tests)
 target_link_libraries(nibble_alloc_tests PRIVATE nibble Catch2::Catch2WithMain)
 catch_discover_tests(nibble_alloc_tests)
 
+# Fuzz targets: each compiles the library sources directly with the fuzzer + ASan + UBSan flags.
 option(NIBBLE_FUZZ "Build libFuzzer targets (requires clang)" OFF)
 if(NIBBLE_FUZZ)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -93,6 +116,8 @@ if(NIBBLE_FUZZ)
 endif()
 
 # CLI
+# The CLI. nibble_git.h (the build's git SHA, with a -dirty marker) is generated on every build by
+# tools/gen_git_header.cmake and only rewritten when its content changes.
 file(GLOB NIBBLE_CLI_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/cli/*.cpp)
 add_executable(nibble_cli ${NIBBLE_CLI_SOURCES})
 set_target_properties(nibble_cli PROPERTIES OUTPUT_NAME nibble)
@@ -105,6 +130,8 @@ add_custom_target(nibble_git_header ALL
 add_dependencies(nibble_cli nibble_git_header)
 target_include_directories(nibble_cli PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(nibble_cli PRIVATE nibble)
+# make_test_gguf generates the GGUF fixtures the CLI tests read; a post-build step runs it into
+# <build>/tests/data.
 add_executable(make_test_gguf tests/make_test_gguf.cpp)
 target_include_directories(make_test_gguf PRIVATE include src tests)
 target_link_libraries(make_test_gguf PRIVATE nibble)
@@ -115,6 +142,9 @@ add_custom_command(TARGET make_test_gguf POST_BUILD
 
 # CLI tests go through tests/cli_expect.cmake: exact exit code, optional output regex.
 set(NIBBLE_EXE $<TARGET_FILE:nibble_cli>)
+# Declares a CLI test: runs the nibble executable through tests/cli_expect.cmake and checks the exit code, an
+# output regex, a forbidden regex, stdin input and (SAME_STDOUT) determinism across two runs. Arguments go
+# through one -D option, so ';' inside them is escaped.
 function(nibble_cli_test name expect_exit)
   cmake_parse_arguments(T "SAME_STDOUT" "REGEX;FORBID_REGEX;STDIN" "ARGS;LABELS" ${ARGN})
   string(REPLACE ";" "$<SEMICOLON>" args "${T_ARGS}")  # keep the list in one -D argument
@@ -131,11 +161,14 @@ function(nibble_cli_test name expect_exit)
   endif()
   add_test(NAME ${name} COMMAND ${CMAKE_COMMAND} ${defs} "-DEXPECT_REGEX=${regex}" "-DFORBID_REGEX=${forbid}" -P ${CMAKE_SOURCE_DIR}/tests/cli_expect.cmake)
 endfunction()
+# Paths of the generated fixtures.
 set(NIBBLE_DATA ${CMAKE_BINARY_DIR}/tests/data)
 set(NIBBLE_TINY ${NIBBLE_DATA}/tiny.gguf)
 set(NIBBLE_TINY_CHAT ${NIBBLE_DATA}/tiny_chatml.gguf)
 set(NIBBLE_CLI_DIR ${CMAKE_SOURCE_DIR}/tests/cli)
 
+# `nibble info` tests: output content, control-byte escaping, error cases, k-quant type names, kernel-set
+# line.
 nibble_cli_test(cli_info_small 0 ARGS info ${NIBBLE_DATA}/small.gguf
   REGEX "general.architecture = qwen2.*token_embd.weight +F16 +\\[64, 10\\]")
 # Metadata strings (scalar and array elements) are printed with control bytes escaped.
@@ -146,6 +179,8 @@ nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*n
 nibble_cli_test(cli_info_q6k 0 ARGS info ${NIBBLE_DATA}/q6k.gguf REGEX "w +Q6_K +\\[256\\]")
 nibble_cli_test(cli_usage 2 ARGS frobnicate REGEX "unknown subcommand")
 
+# `nibble run` tests: success, usage errors for every kind of bad flag, deterministic output with temperature
+# 0 or a fixed seed.
 nibble_cli_test(cli_run_tiny 0 ARGS run -m ${NIBBLE_TINY} -p hello -n 4 --temp 0 REGEX "\\[max_tokens\\]")
 nibble_cli_test(cli_run_no_prompt 2 ARGS run -m ${NIBBLE_TINY} REGEX "usage: nibble run")
 nibble_cli_test(cli_run_bad_model 1 ARGS run -m /nonexistent -p hi REGEX "error: ")
@@ -161,6 +196,8 @@ nibble_cli_test(cli_run_bad_top_k 2 ARGS run -m ${NIBBLE_TINY} -p hi --top-k -3)
 nibble_cli_test(cli_run_bad_seed 2 ARGS run -m ${NIBBLE_TINY} -p hi --seed xyz)
 nibble_cli_test(cli_run_temp_no_value 2 ARGS run -m ${NIBBLE_TINY} -p hi --temp)
 
+# `nibble chat` tests: two turns answered, blank lines and CRLF skipped, a final line without newline, context
+# exhaustion.
 nibble_cli_test(cli_chat_two_turns 0 STDIN ${NIBBLE_CLI_DIR}/chat_two_turns.txt
   ARGS chat -m ${NIBBLE_TINY_CHAT} -n 4 --temp 0 REGEX "prompt: [0-9]+ tok.*prompt: [0-9]+ tok")
 nibble_cli_test(cli_chat_blank_lines_skipped 0 STDIN ${NIBBLE_CLI_DIR}/chat_blank_lines.txt
