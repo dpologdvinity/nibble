@@ -1,3 +1,7 @@
+// Tests for the public API (include/nibble/nibble.h) through Model, Session and GenParams on tiny synthetic
+// models written to temporary files. They pin the documented contract: stop reasons, token accounting
+// (n_past, n_prompt_tokens, n_generated), append semantics, seeding, cancellation, prompt parts, and which
+// errors are thrown and when.
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_exception.hpp>
@@ -14,6 +18,8 @@ using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::MessageMatches;
 
 namespace {
+// Writes the given GGUF bytes to a unique temporary file and deletes it on destruction, so tests can use
+// Model::load with a path.
 struct TmpModel {
   std::filesystem::path path;
   explicit TmpModel(const std::vector<uint8_t>& bytes) {
@@ -25,9 +31,12 @@ struct TmpModel {
   }
   ~TmpModel() { std::filesystem::remove(path); }
 };
+// A 10-character prompt; with the tiny byte-level vocabulary it tokenizes to 10 tokens.
 const char* kPrompt = "abcdefghij";
 }  // namespace
 
+// Generation stops with MaxTokens after exactly max_tokens tokens and the counters report 3 generated and 10
+// prompt tokens.
 TEST_CASE("api: max tokens", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -38,6 +47,7 @@ TEST_CASE("api: max tokens", "[api]") {
   CHECK(m.architecture() == "qwen2");
 }
 
+// Returning false from the callback stops generation after that piece with Cancelled.
 TEST_CASE("api: cancel", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -48,6 +58,7 @@ TEST_CASE("api: cancel", "[api]") {
   CHECK(calls == 1);
 }
 
+// With n_ctx = 8 the call stops with ContextFull exactly when prompt + generated tokens fill the context.
 TEST_CASE("api: context full", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_ctx = 8, .n_threads = 2});
@@ -57,6 +68,7 @@ TEST_CASE("api: context full", "[api]") {
   CHECK(s.n_past() == 8);                              // the last delivered token is cached too
 }
 
+// A prompt that cannot fit, an empty prompt and a missing model file each throw Error.
 TEST_CASE("api: errors", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_ctx = 4, .n_threads = 2});
@@ -67,6 +79,7 @@ TEST_CASE("api: errors", "[api]") {
   CHECK_THROWS_AS(Model::load("/nonexistent/x.gguf"), Error);
 }
 
+// A model that immediately emits EOS returns Eos with nothing delivered.
 TEST_CASE("api: eos", "[api]") {
   TmpModel f(tiny_model_gguf(1, DType::F32, true, 0));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -77,6 +90,8 @@ TEST_CASE("api: eos", "[api]") {
   CHECK(s.n_generated() == 0);
 }
 
+// Greedy output is reproducible and every delivered piece is valid UTF-8 (the streamer never splits a
+// character).
 TEST_CASE("api: deterministic and valid utf8", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -96,6 +111,7 @@ TEST_CASE("api: deterministic and valid utf8", "[api]") {
   CHECK(run() == run());
 }
 
+// A moved-to Model is fully usable.
 TEST_CASE("api: model is movable", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model a = Model::load(f.path.string(), {.n_threads = 2});
@@ -105,6 +121,7 @@ TEST_CASE("api: model is movable", "[api]") {
         StopReason::MaxTokens);
 }
 
+// Every use of a moved-from Model (and constructing a Session from it) throws "use of moved-from Model".
 TEST_CASE("api: moved-from model throws", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model a = Model::load(f.path.string(), {.n_threads = 1});
@@ -116,6 +133,8 @@ TEST_CASE("api: moved-from model throws", "[api]") {
   CHECK(b.architecture() == "qwen2");
 }
 
+// A tokenizer whose size differs from the embedding row count (either direction) is rejected with both
+// numbers.
 TEST_CASE("api: vocab size mismatch rejected at load", "[api]") {
   for (int64_t d : {int64_t{1}, int64_t{-1}}) {
     TinyModelOpts mo;
@@ -127,6 +146,7 @@ TEST_CASE("api: vocab size mismatch rejected at load", "[api]") {
   }
 }
 
+// An absurd requested context size fails with an Error mentioning n_ctx rather than crashing.
 TEST_CASE("api: huge n_ctx throws Error", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   CHECK_THROWS_WITH(Model::load(f.path.string(), {.n_ctx = 1000000000000LL, .n_threads = 1}),
@@ -134,8 +154,10 @@ TEST_CASE("api: huge n_ctx throws Error", "[api]") {
 }
 
 namespace {
+// A callback that accepts every piece.
 auto keep_going = [](std::string_view) { return true; };
 
+// Runs a generate call, collects the delivered text and optionally the stop reason.
 std::string run_text(Session& s, std::span<const PromptPart> parts, const GenParams& gp, StopReason* r = nullptr) {
   std::string out;
   StopReason got = s.generate(parts, gp, [&](std::string_view p) { out += p; return true; });
@@ -144,6 +166,7 @@ std::string run_text(Session& s, std::span<const PromptPart> parts, const GenPar
 }
 }  // namespace
 
+// With temperature 0 the seed is irrelevant: seeded and unseeded runs give the same text.
 TEST_CASE("api: greedy with temperature 0 ignores the seed", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -156,6 +179,9 @@ TEST_CASE("api: greedy with temperature 0 ignores the seed", "[api]") {
   CHECK(a == c);
 }
 
+// Each generate call derives its own random stream from (seed, call index): the same seed gives different
+// text on the next call of one Session, but a fresh Session replays the same sequence; a different seed
+// differs; no seed still runs.
 TEST_CASE("api: seeded sampling is reproducible", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -183,6 +209,7 @@ TEST_CASE("api: seeded sampling is reproducible", "[api]") {
   CHECK_NOTHROW(run_text(s, p, rnd));
 }
 
+// The documented GenParams defaults.
 TEST_CASE("api: default sampling params", "[api]") {
   GenParams gp;
   CHECK(gp.temperature == 0.8f);
@@ -192,6 +219,8 @@ TEST_CASE("api: default sampling params", "[api]") {
   CHECK_FALSE(gp.append);
 }
 
+// append = true continues from the cache: the result equals prefilling the whole conversation (including the
+// previously delivered token) from scratch, with identical counters.
 TEST_CASE("api: append continues", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -226,6 +255,8 @@ TEST_CASE("api: append continues", "[api]") {
   CHECK(got == want);
 }
 
+// append with an empty parts list or empty text keeps generating from the cache; with nothing cached it is an
+// empty prompt error.
 TEST_CASE("api: append with no new tokens continues from the cache", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -257,6 +288,9 @@ TEST_CASE("api: append with no new tokens continues from the cache", "[api]") {
                     ContainsSubstring("empty prompt"));
 }
 
+// A turn that does not fit returns ContextFull without touching the cache (append) or with the cache reset
+// (fresh prompt); a full cache stays full; the string overload still throws for a fresh prompt that does not
+// fit.
 TEST_CASE("api: turn longer than remaining context", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_ctx = 8, .n_threads = 2});
@@ -290,6 +324,8 @@ TEST_CASE("api: turn longer than remaining context", "[api]") {
   CHECK_THROWS_AS(s.generate("abcdefgh", {.temperature = 0}, count), Error);
 }
 
+// When the callback cancels, bytes held back by the UTF-8 streamer are dropped rather than delivered in an
+// extra callback (checked over 400 seeds, requiring that some seed actually held bytes).
 TEST_CASE("api: cancel does not flush", "[api]") {
   // Sample near-uniformly over many seeds; cancelling on the first piece must
   // produce exactly one callback even when the UTF-8 streamer holds bytes. The
@@ -314,6 +350,7 @@ TEST_CASE("api: cancel does not flush", "[api]") {
   CHECK(held > 0);
 }
 
+// max_tokens <= 0 returns MaxTokens immediately, prefills nothing and resets the cache.
 TEST_CASE("api: max_tokens 0 skips prefill", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -328,6 +365,8 @@ TEST_CASE("api: max_tokens 0 skips prefill", "[api]") {
   CHECK(calls == 0);
 }
 
+// Each part's `special` flag decides whether control-token text is parsed (one token) or tokenized as
+// characters.
 TEST_CASE("api: prompt parts control special-token parsing", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -345,6 +384,7 @@ TEST_CASE("api: prompt parts control special-token parsing", "[api]") {
   CHECK(s.n_prompt_tokens() == 1);
 }
 
+// A reused Session behaves exactly like a fresh one for a new non-append prompt.
 TEST_CASE("api: session reuse across calls", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -360,6 +400,8 @@ TEST_CASE("api: session reuse across calls", "[api]") {
   CHECK(fresh.n_past() == past);
 }
 
+// n_ctx defaults to min(4096, trained context), is bounded by it, and bad parameter values are rejected
+// before the file is opened.
 TEST_CASE("api: model params", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   CHECK(Model::load(f.path.string(), {.n_threads = 1}).n_ctx() == 64);  // min(4096, context_length 64)
@@ -371,6 +413,8 @@ TEST_CASE("api: model params", "[api]") {
   CHECK_THROWS_WITH(Model::load("/nonexistent/x.gguf", {.n_threads = -1}), ContainsSubstring("n_threads"));
 }
 
+// The vocabulary-size check and the n_ctx check happen before the (potentially expensive or failing)
+// tokenizer construction.
 TEST_CASE("api: vocab check runs before the tokenizer is built", "[api]") {
   TinyModelOpts mo;
   mo.vocab_delta = 1;
@@ -382,6 +426,7 @@ TEST_CASE("api: vocab check runs before the tokenizer is built", "[api]") {
                     ContainsSubstring("exceeds the model's context_length"));
 }
 
+// Terminal escape bytes in architecture, tokenizer model or merge text never reach the error message raw.
 TEST_CASE("api: load errors escape control bytes", "[api]") {
   auto msg_of = [](const TinyModelOpts& mo) {
     TmpModel f(tiny_model_gguf(1, nibble::DType::F32, false, 259, mo));
@@ -405,6 +450,8 @@ TEST_CASE("api: load errors escape control bytes", "[api]") {
   }
 }
 
+// The last delivered token is forwarded into the KV cache even when generation stops on MaxTokens or
+// Cancelled, so appending afterwards equals prefilling the delivered text.
 TEST_CASE("api: delivered tokens are cached after MaxTokens and Cancelled", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
@@ -452,6 +499,7 @@ TEST_CASE("api: delivered tokens are cached after MaxTokens and Cancelled", "[ap
   CHECK(ref_c.n_past() == c.n_past());
 }
 
+// Invalid parameters throw with the cache intact; a max_tokens = 0 fresh call resets it to 0.
 TEST_CASE("api: append = false resets n_past on early returns", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_ctx = 8, .n_threads = 1});
@@ -466,6 +514,8 @@ TEST_CASE("api: append = false resets n_past on early returns", "[api]") {
   CHECK(s.n_past() == 0);
 }
 
+// SentencePiece models get BOS on a fresh prompt but not when appending, and an all-empty prompt gets no lone
+// BOS.
 TEST_CASE("api: bos is added to a fresh prompt only", "[api]") {
   TinyModelOpts mo;
   mo.tok.spm = true;

@@ -21,6 +21,8 @@ inline constexpr int kQ6_KBytes = 210;  // 128 ql + 64 qh + 16 int8 scales + fp1
 inline constexpr int kQ8_KBytes = 292;  // float d + 256 int8 + 16 int16 bsums
 inline constexpr int kCraftedQ8K = 4;   // crafted_q8k_row ids 0..3
 
+// splitmix64: tiny, fast, platform-independent random numbers so tests and the generator tool derive
+// identical inputs from a seed.
 struct Rng {
   uint64_t s;
   uint64_t next() {  // splitmix64
@@ -33,6 +35,7 @@ struct Rng {
 
 // fp16 scale bits: random sign and mantissa; exponent field 8..15 (|d| in [2^-7, 2^1), the range real
 // weight/activation scales occupy), or 0 (zero/subnormal) one time in 16.
+// Random fp16 scale bits.
 inline uint16_t rand_d(Rng& r) {
   const uint64_t v = r.next();
   const uint16_t sign = static_cast<uint16_t>((v & 1u) << 15);
@@ -41,12 +44,14 @@ inline uint16_t rand_d(Rng& r) {
   return static_cast<uint16_t>(sign | (exp << 10) | man);
 }
 
+// Stores a 16-bit value little-endian.
 inline void put_d(uint8_t* p, uint16_t d) {
   p[0] = static_cast<uint8_t>(d & 0xFF);
   p[1] = static_cast<uint8_t>(d >> 8);
 }
 
 // Fills nb consecutive blocks of each type (raw little-endian block bytes).
+// Fillers: nb consecutive raw blocks of each type from the generator (random quant bits, random scales).
 inline void fill_q8_0(Rng& r, uint8_t* out, int64_t nb) {
   for (int64_t b = 0; b < nb; ++b) {
     uint8_t* p = out + b * kQ8Bytes;
@@ -80,6 +85,8 @@ inline void fill_q5_1(Rng& r, uint8_t* out, int64_t nb) {
 
 // fp16 bits of sum * fp16(d), truncated toward zero: within 1 ulp of fp16(sum * d). Integer-only; d must be
 // finite and |sum * d| < 65504 (true for rand_d and |sum| <= 32 * 127).
+// Integer-only product of an integer and an fp16 scale, truncated toward zero (so the generator needs no
+// floating point and is identical on every platform).
 inline uint16_t fp16_mul_int(int sum, uint16_t d) {
   const uint16_t sign = static_cast<uint16_t>((d & 0x8000u) ^ (sum < 0 ? 0x8000u : 0u));
   const int e = (d >> 10) & 31;
@@ -99,6 +106,7 @@ inline uint16_t fp16_mul_int(int sum, uint16_t d) {
 }
 
 // Q8_1 activations: qs in [-127, 127] like a real quantizer's output, s = d * sum(qs).
+// Q8_1 activations with quants in [-127, 127] and a consistent block sum s.
 inline void fill_q8_1(Rng& r, uint8_t* out, int64_t nb) {
   for (int64_t b = 0; b < nb; ++b) {
     uint8_t* p = out + b * kQ8_1Bytes;
@@ -115,6 +123,7 @@ inline void fill_q8_1(Rng& r, uint8_t* out, int64_t nb) {
 }
 
 // K-quant weights: random bytes everywhere except the fp16 d (and dmin), which come from rand_d.
+// K-quant weights: random bytes everywhere except the fp16 scale fields, which come from rand_d.
 inline void fill_q4_K(Rng& r, uint8_t* out, int64_t nb) {
   for (int64_t b = 0; b < nb; ++b) {
     uint8_t* p = out + b * kQ4_KBytes;
@@ -139,9 +148,11 @@ inline void fill_q6_K(Rng& r, uint8_t* out, int64_t nb) {
   }
 }
 
+// Stores a float's bytes.
 inline void put_f32(uint8_t* p, float f) { std::memcpy(p, &f, 4); }
 
 // Q8_K activations: qs in [-127, 127], consistent bsums, random finite float d (exact: built from bits).
+// Q8_K activations: quants in [-127, 127], consistent bsums and a random finite float scale.
 inline void fill_q8_K(Rng& r, uint8_t* out, int64_t nb) {
   for (int64_t b = 0; b < nb; ++b) {
     uint8_t* p = out + b * kQ8_KBytes;
@@ -162,6 +173,8 @@ inline void fill_q8_K(Rng& r, uint8_t* out, int64_t nb) {
 
 // Float rows for the Q8_K quantizer: per block a power-of-two scale, elements are 21-bit integers times it
 // (exact in float, no rounding or FMA contraction involved), with an occasional 8x outlier.
+// Float rows for the Q8_K quantizer tests: integers times a power-of-two scale, so every input is exactly
+// representable and the quantizer's arithmetic involves no hidden rounding of the inputs.
 inline void q8k_rows(Rng& r, float* x, int64_t n) {
   for (int64_t b = 0; b < n / 256; ++b) {
     const int e = static_cast<int>(r.next() % 20) - 10 - 20;
@@ -175,6 +188,7 @@ inline void q8k_rows(Rng& r, float* x, int64_t n) {
 }
 
 // Crafted 256-float rows: 0 zero; 1 sign tie (-5 first, +5 later); 2 half-way values with iscale = 1; 3 positive max.
+// Hand-made 256-float rows exercising Q8_K corner cases (id selects the case).
 inline void crafted_q8k_row(int id, float* x) {
   for (int j = 0; j < 256; ++j) x[j] = 0.f;
   switch (id) {
@@ -195,6 +209,7 @@ inline void crafted_q8k_row(int id, float* x) {
   }
 }
 
+// FNV-1a hash, used to pin large generated inputs and outputs in the golden file.
 inline uint64_t fnv1a(const uint8_t* p, size_t n, uint64_t h = 0xCBF29CE484222325ull) {
   for (size_t i = 0; i < n; ++i) h = (h ^ p[i]) * 0x100000001B3ull;
   return h;

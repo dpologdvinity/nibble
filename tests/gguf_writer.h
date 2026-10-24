@@ -8,10 +8,14 @@
 #include "gguf/gguf.h"
 #include "tensor.h"
 
+// Builds GGUF files in memory: well-formed ones for the positive tests, and, through the raw helpers,
+// deliberately malformed ones for the hostile-input tests. Typical use: add metadata and tensors, then
+// build().
 class GgufWriter {
  public:
   using ValueType = nibble::gguf::ValueType;
 
+  // Little-endian primitives, public so tests can hand-encode malformed key/value entries.
   static void put_u32(std::vector<uint8_t>& b, uint32_t v) { put(b, v); }
   static void put_u64(std::vector<uint8_t>& b, uint64_t v) { put(b, v); }
   static void put_str(std::vector<uint8_t>& b, const std::string& s) {
@@ -19,6 +23,8 @@ class GgufWriter {
     b.insert(b.end(), s.begin(), s.end());
   }
 
+  // Adds an integer-valued metadata entry of the given GGUF type (the value is truncated to the type's
+  // width).
   void add_int(const std::string& key, ValueType t, int64_t v) {
     auto b = head(key, t);
     switch (t) {
@@ -29,16 +35,19 @@ class GgufWriter {
     }
     kvs_.push_back(std::move(b));
   }
+  // Adds a 32-bit float entry.
   void add_f32(const std::string& key, float v) {
     auto b = head(key, ValueType::F32);
     put(b, v);
     kvs_.push_back(std::move(b));
   }
+  // Adds a string entry.
   void add_string(const std::string& key, std::string v) {
     auto b = head(key, ValueType::String);
     put_str(b, v);
     kvs_.push_back(std::move(b));
   }
+  // Adds an array of strings.
   void add_string_array(const std::string& key, std::vector<std::string> v) {
     auto b = head(key, ValueType::Array);
     put_u32(b, static_cast<uint32_t>(ValueType::String));
@@ -46,6 +55,7 @@ class GgufWriter {
     for (auto& s : v) put_str(b, s);
     kvs_.push_back(std::move(b));
   }
+  // Adds an array of int32.
   void add_i32_array(const std::string& key, std::vector<int32_t> v) {
     auto b = head(key, ValueType::Array);
     put_u32(b, static_cast<uint32_t>(ValueType::I32));
@@ -53,6 +63,7 @@ class GgufWriter {
     for (auto x : v) put(b, x);
     kvs_.push_back(std::move(b));
   }
+  // Adds an array of float32.
   void add_f32_array(const std::string& key, std::vector<float> v) {
     auto b = head(key, ValueType::Array);
     put_u32(b, static_cast<uint32_t>(ValueType::F32));
@@ -72,6 +83,8 @@ class GgufWriter {
     tensors_.back().forced = true;
   }
 
+  // Serializes the file: header, metadata, tensor descriptors (offsets assigned in order unless forced),
+  // padding to the alignment, then the tensor data. A non-default alignment is recorded as general.alignment.
   std::vector<uint8_t> build(uint32_t version = 3, uint32_t alignment = 32) const {
     std::vector<std::vector<uint8_t>> kvs = kvs_;
     if (alignment != 32) {
@@ -108,6 +121,7 @@ class GgufWriter {
   }
 
   // The valid file used by test_gguf and the fuzz seed.
+  // The small valid file shared by test_gguf and the fuzz seed.
   static std::vector<uint8_t> sample() {
     GgufWriter w;
     w.add_string("general.architecture", "qwen2");
@@ -120,6 +134,7 @@ class GgufWriter {
   }
 
  private:
+  // One queued tensor: name, raw ggml type id, dimensions, data, and an optional forced offset.
   struct T {
     std::string name;
     uint32_t type;
@@ -129,13 +144,16 @@ class GgufWriter {
     bool forced;
   };
   template <class V>
+  // Appends the raw bytes of a scalar.
   static void put(std::vector<uint8_t>& b, V v) {
     // resize+memcpy (not insert) sidesteps a GCC 13 -Wstringop-overflow false positive at -O2.
     const size_t n = b.size();
     b.resize(n + sizeof v);
     std::memcpy(b.data() + n, &v, sizeof v);
   }
+  // Round up to a multiple of a.
   static uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
+  // Key string plus value-type id: the start of every metadata entry.
   static std::vector<uint8_t> head(const std::string& key, ValueType t) {
     std::vector<uint8_t> b;
     put_str(b, key);

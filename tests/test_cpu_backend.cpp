@@ -1,3 +1,6 @@
+// Tests for CpuBackend (src/backend/cpu/cpu_backend.cpp): matmul/attention against the scalar oracle,
+// supported types, scratch reservation (no growth after reserve), allocation bookkeeping, and the quantized
+// matmul/embed paths for every quantized weight type.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <cmath>
@@ -14,12 +17,14 @@
 using namespace nibble;
 
 namespace {
+// Uniform random floats in [-1, 1).
 std::vector<float> rnd(size_t n, std::mt19937& g) {
   std::uniform_real_distribution<float> d(-1.f, 1.f);
   std::vector<float> v(n);
   for (auto& x : v) x = d(g);
   return v;
 }
+// Largest absolute difference between two arrays.
 double maxdiff(const float* a, const float* b, size_t n) {
   double m = 0;
   for (size_t i = 0; i < n; ++i) m = std::max(m, double(std::fabs(a[i] - b[i])));
@@ -27,6 +32,7 @@ double maxdiff(const float* a, const float* b, size_t n) {
 }
 }  // namespace
 
+// F32 and F16 matmul through the backend agree with the scalar oracle to 1e-5.
 TEST_CASE("cpu backend matmul", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -53,6 +59,8 @@ TEST_CASE("cpu backend matmul", "[cpu_backend]") {
   }
 }
 
+// Backend attention (parallel over heads) agrees with the scalar attention for a grouped-query case, twice in
+// a row to exercise scratch reuse.
 TEST_CASE("cpu backend attention", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -68,6 +76,7 @@ TEST_CASE("cpu backend attention", "[cpu_backend]") {
   }
 }
 
+// The backend runs F32, F16 and all seven quantized weight types.
 TEST_CASE("cpu backend supports", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -77,6 +86,7 @@ TEST_CASE("cpu backend supports", "[cpu_backend]") {
     CHECK(be.supports(t));
 }
 
+// After reserve(), attention for every position up to n_ctx does not grow the scratch buffer.
 TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -92,6 +102,7 @@ TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
   }
 }
 
+// alloc/free bookkeeping: freeing returns blocks, free(nullptr) is a no-op.
 TEST_CASE("cpu backend free releases allocation", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -107,6 +118,7 @@ TEST_CASE("cpu backend free releases allocation", "[cpu_backend]") {
   REQUIRE(be.live_allocations() == base);
 }
 
+// Negative and overflowing sizes throw Error and leave no allocation behind.
 TEST_CASE("cpu backend alloc rejects bad sizes", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -117,6 +129,7 @@ TEST_CASE("cpu backend alloc rejects bad sizes", "[cpu_backend]") {
 }
 
 namespace {
+// A 2-D quantized tensor view over raw bytes.
 Tensor q_tensor(DType t, const std::vector<uint8_t>& bytes, int64_t in, int64_t out) {
   Tensor w;
   w.type = t;
@@ -127,9 +140,12 @@ Tensor q_tensor(DType t, const std::vector<uint8_t>& bytes, int64_t in, int64_t 
 }
 }  // namespace
 
+// All block-quantized weight types the backend runs.
 constexpr DType kQuantTypes[] = {DType::Q4_0, DType::Q5_0, DType::Q5_1, DType::Q8_0,
                                  DType::Q4_K, DType::Q5_K, DType::Q6_K};
 
+// For every quantized type, one token and a small batch: the backend matmul (SIMD where available) equals the
+// scalar oracle bit for bit.
 TEST_CASE("cpu backend quantized matmul equals ref_ops bitwise", "[cpu_backend][quant]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -151,6 +167,8 @@ TEST_CASE("cpu backend quantized matmul equals ref_ops bitwise", "[cpu_backend][
     }
 }
 
+// Embedding lookup in a quantized table returns exactly dequantize_row of the selected rows, for every
+// quantized type.
 TEST_CASE("cpu backend quantized embed dequantizes the row", "[cpu_backend][quant]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -171,12 +189,16 @@ TEST_CASE("cpu backend quantized embed dequantizes the row", "[cpu_backend][quan
 }
 
 namespace {
+// A weight-type combination for matmul_multi, with the expected number of activation-quantization passes.
 struct MixCase {
   std::vector<DType> types;
   uint64_t quantizations;  // expected activation-quantization passes for one matmul_multi call
 };
 }  // namespace
 
+// Weights of different types sharing one input (as in real k-quant files, where e.g. attn_v differs from
+// attn_q) must give the same bits as separate calls, and x must be quantized once per activation type:
+// {Q4_K,Q4_K,Q6_K} once, {Q5_1,Q5_1,Q8_0} twice.
 TEST_CASE("matmul_multi with mixed weight types equals separate matmuls", "[cpu_backend][quant]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -216,6 +238,8 @@ TEST_CASE("matmul_multi with mixed weight types equals separate matmuls", "[cpu_
     }
 }
 
+// After reserve(), repeated quantized matmuls (single and mixed-type groups) neither allocate nor grow the
+// activation scratch.
 TEST_CASE("cpu backend reserve prevents quantized matmul allocation", "[cpu_backend][quant]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -251,6 +275,8 @@ TEST_CASE("cpu backend reserve prevents quantized matmul allocation", "[cpu_back
   }
 }
 
+// F16 and F32 embedding lookups, including a width that is not a multiple of 8 (vector tail), equal the
+// scalar embed.
 TEST_CASE("cpu backend F16 and F32 embed match the scalar oracle for several ids", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -276,6 +302,7 @@ TEST_CASE("cpu backend F16 and F32 embed match the scalar oracle for several ids
 // Debug/ASan builds abort in the DCHECK at the top of CpuBackend::embed before the throw is reached,
 // so the release-mode range check is only testable under NDEBUG.
 #ifdef NDEBUG
+// A token id outside the table is an Error (release builds only; debug builds abort in a DCHECK first).
 TEST_CASE("cpu backend embed throws on out-of-range token ids", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);

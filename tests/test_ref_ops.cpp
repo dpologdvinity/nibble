@@ -1,3 +1,5 @@
+// Tests for the scalar reference kernels in src/backend/cpu/ref_ops.cpp against hand-computed values. These
+// are the oracle for every SIMD kernel, so they are checked against independent arithmetic.
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -14,6 +16,7 @@ using namespace nibble;
 using Catch::Approx;
 
 namespace {
+// An F32 tensor view over d (1-D when ne1 == 1).
 Tensor f32_tensor(const std::vector<float>& d, int64_t ne0, int64_t ne1 = 1) {
   Tensor t;
   t.type = DType::F32;
@@ -22,15 +25,19 @@ Tensor f32_tensor(const std::vector<float>& d, int64_t ne0, int64_t ne1 = 1) {
   t.data = d.data();
   return t;
 }
+// Tolerance helper: 1e-6 relative.
 Approx rel(double v) { return Approx(v).epsilon(1e-6).margin(1e-7); }
 }  // namespace
 
+// With eps = 0, x = {1,2,3,4} and unit weights the output is x / sqrt(mean of squares) = x / sqrt(7.5).
 TEST_CASE("ref rmsnorm", "[ref]") {
   std::vector<float> x{1, 2, 3, 4}, w(4, 1.f), y(4);
   cpu::rmsnorm(x.data(), f32_tensor(w, 4), y.data(), 1, 0.f);
   for (int i = 0; i < 4; ++i) CHECK(y[i] == rel(x[i] / std::sqrt(7.5)));
 }
 
+// Rotary embedding against sin/cos values computed here: adjacent-pair and NeoX layouts, position 0 is the
+// identity, and per-pair frequency factors scale the angles.
 TEST_CASE("ref rope", "[ref]") {
   const double c1 = std::cos(1.0), s1 = std::sin(1.0), c2 = std::cos(0.01), s2 = std::sin(0.01);
   RopeParams p{10000.f, false, nullptr};
@@ -62,6 +69,7 @@ TEST_CASE("ref rope", "[ref]") {
   CHECK(x[3] == rel(std::sin(0.005)));
 }
 
+// Single-head causal attention on a small case with hand-computed weights.
 TEST_CASE("ref attention", "[ref]") {
   std::vector<float> qkv{1, 0, 0, 1}, out(4), sc(8);
   cpu::attention_heads(qkv.data(), qkv.data(), qkv.data(), out.data(), 2, 0, 1, 1, 2, 0, 1, sc.data());
@@ -72,6 +80,7 @@ TEST_CASE("ref attention", "[ref]") {
   CHECK(out[3] == rel(p1));
 }
 
+// With 2 query heads per K/V head, query heads sharing a K/V head see identical keys and values.
 TEST_CASE("ref attention GQA", "[ref]") {
   const int64_t H = 4, KV = 2, D = 2, N = 3;
   std::vector<float> q(H * D, 1.f), k(N * KV * D, 0.f), v(N * KV * D), out(H * D), sc(8);
@@ -85,6 +94,7 @@ TEST_CASE("ref attention GQA", "[ref]") {
   }
 }
 
+// silu(g) * u for known values.
 TEST_CASE("ref silu_mul", "[ref]") {
   std::vector<float> g{0, 1}, u{2, 3};
   cpu::silu_mul(g.data(), u.data(), 2);
@@ -92,6 +102,7 @@ TEST_CASE("ref silu_mul", "[ref]") {
   CHECK(g[1] == rel(3.0 / (1.0 + std::exp(-1.0))));
 }
 
+// F32 and F16 matmul against direct sums, and the F32/F16 embedding row lookups.
 TEST_CASE("ref matmul and embed", "[ref]") {
   std::vector<float> w{1, 2, 3, 4, 5, 6}, x{1, 1, 1}, y(2);
   cpu::matmul_rows(f32_tensor(w, 3, 2), x.data(), y.data(), 1, 0, 2);
@@ -115,6 +126,7 @@ TEST_CASE("ref matmul and embed", "[ref]") {
   CHECK(e == std::vector<float>{4, 5, 6});
 }
 
+// Very large logits do not overflow: softmax subtracts the maximum first.
 TEST_CASE("ref softmax overflow-safe", "[ref]") {
   std::vector<float> x{1000.f, 1000.f};
   cpu::softmax_inplace(x.data(), 2);

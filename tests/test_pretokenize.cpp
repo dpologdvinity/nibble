@@ -1,3 +1,5 @@
+// Tests for the hand-written regex-style pre-tokenizer (src/tokenizer/pretokenize.cpp) that precedes BPE
+// merging.
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 #include <vector>
@@ -9,12 +11,16 @@
 using nibble::tok::pretokenize;
 using V = std::vector<std::string>;
 
+// Pre-tokenizes s and returns the pieces as owned strings, so expectations read naturally.
 static V split(const std::string& s, int n = 1) {
   V out;
   for (auto sv : pretokenize(s, n)) out.emplace_back(sv);
   return out;
 }
 
+// One assertion per regex alternative: contractions (case-insensitive), a letter run with an optional leading
+// symbol, digit grouping (1 digit for Qwen2, up to 3 for Llama 3), punctuation runs absorbing trailing
+// newlines, and the three whitespace rules.
 TEST_CASE("pretokenize rules", "[pretokenize]") {
   CHECK(split("Hello world") == V{"Hello", " world"});
   CHECK(split("I'm 12345") == V{"I", "'m", " ", "1", "2", "3", "4", "5"});
@@ -30,6 +36,8 @@ TEST_CASE("pretokenize rules", "[pretokenize]") {
   CHECK(split("").empty());
 }
 
+// Invariant over the shared tokenizer corpus: the pieces are non-empty and concatenate back to the input
+// exactly, for both digit-run settings.
 TEST_CASE("pretokenize concatenates to input on corpus", "[pretokenize]") {
   auto entries = read_corpus(std::string(NIBBLE_SOURCE_DIR) + "/tests/tokenizer/corpus.txt");
   REQUIRE(!entries.empty());
@@ -45,6 +53,7 @@ TEST_CASE("pretokenize concatenates to input on corpus", "[pretokenize]") {
   }
 }
 
+// A digit-run limit below 1 is a programming error reported as nibble::Error.
 TEST_CASE("pretokenize rejects bad digit run", "[pretokenize]") {
   CHECK_THROWS_AS(pretokenize("1", 0), nibble::Error);
 }

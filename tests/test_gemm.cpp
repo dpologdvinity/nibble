@@ -1,3 +1,5 @@
+// Tests for the prefill path: the tiled GEMM kernels (src/backend/cpu/simd/gemm.cpp) must give the same
+// results as the row-at-a-time kernels, so prompt processing and token generation agree.
 #include <catch2/catch_test_macros.hpp>
 #include <bit>
 #include <cmath>
@@ -134,6 +136,8 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
 }
 }  // namespace
 
+// Calls the tiled kernels and the row kernels directly on the same misaligned data and row ranges and
+// requires identical bits for every dtype and token count.
 TEST_CASE("gemm equals the row-at-a-time simd path bitwise", "[gemm][simd]") {
   for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {
     const std::vector<int64_t> ins = quant(t) ? std::vector<int64_t>{32, 96, 896, 4864}

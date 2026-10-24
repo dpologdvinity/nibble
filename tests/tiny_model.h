@@ -12,6 +12,10 @@
 #include "quant_test_util.h"
 #include "tokenizer/unicode.h"
 
+// Knobs for the synthetic tokenizer. The defaults give a byte-level BPE (GPT-2 alphabet, Qwen2 pre-tokenizer)
+// with 256 byte tokens, three merges ("h e", "he l", "Ġ w") and ids 256-260 reserved for "he", "hel", "Ġw", a
+// Control token "<|ctl|>" (259, also the EOS id) and a UserDefined token "<tool>" (260). The other fields
+// tweak it to provoke specific loader behaviours.
 struct TinyTokOpts {
   std::string model = "gpt2", pre = "qwen2";
   std::vector<std::string> merges = {"h e", "he l", "\xC4\xA0 w"};
@@ -31,9 +35,12 @@ struct TinyTokOpts {
   int byte_0xC3 = 0;           // spm: 1 = <0xC3> becomes the 1-char string "\xC3", 2 = removed (falls back to unk)
 };
 
+// One entry of the synthetic SentencePiece vocabulary: text, GGUF token type, score.
 struct TinySpmTok { const char* text; int type; float score; };
 
 // ids: 0 <unk>, 1 <s>, 2 </s>, 3..258 <0x00>..<0xFF>, then the table below from 259.
+// The synthetic SentencePiece vocabulary: ids 0-2 are <unk>, <s>, </s>, 3-258 the 256 byte tokens
+// <0x00>..<0xFF>, then a few pieces built around the U+2581 space marker.
 inline std::vector<TinySpmTok> tiny_spm_vocab() {
   std::vector<TinySpmTok> v = {{"<unk>", 2, 0}, {"<s>", 3, 0}, {"</s>", 3, 0}};
   static std::vector<std::string> bytes;  // stable storage for c_str()
@@ -57,11 +64,13 @@ inline std::vector<TinySpmTok> tiny_spm_vocab() {
   return v;
 }
 
+// Vocabulary size implied by the options (BPE: 261 plus extras and control tokens).
 inline int64_t tiny_tok_vocab(const TinyTokOpts& o) {
   if (o.spm) return static_cast<int64_t>(tiny_spm_vocab().size());
   return 261 + static_cast<int64_t>(o.extra.size()) + (o.chatml ? 2 : 0) + static_cast<int64_t>(o.control.size());
 }
 
+// Writes the SentencePiece tokenizer metadata (tokens, types, scores, special ids) into w.
 inline void add_tiny_spm_kvs(GgufWriter& w, const TinyTokOpts& o) {
   std::vector<std::string> toks;
   std::vector<int32_t> types;
@@ -90,6 +99,7 @@ inline void add_tiny_spm_kvs(GgufWriter& w, const TinyTokOpts& o) {
   if (o.add_bos >= 0) w.add_int("tokenizer.ggml.add_bos_token", GgufWriter::ValueType::Bool, o.add_bos);
 }
 
+// Writes the tokenizer metadata for either family into w; eos_id is the EOS token id.
 inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t eos_id = 259) {
   if (o.spm) return add_tiny_spm_kvs(w, o);
   std::vector<std::string> toks;
@@ -124,6 +134,7 @@ inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t 
   if (o.add_bos >= 0) w.add_int("tokenizer.ggml.add_bos_token", GgufWriter::ValueType::Bool, o.add_bos);
 }
 
+// A GGUF containing only the tokenizer half (for tokenizer tests).
 inline std::vector<uint8_t> tiny_tokenizer_gguf(const TinyTokOpts& o = {}) {
   GgufWriter w;
   add_tiny_tokenizer_kvs(w, o);
@@ -131,6 +142,9 @@ inline std::vector<uint8_t> tiny_tokenizer_gguf(const TinyTokOpts& o = {}) {
 }
 
 // Variants for model-loading tests; defaults give the plain valid model.
+// Knobs for tiny_model_gguf; the defaults give the plain valid qwen2 model. Fields cover architecture,
+// deliberate defects (dropped or mis-shaped tensors, wrong head counts, bad rope_freqs) and the
+// dimension/type variants the quantized tests need.
 struct TinyModelOpts {
   std::string arch = "qwen2";
   std::string drop_tensor;      // omit this tensor
@@ -153,6 +167,10 @@ struct TinyModelOpts {
 };
 
 // qwen2 (or llama, no biases): 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by default).
+// A complete GGUF for a 2-layer toy model (4 heads, 2 KV heads, n_embd 16 or 32/256 with the
+// quantization-friendly options) with random weights drawn from `seed`, tokenizer included. `wtype` is the
+// weight type of every matrix unless overridden per tensor; norms and biases are always F32. Deterministic in
+// its arguments.
 inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype = nibble::DType::F32,
                                             bool zero_output_norm = false, int32_t eos_id = 259,
                                             const TinyModelOpts& mo = {}) {

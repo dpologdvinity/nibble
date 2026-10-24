@@ -11,6 +11,8 @@
 #include "quant_golden_gen.h"
 
 // Mirrors llama.cpp quantize_row_q4_0_ref (ggml-quants.c).
+// Reproduces ggml's quantize_row_q4_0_ref; the production code has no Q4_0 quantizer (weights arrive
+// pre-quantized), so tests need this to build Q4_0 test models. Checked against ggml by a golden test.
 inline void test_quantize_row_q4_0(const float* x, nibble::BlockQ4_0* y, int64_t k) {
   const int64_t nb = k / 32;
   for (int64_t i = 0; i < nb; ++i) {
@@ -35,6 +37,7 @@ inline void test_quantize_row_q4_0(const float* x, nibble::BlockQ4_0* y, int64_t
 }
 
 // Quantizes `rows` rows of width `ne0` (row-major) into raw bytes of type t (Q4_0 or Q8_0).
+// Row-wise quantization into raw bytes (Q4_0 via the function above, Q8_0 via the production quantizer).
 inline std::vector<uint8_t> test_quantize_rows(nibble::DType t, const std::vector<float>& v, int64_t ne0) {
   const size_t rows = v.size() / static_cast<size_t>(ne0), nb = static_cast<size_t>(ne0 / 32);
   const size_t bs = t == nibble::DType::Q4_0 ? sizeof(nibble::BlockQ4_0) : sizeof(nibble::BlockQ8_0);
@@ -56,6 +59,8 @@ inline std::vector<uint8_t> test_quantize_rows(nibble::DType t, const std::vecto
 
 // Raw weight bytes for `rows` rows of width ne0 of any quantized type, from the golden generators (random
 // quants and finite scales, deterministic in seed).
+// Random raw weight blocks of any quantized type from the golden generators: random quant bits and finite
+// scales, deterministic in the seed. For tests that need valid-looking weights but not meaningful values.
 inline std::vector<uint8_t> test_weight_rows(nibble::DType t, uint64_t seed, int64_t rows, int64_t ne0) {
   using nibble::DType;
   const auto& info = nibble::dtype_info(t);
@@ -76,12 +81,15 @@ inline std::vector<uint8_t> test_weight_rows(nibble::DType t, uint64_t seed, int
 }
 
 // n rows of x quantized to the activation type that weights of type t are multiplied against.
+// Quantized activation rows for a matmul test, one vector per activation type (only the one matching the
+// weight type is filled).
 struct TestActs {
   std::vector<nibble::BlockQ8_0> q8_0;
   std::vector<nibble::BlockQ8_1> q8_1;
   std::vector<nibble::BlockQ8_K> q8_K;
   nibble::QuantActs view() const { return {q8_0.data(), q8_1.data(), q8_K.data()}; }
 };
+// Quantizes n rows of x (width ne0) to the activation type that weights of type t are multiplied against.
 inline TestActs test_quantize_acts(nibble::DType t, const float* x, int64_t n, int64_t ne0) {
   TestActs a;
   switch (nibble::act_type(t)) {

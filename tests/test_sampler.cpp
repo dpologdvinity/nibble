@@ -1,3 +1,5 @@
+// Tests for the Sampler (src/sampler.cpp): greedy and stochastic selection, seeding, top-k/top-p truncation,
+// non-finite logits and parameter validation.
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -13,6 +15,8 @@
 using namespace nibble;
 
 namespace {
+// Logits whose softmax is exactly the given probabilities (log p), so expectations can be written as
+// probabilities.
 std::vector<float> logits_of(std::initializer_list<double> p) {
   std::vector<float> v;
   for (double x : p) v.push_back(static_cast<float>(std::log(x)));
@@ -20,12 +24,14 @@ std::vector<float> logits_of(std::initializer_list<double> p) {
 }
 }  // namespace
 
+// Greedy sampling always picks the maximum, the lowest index on ties.
 TEST_CASE("sampler: temperature 0 is argmax", "[sampler]") {
   Sampler s({0.0f, 0, 1.0f, 1}, 4);
   std::vector<float> l{1, 5, 5, 2};
   for (int i = 0; i < 20; ++i) REQUIRE(s.sample(l) == 1);  // lowest index on ties
 }
 
+// Keeping only one candidate makes temperature irrelevant.
 TEST_CASE("sampler: top_k 1 is argmax for any temperature", "[sampler]") {
   for (float t : {0.1f, 1.0f, 5.0f}) {
     Sampler s({t, 1, 1.0f, 7}, 4);
@@ -34,6 +40,7 @@ TEST_CASE("sampler: top_k 1 is argmax for any temperature", "[sampler]") {
   }
 }
 
+// Equal seeds give identical sequences, and a different seed diverges within 1000 draws.
 TEST_CASE("sampler: same seed same sequence", "[sampler]") {
   std::vector<float> l{0, 1, 2, 3};
   Sampler a({1.0f, 0, 1.0f, 42}, 4), b({1.0f, 0, 1.0f, 42}, 4), c({1.0f, 0, 1.0f, 43}, 4);
@@ -46,6 +53,8 @@ TEST_CASE("sampler: same seed same sequence", "[sampler]") {
   REQUIRE(differs);
 }
 
+// Statistical check: with probabilities 1/3 and 2/3 the empirical frequency over 200k draws is within 0.005
+// of 2/3.
 TEST_CASE("sampler: distribution", "[sampler]") {
   std::vector<float> l{0.0f, static_cast<float>(std::log(2.0))};
   Sampler s({1.0f, 0, 1.0f, 12345}, 2);
@@ -57,6 +66,7 @@ TEST_CASE("sampler: distribution", "[sampler]") {
   REQUIRE(std::abs(f - 2.0 / 3.0) < 0.005);
 }
 
+// top_p 0.5 keeps only the 0.6 token; top_p 0.85 keeps the first two and never draws the third.
 TEST_CASE("sampler: top_p cut", "[sampler]") {
   auto l = logits_of({0.6, 0.3, 0.1});
   {
@@ -75,6 +85,8 @@ TEST_CASE("sampler: top_p cut", "[sampler]") {
   }
 }
 
+// top_k larger than the vocabulary equals no limit; top_p 0 keeps just the best token; negative or NaN
+// temperature and top_p are rejected with the offending value in the message.
 TEST_CASE("sampler: parameter edges", "[sampler]") {
   auto l = logits_of({0.6, 0.3, 0.1});
   {
@@ -93,6 +105,8 @@ TEST_CASE("sampler: parameter edges", "[sampler]") {
                       Catch::Matchers::ContainsSubstring("-0.25"));
 }
 
+// NaN logits are never chosen (they count as -inf), a +inf logit wins deterministically (lowest index), and
+// all-NaN or all--inf rows throw instead of returning garbage.
 TEST_CASE("sampler: NaN and inf logits", "[sampler]") {
   const float nan = std::nanf(""), inf = std::numeric_limits<float>::infinity();
   std::vector<float> m{nan, 1, nan, 3, 2, nan};
@@ -115,6 +129,7 @@ TEST_CASE("sampler: NaN and inf logits", "[sampler]") {
   for (int i = 0; i < 100; ++i) REQUIRE(y.sample(single) == 3);
 }
 
+// Error messages print floats in shortest round-trip form ("-0.5", "nan").
 TEST_CASE("sampler: validation messages use shortest float form", "[sampler]") {
   using Catch::Matchers::Equals;
   CHECK_THROWS_WITH(Sampler({-0.5f, 0, 1.0f, 1}, 3), Equals("sampler: invalid temperature -0.5 (must be >= 0)"));
@@ -122,6 +137,7 @@ TEST_CASE("sampler: validation messages use shortest float form", "[sampler]") {
   CHECK_THROWS_WITH(Sampler({std::nanf(""), 0, 1.0f, 1}, 3), Equals("sampler: invalid temperature nan (must be >= 0)"));
 }
 
+// With equal logits, top-k keeps the lowest indices, so the draw is deterministic across platforms.
 TEST_CASE("sampler: top-k tie goes to the lower index", "[sampler]") {
   // Four equal logits, k = 2: only indices 0 and 1 may ever be drawn.
   Sampler s({1.0f, 2, 1.0f, 5}, 4);
@@ -129,12 +145,14 @@ TEST_CASE("sampler: top-k tie goes to the lower index", "[sampler]") {
   for (int i = 0; i < 300; ++i) REQUIRE(s.sample(l) < 2);
 }
 
+// A logits row of the wrong length is an Error, not an out-of-bounds read.
 TEST_CASE("sampler: logits size mismatch throws", "[sampler]") {
   Sampler s({1.0f, 0, 1.0f, 1}, 4);
   std::vector<float> l{1, 2, 3};
   CHECK_THROWS_WITH(s.sample(l), Catch::Matchers::Equals("sampler: got 3 logits, expected 4"));
 }
 
+// Top-k truncates first, probabilities are renormalized, then top-p truncates the remainder.
 TEST_CASE("sampler: top_k and top_p combine", "[sampler]") {
   // p = .5 .3 .1 .1; top_k 3 keeps .5 .3 .1 (renormalised to .556 .333 .111), then
   // top_p .8 keeps the first two. Index 2 and 3 are never drawn, 0 and 1 both are.
@@ -148,6 +166,8 @@ TEST_CASE("sampler: top_k and top_p combine", "[sampler]") {
   CHECK(seen[3] == 0);
 }
 
+// The inverse-CDF helper never returns a zero-probability token when rounding leaves the cumulative sum below
+// u.
 TEST_CASE("sampler: pick_index falls back to the last token with probability", "[sampler]") {
   const double p[] = {0.5, 0.5, 0.0, 0.0};
   CHECK(pick_index(p, 4, 0.25) == 0);

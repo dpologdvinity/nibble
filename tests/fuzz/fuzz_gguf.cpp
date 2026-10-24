@@ -1,3 +1,7 @@
+// libFuzzer target for the GGUF parser: feeds arbitrary bytes to File::parse. The only acceptable outcomes
+// are a nibble::Error or a file whose every tensor and array element can then be read in bounds (touching the
+// last byte of each tensor and decoding every array element makes the sanitizers check the claims). Anything
+// else - a crash, a sanitizer report, another exception type - is a bug.
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -6,6 +10,7 @@
 #include "gguf/gguf.h"
 #include "nibble/error.h"
 
+// libFuzzer entry point.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   try {
     auto f = nibble::gguf::File::parse(std::span<const uint8_t>(data, size));

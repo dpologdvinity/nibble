@@ -12,6 +12,8 @@
 
 #include "corpus.h"
 
+// One recorded llama.cpp run: the token sequence (prompt followed by the greedily generated continuation) and
+// the logits row produced at every position.
 struct Golden {
   uint32_t n_vocab = 0, n_prompt = 0, n_gen = 0;
   std::vector<int32_t> tokens;

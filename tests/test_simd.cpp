@@ -1,3 +1,7 @@
+// Tests for the AVX2 kernels in src/backend/cpu/simd: the SIMD helpers, the float matmul, the Q8_0 quantizer
+// and the quantized dots. Each kernel is compared with its scalar twin, bit for bit where the design promises
+// it, with unaligned data and awkward sizes to exercise vector tails. Everything except the first two cases
+// is compiled out when the build has no AVX2.
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -9,6 +13,7 @@
 
 using namespace nibble;
 
+// The reported kernel-set string matches the macros the build was compiled with.
 TEST_CASE("kernel_set names the active macros", "[simd]") {
 #if defined(NIBBLE_HAVE_AVXVNNI)
   CHECK(std::strcmp(simd::kernel_set(), "avx2+fma+f16c+avxvnni") == 0);
@@ -19,6 +24,7 @@ TEST_CASE("kernel_set names the active macros", "[simd]") {
 #endif
 }
 
+// Self-test of the comparison harness used by other tests (tests/simd_test_util.h).
 TEST_CASE("compare_kernels detects mismatches and accepts equal kernels", "[simd]") {
   auto ident = [](const float* in, float* out, size_t n) { for (size_t i = 0; i < n; ++i) out[i] = in[i]; };
   test::compare_kernels(ident, ident, {0, 1, 7, 100}, {1, 2}, 0.f, 0.f);
@@ -27,6 +33,7 @@ TEST_CASE("compare_kernels detects mismatches and accepts equal kernels", "[simd
 }
 
 #ifdef NIBBLE_HAVE_AVX2
+// The horizontal sums are exact for integer-valued inputs.
 TEST_CASE("hsum_ps and hsum_epi32 are exact on integers", "[simd]") {
   alignas(32) float f[8];
   alignas(32) int32_t v[8];
@@ -37,6 +44,7 @@ TEST_CASE("hsum_ps and hsum_epi32 are exact on integers", "[simd]") {
   CHECK(simd::hsum_epi32(_mm256_load_si256(reinterpret_cast<const __m256i*>(v))) == ev);
 }
 
+// The F16C conversion agrees with the software conversion for every half bit pattern.
 TEST_CASE("load_f16x8 equals fp16_to_fp32 for all 65536 inputs", "[simd]") {
   for (uint32_t base = 0; base < 65536; base += 8) {
     uint16_t h[8];
@@ -90,6 +98,8 @@ void check_matmul(DType type, int64_t in, int64_t rows, int64_t nt, int64_t rb, 
 }
 }  // namespace
 
+// The float matmul agrees with the scalar oracle across shapes (sums are reordered, so within a relative
+// tolerance).
 TEST_CASE("simd matmul_rows_f matches scalar for F32 and F16", "[simd]") {
   for (DType t : {DType::F32, DType::F16})
     for (int64_t in : {8, 13, 896, 4864})
@@ -100,6 +110,7 @@ TEST_CASE("simd matmul_rows_f matches scalar for F32 and F16", "[simd]") {
         }
 }
 
+// Row sub-ranges (as used by threads) and very large/small values.
 TEST_CASE("simd matmul_rows_f handles sub-ranges and extreme magnitudes", "[simd]") {
   for (DType t : {DType::F32, DType::F16}) {
     check_matmul(t, 70, 37, 2, 5, 22, 1.f);   // row range not 4-aligned
@@ -110,6 +121,7 @@ TEST_CASE("simd matmul_rows_f handles sub-ranges and extreme magnitudes", "[simd
   }
 }
 
+// The vectorized F16 embedding row converter, including the scalar tail for widths not divisible by 8.
 TEST_CASE("embed_row_f16 equals scalar conversion", "[simd]") {
   std::vector<uint16_t> h(41);
   for (size_t i = 0; i < h.size(); ++i) h[i] = uint16_t(i * 1597 + 3);
@@ -166,6 +178,8 @@ std::vector<uint8_t> misalign(const std::vector<B>& v) {
 }
 }  // namespace
 
+// Random rows at several magnitudes (including tiny and huge), zero blocks and dominant elements: scales and
+// quants are byte-identical, and a length not divisible by 32 throws.
 TEST_CASE("simd quantize_row_q8_0 is byte-identical to scalar on random rows", "[simd][quant]") {
   std::mt19937 g(11);
   for (int64_t n : {32, 64, 96, 896, 4864})
@@ -184,6 +198,8 @@ TEST_CASE("simd quantize_row_q8_0 is byte-identical to scalar on random rows", "
   CHECK_THROWS(simd::quantize_row_q8_0(bad.data(), nullptr, 31));
 }
 
+// Values at and around every half-integer up to 127, with both signs, quantize exactly as roundf does (a
+// plain vector round-to-nearest would round ties to even).
 TEST_CASE("simd quantize_row_q8_0 rounds half away from zero like roundf", "[simd][quant]") {
   // amax = 127 gives d = 1 and id = 1, so x*id == x and the qs are roundf(x) of the inputs themselves.
   std::vector<float> vals = {0.49999997f, 0.5f, 0.50000006f, 1.5f, 2.5f, 126.5f, 0x1p-149f, 0x1p-126f, 0.f, 1.f};
@@ -209,6 +225,8 @@ TEST_CASE("simd quantize_row_q8_0 rounds half away from zero like roundf", "[sim
   check_quantize_same(x);
 }
 
+// The int8 multiply-accumulate primitive (and its AVX-VNNI variant) equals a plain integer dot, in the
+// documented exact range (activation never -128 where the weight is negative).
 TEST_CASE("mul_sum_i8 maddubs and dispatch variants agree with integer dot", "[simd][quant]") {
   std::mt19937 g(5);
   for (int rep = 0; rep < 2000; ++rep) {
@@ -234,6 +252,8 @@ TEST_CASE("mul_sum_i8 maddubs and dispatch variants agree with integer dot", "[s
   }
 }
 
+// Random blocks, block counts around the loop unrolling, misaligned pointers, zero activation blocks and zero
+// scales.
 TEST_CASE("simd q4_0/q8_0 dots equal scalar bitwise", "[simd][quant]") {
   std::mt19937 g(7);
   for (int64_t nb : {0, 1, 2, 3, 7, 8, 9, 28, 152})
@@ -257,6 +277,7 @@ TEST_CASE("simd q4_0/q8_0 dots equal scalar bitwise", "[simd][quant]") {
     }
 }
 
+// Rows with tiny magnitudes have an fp16 scale of 0; their dots must be exactly 0 in both implementations.
 TEST_CASE("activation blocks with fp16 scale 0 contribute exactly 0 to scalar and simd dots", "[simd][quant]") {
   // Blocks from rows with tiny amax have fp16(d) == 0; in-contract qs (no -128) must still dot to exactly 0.
   std::mt19937 g(5);
@@ -282,6 +303,8 @@ TEST_CASE("activation blocks with fp16 scale 0 contribute exactly 0 to scalar an
   REQUIRE(qs.d == qv.d);
 }
 
+// With every scale 1 the dot is an exact integer: extreme quants (127, -127, -128 weights, 0/15 nibbles)
+// would reveal any int16 saturation in the maddubs path.
 TEST_CASE("simd dots give exact integer sums on unit-scale extreme blocks", "[simd][quant]") {
   // d = 1 for every block: the dot is the exact integer sum (|sum| < 2^24), so any lost product shows.
   std::mt19937 g(9);
@@ -350,6 +373,8 @@ void check_matmul_q(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb,
 }
 }  // namespace
 
+// The row-range matmul (4 rows at a time plus a remainder) equals the scalar matmul for various widths, row
+// counts, token counts and ranges (including unaligned starts and empty ranges).
 TEST_CASE("simd matmul_rows_q equals scalar bitwise for Q4_0 and Q8_0", "[simd][quant]") {
   for (DType t : {DType::Q4_0, DType::Q8_0}) {
     for (int64_t in : {32, 96, 896, 4864})
@@ -405,6 +430,9 @@ struct Shifted {
 bool same_or_nan(float a, float b) { return (std::isnan(a) && std::isnan(b)) || bits(a) == bits(b); }
 }  // namespace
 
+// For Q5_0, Q5_1, Q4_K, Q5_K and Q6_K: single-row dots on unaligned blocks and the row-range matmul equal the
+// scalar results bit for bit, for the block counts of real model widths, row counts around the 4-row kernel,
+// and row ranges starting at odd offsets.
 TEST_CASE("simd new-type dots and matmul_rows_q equal scalar bitwise", "[simd][quant]") {
   for (const NewType& nt : kNew) {
     const auto& info = dtype_info(nt.t);
@@ -448,6 +476,8 @@ TEST_CASE("simd new-type dots and matmul_rows_q equal scalar bitwise", "[simd][q
   }
 }
 
+// Hostile weights: all-0xFF bytes, every Q6_K scale -128, maximal 6-bit scales and NaN/Inf scales. Finite
+// cases are bit-identical; non-finite cases must be NaN in both or equal.
 TEST_CASE("simd k-quant dots on hostile blocks", "[simd][quant]") {
   for (const NewType& nt : kNew) {
     if (nt.act_bytes != sizeof(BlockQ8_K)) continue;
@@ -488,6 +518,8 @@ TEST_CASE("simd k-quant dots on hostile blocks", "[simd][quant]") {
 
 // d = dmin = 1 and activation d = 1 make every result an exact integer (small scales keep all partial sums
 // below 2^24), so the float equals an int64 dot of the dequantized integers.
+// Unit scales and small values make every result an exact integer, checked against an int64 dot of the
+// dequantized values.
 TEST_CASE("simd k-quant and q5 dots equal an exact integer dot", "[simd][quant]") {
   for (const NewType& nt : kNew) {
     const auto& info = dtype_info(nt.t);
@@ -556,6 +588,7 @@ TEST_CASE("simd k-quant and q5 dots equal an exact integer dot", "[simd][quant]"
   }
 }
 
+// The AVX2 Q5 and K-quant dots reproduce ggml's generic results for the golden inputs.
 TEST_CASE("golden: simd q5 and k-quant dots bitwise equal ggml generic", "[quant][golden][simd]") {
   for (const auto& c : golden::kDot5Cases) {
     CAPTURE(c.seed, c.n);

@@ -8,6 +8,7 @@
 #include "gguf_writer.h"
 #include "tiny_model.h"
 
+// Writes the seed files into the directory given as argv[1].
 int main(int argc, char** argv) {
   if (argc != 2) {
     std::fprintf(stderr, "usage: make_seed <dir>\n");

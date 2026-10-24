@@ -27,11 +27,14 @@
 #include "tiny_model.h"
 
 namespace {
+// Hook state: while armed, every operator-new call is counted and its bytes summed; g_fail_at makes the N-th
+// armed allocation throw std::bad_alloc, for out-of-memory injection.
 std::atomic<bool> g_armed{false};
 std::atomic<int64_t> g_count{0};    // allocations while armed
 std::atomic<int64_t> g_bytes{0};    // bytes requested while armed
 std::atomic<int64_t> g_fail_at{0};  // 1-based index of the armed allocation to fail; 0 = never
 
+// The common allocation path behind all replaced operator new overloads.
 void* counted_alloc(std::size_t n, std::size_t align = 0) {
   if (g_armed.load(std::memory_order_relaxed)) {
     const int64_t c = g_count.fetch_add(1) + 1;
@@ -46,6 +49,8 @@ void* counted_alloc(std::size_t n, std::size_t align = 0) {
   throw std::bad_alloc();
 }
 
+// RAII scope that zeroes the counters, optionally sets the failure point, and arms the hook; disarms on
+// destruction.
 struct Armed {
   explicit Armed(int64_t fail_at = 0) {
     g_count = 0;
@@ -56,6 +61,7 @@ struct Armed {
   ~Armed() { g_armed = false; }
 };
 
+// A GGUF with one huge u8 array of n elements (a metadata value that would be enormous if decoded eagerly).
 std::vector<uint8_t> big_u8_array_gguf(uint64_t n) {
   std::vector<uint8_t> kv;
   GgufWriter::put_str(kv, "junk");
@@ -102,6 +108,8 @@ void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); 
 using nibble::gguf::File;
 using Catch::Matchers::ContainsSubstring;
 
+// Parsing a file with a 20 MB numeric array allocates only bookkeeping (< 64 KiB) because arrays are views
+// into the file bytes.
 TEST_CASE("gguf parse of a 20 MB u8 array allocates O(1), not O(n)", "[gguf][alloc]") {
   constexpr uint64_t kN = 20'000'000;
   const auto bytes = big_u8_array_gguf(kN);
@@ -118,6 +126,8 @@ TEST_CASE("gguf parse of a 20 MB u8 array allocates O(1), not O(n)", "[gguf][all
   REQUIRE(used < 64 * 1024);
 }
 
+// A million-element string array costs at most 8 bytes of offset per element (the worst case is empty
+// strings).
 TEST_CASE("gguf parse of a large string array allocates <= 8 bytes per element", "[gguf][alloc]") {
   constexpr uint64_t kN = 1'000'000;  // empty strings: 8 file bytes each, the worst case
   std::vector<uint8_t> kv;
@@ -140,6 +150,8 @@ TEST_CASE("gguf parse of a large string array allocates <= 8 bytes per element",
   REQUIRE(used <= static_cast<int64_t>(8 * kN) + 64 * 1024);
 }
 
+// Out-of-memory injection: failing each allocation in turn during parsing always yields an Error mentioning
+// out of memory, never a crash or std::bad_alloc escape.
 TEST_CASE("bad_alloc during File::parse surfaces as nibble::Error", "[gguf][alloc]") {
   const auto bytes = GgufWriter::sample();
   int failures = 0;
@@ -156,6 +168,8 @@ TEST_CASE("bad_alloc during File::parse surfaces as nibble::Error", "[gguf][allo
   REQUIRE(failures > 0);
 }
 
+// The same injection over the whole Model::load, ending in the documented "out of memory loading <path>"
+// error.
 TEST_CASE("bad_alloc during Model::load surfaces as nibble::Error", "[api][alloc]") {
   const std::string path = "alloc_tests_tiny.tmp.gguf";
   {
@@ -182,6 +196,7 @@ TEST_CASE("bad_alloc during Model::load surfaces as nibble::Error", "[api][alloc
   REQUIRE(oom > 0);
 }
 
+// The sampler's buffers are allocated once at construction; 3000 draws allocate nothing.
 TEST_CASE("Sampler::sample does not allocate", "[sampler][alloc]") {
   std::vector<float> l(1000);
   for (size_t i = 0; i < l.size(); ++i) l[i] = static_cast<float>((i * 37) % 101) * 0.1f;
@@ -199,6 +214,7 @@ TEST_CASE("Sampler::sample does not allocate", "[sampler][alloc]") {
 }
 
 namespace {
+// A parsed tiny model with its bound weights, as in test_model.cpp.
 struct LoadedTiny {
   std::vector<uint8_t> bytes;
   nibble::gguf::File file;
@@ -211,6 +227,8 @@ struct LoadedTiny {
 }  // namespace
 
 // Mixed-type models: matmul_multi quantizes x once per activation type and dispatches each weight on its type.
+// Decode on models with mixed weight types (Q4_K/Q6_K/Q5_0, and Q5_1/Q8_0 with its two activation types):
+// after a warm-up prefill, 16 single-token forwards allocate nothing and do not grow any backend scratch.
 TEST_CASE("alloc: mixed k-quant model", "[model][alloc]") {
   using nibble::DType;
   struct Mix {
@@ -251,6 +269,9 @@ TEST_CASE("alloc: mixed k-quant model", "[model][alloc]") {
   }
 }
 
+// The central no-allocation guarantee for every float/quantized weight type: after warm-up, decoding, short
+// and long prefill and a direct matmul perform zero heap allocations and leave the backend's scratch sizes
+// unchanged.
 TEST_CASE("Transformer::forward decode and CpuBackend::matmul do not allocate", "[model][alloc]") {
   using nibble::DType;
   for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {

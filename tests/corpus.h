@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+// Splits corpus text into entries on the separator described above.
 inline std::vector<std::string> split_corpus(const std::string& data) {
   static const std::string kSep = "\n====\n";
   std::vector<std::string> out;
@@ -25,6 +26,7 @@ inline std::vector<std::string> split_corpus(const std::string& data) {
   }
 }
 
+// Reads a corpus file and splits it. Throws std::runtime_error if the file cannot be opened.
 inline std::vector<std::string> read_corpus(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
   if (!f) throw std::runtime_error("cannot open " + path);

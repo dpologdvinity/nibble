@@ -1,4 +1,8 @@
 #pragma once
+// An independent, deliberately naive implementation of the transformer forward pass (qwen2 and llama) in
+// plain double-precision loops. It uses no Backend and nothing from src/model, only the GGUF reader and
+// dequantize_row, so it serves as a second opinion on the production forward pass: model tests require the
+// two to agree on logits.
 // Independent plain-loop qwen2 forward pass for tests: no Backend, no model/ code.
 #include <cmath>
 #include <span>
@@ -11,13 +15,14 @@
 
 namespace naive {
 
+// Reads a whole tensor as doubles (quantized tensors are dequantized first).
 inline std::vector<double> load(const nibble::gguf::File& f, const std::string& name) {
   const auto* ti = f.find_tensor(name);
   if (!ti) throw std::runtime_error("naive: missing " + name);
   int64_t n = 1;
   for (int i = 0; i < ti->tensor.n_dims; ++i) n *= ti->tensor.ne[static_cast<size_t>(i)];
   std::vector<double> v(static_cast<size_t>(n));
-  if (ti->tensor.type == nibble::DType::Q4_0 || ti->tensor.type == nibble::DType::Q8_0) {
+  if (ti->tensor.type != nibble::DType::F32 && ti->tensor.type != nibble::DType::F16) {  // any quantized type
     std::vector<float> tmp(static_cast<size_t>(n));
     nibble::dequantize_row(ti->tensor.type, ti->tensor.data, tmp.data(), n);
     for (size_t i = 0; i < tmp.size(); ++i) v[i] = tmp[i];
@@ -34,6 +39,7 @@ inline std::vector<double> load(const nibble::gguf::File& f, const std::string& 
 }
 
 // y[o] = sum_i w[o*in + i] * x[i]
+// Matrix-vector product: y[o] = sum_i w[o * in + i] * x[i].
 inline std::vector<double> mv(const std::vector<double>& w, const std::vector<double>& x, size_t out) {
   size_t in = x.size();
   std::vector<double> y(out, 0.0);
@@ -42,6 +48,7 @@ inline std::vector<double> mv(const std::vector<double>& w, const std::vector<do
   return y;
 }
 
+// RMSNorm in double precision.
 inline std::vector<double> rms(const std::vector<double>& x, const std::vector<double>& w, double eps) {
   double ss = 0;
   for (double v : x) ss += v * v;
@@ -51,6 +58,9 @@ inline std::vector<double> rms(const std::vector<double>& x, const std::vector<d
   return y;
 }
 
+// Logits of the last token for the given token sequence, computed from scratch (no KV cache: every position
+// recomputes attention over all earlier ones). Supports the tiny test models only (no rope scaling beyond the
+// rope_freqs tensor).
 inline std::vector<float> naive_logits(const nibble::gguf::File& f, std::span<const int32_t> tokens) {
   const std::string arch = f.get_string("general.architecture"), a = arch + ".";
   const bool llama = arch == "llama";  // llama: normal-mode rope, no qkv bias

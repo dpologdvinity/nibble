@@ -1,4 +1,6 @@
 #pragma once
+// Comparison harness for the elementwise SIMD kernel tests: runs a reference kernel and a vector kernel over
+// a grid of sizes and seeds and fails with the first mismatching index.
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstddef>
