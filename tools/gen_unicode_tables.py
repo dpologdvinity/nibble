@@ -3,14 +3,16 @@
 Usage: python3 -I tools/gen_unicode_tables.py [output_path]
 Default output: src/tokenizer/unicode_tables.inc (relative to the repo root).
 """
+
 import os
 import sys
 import unicodedata
+from typing import TextIO
 
 
-def ranges(cats):
+def ranges(cats: set[str]) -> list[list[int]]:
     """Return the code point ranges [first, last] (inclusive, sorted) whose Unicode general category is in cats."""
-    out = []
+    out: list[list[int]] = []
     for cp in range(0x110000):
         if unicodedata.category(chr(cp)) in cats:
             if out and out[-1][1] == cp - 1:
@@ -20,7 +22,7 @@ def ranges(cats):
     return out
 
 
-def emit(f, name, rs):
+def emit(f: TextIO, name: str, rs: list[list[int]]) -> None:
     """Write the C++ definition of a constexpr array `name` holding the ranges rs, wrapped at 100 columns."""
     f.write(f"constexpr std::pair<char32_t, char32_t> {name}[] = {{\n")
     line = " "
@@ -33,11 +35,10 @@ def emit(f, name, rs):
     f.write(line + "\n};\n")
 
 
-def main():
+def main() -> None:
     """Generate the table file (letters: Lu Ll Lt Lm Lo; numbers: Nd Nl No) and print a summary."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        root, "src", "tokenizer", "unicode_tables.inc")
+    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "src", "tokenizer", "unicode_tables.inc")
     letters = ranges({"Lu", "Ll", "Lt", "Lm", "Lo"})
     numbers = ranges({"Nd", "Nl", "No"})
     with open(path, "w") as f:
@@ -45,8 +46,9 @@ def main():
         f.write(f"// unicodedata.unidata_version = {unicodedata.unidata_version}\n")
         emit(f, "kLetterRanges", letters)
         emit(f, "kNumberRanges", numbers)
-    print(f"unidata {unicodedata.unidata_version}: {len(letters)} letter ranges, "
-          f"{len(numbers)} number ranges -> {path}")
+    print(
+        f"unidata {unicodedata.unidata_version}: {len(letters)} letter ranges, {len(numbers)} number ranges -> {path}"
+    )
 
 
 main()

@@ -10,6 +10,9 @@ thread sweep and roofline come from the single session in m6-final.jsonl / llama
 Other files (session2-discarded.jsonl, llamacpp-b11715.jsonl) are read but not plotted.
 Rows without a "model" (the hand-recorded dispatch-empty timings) are left out.
 """
+
+from __future__ import annotations
+
 import argparse
 import glob
 import html
@@ -19,6 +22,11 @@ import os
 import re
 import statistics
 import sys
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
+
+Row = dict[str, Any]  # one JSONL measurement row
+Block = tuple[float, float, float, bool]  # (llama.cpp/nibble ratio, nibble tok/s, llama.cpp tok/s, noisy)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOISY = 2.0
@@ -44,7 +52,7 @@ FINAL = ("m6-final", "llamacpp-b11715-final")
 ABBA_NOTE = re.compile(r"^abba block (\S+) (A1|B1|B2|A2)$")
 
 
-def load(results):
+def load(results: str) -> dict[str, list[Row]]:
     """{file stem: [row]}, rows without a model dropped."""
     out = {}
     for path in sorted(glob.glob(os.path.join(results, "*.jsonl"))):
@@ -54,9 +62,9 @@ def load(results):
     return out
 
 
-def latest(rows):
+def latest(rows: Iterable[Row]) -> dict[tuple[str, str, str, int], Row]:
     """One row per (tool, model, test, threads): the newest by date."""
-    best = {}
+    best: dict[tuple[str, str, str, int], Row] = {}
     for r in rows:
         k = (r["tool"], r["model"], r["test"], r["threads"])
         if k not in best or r["date"] >= best[k]["date"]:
@@ -64,27 +72,28 @@ def latest(rows):
     return best
 
 
-def final_rows(data):
+def final_rows(data: dict[str, list[Row]]) -> dict[tuple[str, str, str, int], Row]:
+    """The newest row per (tool, model, test, threads) from the single-session final runs."""
     rows = [r for stem, rs in data.items() if stem in FINAL for r in rs]
     return latest(rows)
 
 
-def session(final):
+def session(final: dict[tuple[str, str, str, int], Row]) -> str:
     """'YYYY-MM-DD HH:MM–HH:MM UTC, nibble <commit>' span of the single-session rows."""
     dates = sorted(r["date"] for r in final.values())
     commits = ", ".join(sorted({r["commit"] for r in final.values() if r["tool"] == "nibble"}))
     return f"{dates[0][:10]} {dates[0][11:16]}–{dates[-1][11:16]} UTC, nibble {commits}" if dates else "no data"
 
 
-def abba(data):
+def abba(data: dict[str, list[Row]]) -> dict[tuple[str, str, int], list[Block]]:
     """{(model, test, threads): [block]} from complete ABBA blocks; block = (ratio, nibble, llama.cpp, noisy).
     ratio = mean(llama.cpp A1, A2) / mean(nibble B1, B2), each run's median tok/s."""
-    runs = {}
+    runs: dict[tuple[str, str, int, str], dict[str, Row]] = {}
     for r in data.get("abba", []):
         m = ABBA_NOTE.match(r.get("note", ""))
         if m and r["unit"] == "tok/s":
             runs.setdefault((r["model"], r["test"], r["threads"], m[1]), {})[m[2]] = r
-    out = {}
+    out: dict[tuple[str, str, int], list[Block]] = {}
     for (model, test, t, _), pos in sorted(runs.items(), key=lambda kv: min(r["date"] for r in kv[1].values())):
         if len(pos) < 4:
             continue  # incomplete block
@@ -94,7 +103,9 @@ def abba(data):
     return out
 
 
-def pick(final, tool, model, test, threads=None):
+def pick(
+    final: dict[tuple[str, str, str, int], Row], tool: str, model: str, test: str, threads: int | None = None
+) -> Row | None:
     """Best row for tool/model/test (see rank), or the row at `threads`."""
     rs = [r for (t, m, te, th), r in final.items() if (t, m, te) == (tool, model, test)]
     if threads is not None:
@@ -102,72 +113,113 @@ def pick(final, tool, model, test, threads=None):
     return max(rs, key=rank) if rs else None
 
 
-def noisy(r):
-    return r["load1"] > NOISY
+def noisy(r: Row) -> bool:
+    """True if the 1-minute load average was above NOISY when the run started."""
+    return bool(r["load1"] > NOISY)
 
 
-def rank(r):
+def rank(r: Row) -> tuple[bool, float]:
     """Clean rows beat noisy ones; then the highest median."""
     return (not noisy(r), r["median"])
 
 
 # --- SVG ---------------------------------------------------------------------------------------------
 
-def esc(s):
+
+def esc(s: object) -> str:
+    """HTML/XML-escape any value for use in SVG text and attributes."""
     return html.escape(str(s), quote=True)
 
 
 class Svg:
-    def __init__(self, w, h, title):
+    """A tiny SVG builder: collects element strings; str() gives the complete document."""
+
+    def __init__(self, w: int, h: int, title: str) -> None:
         self.w, self.h = w, h
-        self.parts = [f'<rect width="{w}" height="{h}" fill="white"/>',
-                      self.text(w / 2, 22, title, size=15, anchor="middle", weight="bold")]
+        self.parts = [
+            f'<rect width="{w}" height="{h}" fill="white"/>',
+            self.text(w / 2, 22, title, size=15, anchor="middle", weight="bold"),
+        ]
 
     @staticmethod
-    def text(x, y, s, size=11, anchor="start", weight="normal", fill="#222", rotate=None):
+    def text(
+        x: float,
+        y: float,
+        s: object,
+        size: int = 11,
+        anchor: str = "start",
+        weight: str = "normal",
+        fill: str = "#222",
+        rotate: float | None = None,
+    ) -> str:
+        """Return a <text> element (not yet added to the document)."""
         rot = f' transform="rotate({rotate} {x:.1f} {y:.1f})"' if rotate is not None else ""
-        return (f'<text x="{x:.1f}" y="{y:.1f}" font-family="sans-serif" font-size="{size}" '
-                f'text-anchor="{anchor}" font-weight="{weight}" fill="{fill}"{rot}>{esc(s)}</text>')
+        return (
+            f'<text x="{x:.1f}" y="{y:.1f}" font-family="sans-serif" font-size="{size}" '
+            f'text-anchor="{anchor}" font-weight="{weight}" fill="{fill}"{rot}>{esc(s)}</text>'
+        )
 
-    def add(self, s):
+    def add(self, s: str) -> None:
+        """Append a pre-built element."""
         self.parts.append(s)
 
-    def line(self, x1, y1, x2, y2, stroke="#ccc", width=1, dash=None):
+    def line(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        stroke: str = "#ccc",
+        width: float = 1,
+        dash: str | None = None,
+    ) -> None:
         d = f' stroke-dasharray="{dash}"' if dash else ""
-        self.add(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{stroke}" '
-                 f'stroke-width="{width}"{d}/>')
+        self.add(
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{stroke}" '
+            f'stroke-width="{width}"{d}/>'
+        )
 
-    def rect(self, x, y, w, h, colour, hollow):
+    def rect(self, x: float, y: float, w: float, h: float, colour: str, hollow: bool) -> None:
+        """A bar; hollow (white fill, coloured outline) marks noisy measurements."""
         fill = "white" if hollow else colour
-        self.add(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{max(h, 0):.1f}" fill="{fill}" '
-                 f'stroke="{colour}" stroke-width="2"/>')
+        self.add(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{max(h, 0):.1f}" fill="{fill}" '
+            f'stroke="{colour}" stroke-width="2"/>'
+        )
 
-    def dot(self, x, y, colour, hollow):
+    def dot(self, x: float, y: float, colour: str, hollow: bool) -> None:
         fill = "white" if hollow else colour
         self.add(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{fill}" stroke="{colour}" stroke-width="2"/>')
 
-    def legend(self, x, y, items):
+    def legend(self, x: float, y: float, items: Sequence[tuple[str, str]]) -> None:
+        """Colour swatches with labels, one per line."""
         for i, (label, colour) in enumerate(items):
             self.add(f'<rect x="{x:.1f}" y="{y + i * 16 - 9:.1f}" width="10" height="10" fill="{colour}"/>')
             self.add(self.text(x + 15, y + i * 16, label))
 
-    def note(self, s):
+    def note(self, s: str) -> None:
+        """Footnote at the bottom-left corner."""
         self.add(self.text(10, self.h - 8, s, size=10, fill="#555"))
 
-    def __str__(self):
-        return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{self.w}" height="{self.h}" '
-                f'viewBox="0 0 {self.w} {self.h}">\n' + "\n".join(self.parts) + "\n</svg>\n")
+    def __str__(self) -> str:
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{self.w}" height="{self.h}" '
+            f'viewBox="0 0 {self.w} {self.h}">\n' + "\n".join(self.parts) + "\n</svg>\n"
+        )
 
 
-def nice_max(v):
+def nice_max(v: float) -> float:
     """Round v up to 1, 2 or 5 times a power of ten."""
     if v <= 0:
         return 1.0
     p = 10 ** math.floor(math.log10(v))
-    return next(m * p for m in (1, 2, 5, 10) if m * p >= v)
+    return float(next(m * p for m in (1, 2, 5, 10) if m * p >= v))
 
 
-def y_axis(svg, x0, x1, y_of, ticks, fmt):
+def y_axis(
+    svg: Svg, x0: float, x1: float, y_of: Callable[[float], float], ticks: Iterable[float], fmt: Callable[[float], str]
+) -> None:
+    """Horizontal grid lines with value labels at the given tick values."""
     for v in ticks:
         y = y_of(v)
         svg.line(x0, y, x1, y)
@@ -177,9 +229,10 @@ def y_axis(svg, x0, x1, y_of, ticks, fmt):
 NOISE_NOTE = "Hollow = noisy (1-min load average > 2 when the run started)."
 
 
-def ladder(data):
+def ladder(data: dict[str, list[Row]]) -> str:
+    """Line chart of nibble's best decode tok/s after each M6 optimisation step (log scale)."""
     steps = [s for s in data if s.startswith("m6-")]
-    pts = {}  # (step, model) -> best nibble tg row at that step
+    pts: dict[tuple[str, str], Row] = {}  # (step, model) -> best nibble tg row at that step
     sizes = {}
     for s in steps:
         tg = [r for r in data[s] if r["tool"] == "nibble" and r["test"].startswith("tg")]
@@ -193,19 +246,36 @@ def ladder(data):
     vals = [r["median"] for r in pts.values()] or [1]
     lo = 10 ** math.floor(math.log10(min(vals)))
     hi = nice_max(max(vals))
-    y_of = lambda v: top + (h - top - bottom) * (1 - (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)))
-    ticks = [m * 10 ** e for e in range(int(math.log10(lo)), int(math.log10(hi)) + 1) for m in (1, 2, 5)
-             if lo <= m * 10 ** e <= hi]
+    y_of: Callable[[float], float] = lambda v: (
+        top + (h - top - bottom) * (1 - (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)))
+    )
+    ticks = [
+        m * 10**e
+        for e in range(int(math.log10(lo)), int(math.log10(hi)) + 1)
+        for m in (1, 2, 5)
+        if lo <= m * 10**e <= hi
+    ]
     y_axis(svg, left, w - right, y_of, ticks, lambda v: f"{v:g}")
-    x_of = lambda i: left + 20 + i * (w - left - right - 40) / max(len(steps) - 1, 1)
+    x_of: Callable[[int], float] = lambda i: left + 20 + i * (w - left - right - 40) / max(len(steps) - 1, 1)
     for i, s in enumerate(steps):
         svg.add(svg.text(x_of(i), h - bottom + 16, s[3:], size=10, anchor="middle"))
         reduced = [t for t in sizes[s] if t != TG]
-        svg.add(svg.text(x_of(i), h - bottom + 30, ",".join(sizes[s]), size=9, anchor="middle",
-                         fill="#b00" if reduced else "#555"))
-    for model, label, colour in MODELS:
-        xy = [(x_of(i), y_of(pts[(s, model)]["median"]), pts[(s, model)]) for i, s in enumerate(steps)
-              if (s, model) in pts]
+        svg.add(
+            svg.text(
+                x_of(i),
+                h - bottom + 30,
+                ",".join(sizes[s]),
+                size=9,
+                anchor="middle",
+                fill="#b00" if reduced else "#555",
+            )
+        )
+    for model, _label, colour in MODELS:
+        xy = [
+            (x_of(i), y_of(pts[(s, model)]["median"]), pts[(s, model)])
+            for i, s in enumerate(steps)
+            if (s, model) in pts
+        ]
         if len(xy) > 1:
             d = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in xy)
             svg.add(f'<polyline points="{d}" fill="none" stroke="{colour}" stroke-width="1.5"/>')
@@ -213,26 +283,59 @@ def ladder(data):
             svg.dot(x, y, colour, noisy(r))
     svg.add(svg.text(left - 45, top + (h - top - bottom) / 2, "tok/s", anchor="middle", rotate=-90))
     svg.legend(w - right + 15, top + 20, [(lab, c) for _, lab, c in MODELS])
-    svg.add(svg.text(left, h - 40, "Sizes under each step; red = reduced size (tg16, not tg128): earlier "
-                     "steps used shorter runs on a busier machine, so", size=10, fill="#b00"))
-    svg.add(svg.text(left, h - 26, "they are not directly comparable with the final tg128 points. Each step "
-                     "keeps its own thread counts and load.", size=10, fill="#b00"))
+    svg.add(
+        svg.text(
+            left,
+            h - 40,
+            "Sizes under each step; red = reduced size (tg16, not tg128): earlier "
+            "steps used shorter runs on a busier machine, so",
+            size=10,
+            fill="#b00",
+        )
+    )
+    svg.add(
+        svg.text(
+            left,
+            h - 26,
+            "they are not directly comparable with the final tg128 points. Each step "
+            "keeps its own thread counts and load.",
+            size=10,
+            fill="#b00",
+        )
+    )
     svg.note(NOISE_NOTE)
     return str(svg)
 
 
-def bars(final, title, panels, value, unit, ref=None, caption=None):
+def bars(
+    final: dict[tuple[str, str, str, int], Row],
+    title: str,
+    panels: Sequence[str],
+    value: Callable[[Row], float | None],
+    unit: str,
+    ref: float | None = None,
+    caption: str | None = None,
+) -> str:
     """Grouped bars: one panel per test, per model one bar per tool at that tool's best t."""
     w, h, top, bottom = 900, 440, 50, 90
     pw = (w - 80) / len(panels)
     svg = Svg(w, h, title)
     for pi, test in enumerate(panels):
         x0 = 60 + pi * pw
-        rows = {(m, t): pick(final, t, m, test) for m, _, _ in MODELS for t, _ in TOOLS}
-        rows = {k: r for k, r in rows.items() if r and value(r) is not None}
-        vals = [value(r) for r in rows.values()]
+        rows: dict[tuple[str, str], tuple[Row, float]] = {}  # (model, tool) -> (row, plotted value)
+        for m, _, _ in MODELS:
+            for t, _ in TOOLS:
+                row = pick(final, t, m, test)
+                v = value(row) if row else None
+                if row and v is not None:
+                    rows[(m, t)] = (row, v)
+        vals = [v for _, v in rows.values()]
         hi = nice_max(max(vals + ([ref] if ref else []) or [1]) * 1.1)
-        y_of = lambda v: top + (h - top - bottom) * (1 - v / hi)
+
+        def y_of(v: float, hi: float = hi) -> float:
+            """Pixel row of value v on this panel's axis."""
+            return top + (h - top - bottom) * (1 - v / hi)
+
         y_axis(svg, x0, x0 + pw - 20, y_of, [hi * i / 5 for i in range(6)], lambda v: f"{v:g}")
         svg.add(svg.text(x0 + (pw - 20) / 2, top - 8, f"{test} ({unit})", size=12, anchor="middle", weight="bold"))
         if ref:
@@ -241,12 +344,12 @@ def bars(final, title, panels, value, unit, ref=None, caption=None):
         for mi, (model, label, _) in enumerate(MODELS):
             gx = x0 + mi * gw
             for ti, (tool, colour) in enumerate(TOOLS):
-                r = rows.get((model, tool))
-                if not r:
+                found = rows.get((model, tool))
+                if not found:
                     continue
+                r, v = found
                 bw = gw * 0.35
                 bx = gx + gw * 0.12 + ti * bw
-                v = value(r)
                 svg.rect(bx, y_of(v), bw - 2, y_of(0) - y_of(v), colour, noisy(r))
                 svg.add(svg.text(bx + bw / 2, y_of(v) - 14, f"{v:.3g}", size=9, anchor="middle"))
                 svg.add(svg.text(bx + bw / 2, y_of(v) - 4, f"t{r['threads']}", size=8, anchor="middle", fill="#555"))
@@ -260,7 +363,7 @@ def bars(final, title, panels, value, unit, ref=None, caption=None):
     return str(svg)
 
 
-def ratio_chart(blocks):
+def ratio_chart(blocks: dict[tuple[str, str, int], list[Block]]) -> str:
     """Per model and test: median llama.cpp/nibble block ratio per t, with the min-max range."""
     ts = sorted({t for (_, _, t) in blocks})
     tcol = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
@@ -269,7 +372,7 @@ def ratio_chart(blocks):
     pw = (w - 80) / len(panels)
     svg = Svg(w, h, "llama.cpp ÷ nibble tok/s, paired ABBA blocks (median, bar = min–max over blocks)")
     hi = math.ceil(max([r for bs in blocks.values() for r, *_ in bs] + [1.5]) * 1.1 * 2) / 2  # 0.5 steps
-    y_of = lambda v: top + (h - top - bottom) * (1 - v / hi)
+    y_of: Callable[[float], float] = lambda v: top + (h - top - bottom) * (1 - v / hi)
     for pi, test in enumerate(panels):
         x0 = 60 + pi * pw
         y_axis(svg, x0, x0 + pw - 20, y_of, [hi * i / 5 for i in range(6)], lambda v: f"{v:.2g}")
@@ -296,64 +399,105 @@ def ratio_chart(blocks):
             svg.add(svg.text(gx + gw / 2, h - bottom + 14, label.split(" ")[0], size=9, anchor="middle"))
             svg.add(svg.text(gx + gw / 2, h - bottom + 26, label.split(" ")[1], size=9, anchor="middle"))
     svg.legend(70, h - 42, [(f"t = {t}", tcol[i % len(tcol)]) for i, t in enumerate(ts)])
-    svg.add(svg.text(170, h - 42, "Above 1: llama.cpp faster. Solid line = parity; dashed red = the 1.5× target.",
-                     size=10, fill="#555"))
-    svg.add(svg.text(170, h - 26, "Block = llama.cpp, nibble, nibble, llama.cpp back to back; ratio = mean A ÷ mean B.",
-                     size=10, fill="#555"))
+    svg.add(
+        svg.text(
+            170,
+            h - 42,
+            "Above 1: llama.cpp faster. Solid line = parity; dashed red = the 1.5× target.",
+            size=10,
+            fill="#555",
+        )
+    )
+    svg.add(
+        svg.text(
+            170,
+            h - 26,
+            "Block = llama.cpp, nibble, nibble, llama.cpp back to back; ratio = mean A ÷ mean B.",
+            size=10,
+            fill="#555",
+        )
+    )
     svg.note("Hollow = some run in the blocks was noisy (1-min load average > 2 when it started).")
     return str(svg)
 
 
-def membw(final, threads):
+def membw(final: dict[tuple[str, str, str, int], Row], threads: int) -> float:
     """The highest nibble membw probe at `threads` across all models' runs, else the highest at any t."""
     rs = [r for (t, m, te, th), r in final.items() if te == "membw"]
     at = [r["median"] for r in rs if r["threads"] == threads]
-    return max(at or [r["median"] for r in rs] or [float("nan")])
+    return float(max(at or [r["median"] for r in rs] or [float("nan")]))
 
 
-def model_bytes(model):
+def model_bytes(model: str) -> int | None:
+    """File size of the model (stand-in for bytes read per token), from models/ or the fallback table."""
     path = os.path.join(ROOT, "models", model)
     return os.path.getsize(path) if os.path.exists(path) else MODEL_BYTES.get(model)
 
 
-def weight_bw_pct(final, r):
+def weight_bw_pct(final: dict[tuple[str, str, str, int], Row], r: Row) -> float | None:
     """None if the model's size is unknown."""
     b = model_bytes(r["model"])
     return 100 * b * r["median"] / 1e9 / membw(final, r["threads"]) if b else None
 
 
-def markdown(data):
+def markdown(data: dict[str, list[Row]]) -> str:
+    """The README tables: paired-block ratios and the thread sweep."""
     final, blocks = final_rows(data), abba(data)
-    mark = lambda r: "†" if noisy(r) else ""
-    out = ["Paired ABBA blocks (llama.cpp ÷ nibble; tok/s are medians of the per-block means):", "",
-           "| model | test | t | blocks | llama.cpp ÷ nibble, median | range | nibble tok/s | llama.cpp tok/s |",
-           "|---|---|---|---|---|---|---|---|"]
+
+    def mark(r: Row) -> str:
+        """Dagger for noisy rows."""
+        return "†" if noisy(r) else ""
+
+    out = [
+        "Paired ABBA blocks (llama.cpp ÷ nibble; tok/s are medians of the per-block means):",
+        "",
+        "| model | test | t | blocks | llama.cpp ÷ nibble, median | range | nibble tok/s | llama.cpp tok/s |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
     for model, label, _ in MODELS:
         for test in (TG, PP):
             for t in sorted({t for (m, te, t) in blocks if (m, te) == (model, test)}):
                 bs = blocks[(model, test, t)]
                 rs = [r for r, *_ in bs]
-                med = lambda i: statistics.median(b[i] for b in bs)
+
+                def med(i: int, bs: list[Block] = bs) -> float:
+                    """Median of column i (1 = nibble tok/s, 2 = llama.cpp tok/s) over the blocks."""
+                    return statistics.median(b[i] for b in bs)
+
                 nz = "†" if any(n for *_, n in bs) else ""
-                out.append(f"| {label} | {test} | {t} | {len(bs)}{nz} | {statistics.median(rs):.2f}× | "
-                           f"{min(rs):.2f}–{max(rs):.2f}× | {med(1):.1f} | {med(2):.1f} |")
+                out.append(
+                    f"| {label} | {test} | {t} | {len(bs)}{nz} | {statistics.median(rs):.2f}× | "
+                    f"{min(rs):.2f}–{max(rs):.2f}× | {med(1):.1f} | {med(2):.1f} |"
+                )
     for model, label, _ in MODELS:
         ts = sorted({th for (t, m, te, th) in final if m == model and te == TG})
         if len(ts) < 3:
             continue
-        out += ["", f"Thread sweep, {label}, tok/s: single session ({session(final)}), used only to choose "
-                "the default thread count:", "",
-                "| t | nibble tg128 | llama.cpp tg128 | nibble pp512 | llama.cpp pp512 |", "|---|---|---|---|---|"]
+        out += [
+            "",
+            (
+                f"Thread sweep, {label}, tok/s: single session ({session(final)}), used only to choose "
+                "the default thread count:"
+            ),
+            "",
+            "| t | nibble tg128 | llama.cpp tg128 | nibble pp512 | llama.cpp pp512 |",
+            "|---|---|---|---|---|",
+        ]
         for th in ts:
             c = [pick(final, tool, model, test, th) for test in (TG, PP) for tool in ("nibble", "llama.cpp")]
-            f = lambda r: f"{r['median']:.1f}{mark(r)}" if r else "–"
+
+            def f(r: Row | None) -> str:
+                """One table cell: median tok/s (with the noisy mark), or a dash if the run is missing."""
+                return f"{r['median']:.1f}{mark(r)}" if r else "–"
+
             out.append(f"| {th} | {f(c[0])} | {f(c[1])} | {f(c[2])} | {f(c[3])} |")
     out += ["", "† noisy: 1-minute load average > 2 when a run started (for blocks: in any of its runs)."]
     return "\n".join(out) + "\n"
 
 
-def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+def main(argv: Sequence[str]) -> int:
+    """Command-line entry point; returns the process exit status."""
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("--results", default=os.path.join(ROOT, "bench", "results"))
     ap.add_argument("--out", default=os.path.join(ROOT, "docs", "bench"))
     ap.add_argument("--markdown", action="store_true", help="print the README tables instead of writing SVGs")
@@ -366,10 +510,16 @@ def main(argv):
     charts = {
         "ladder.svg": ladder(data),
         "vs-llamacpp.svg": ratio_chart(abba(data)),
-        "roofline.svg": bars(final, f"Decode weight-read BW, % of membw probe (single session, {session(final)})",
-                             [TG], lambda r: weight_bw_pct(final, r), "% of membw", ref=100,
-                             caption="membw = highest probe across models at that t. Bytes = GGUF file size; "
-                                     "TinyLlama's untied token_embd (~131 MB) is counted but not read per token."),
+        "roofline.svg": bars(
+            final,
+            f"Decode weight-read BW, % of membw probe (single session, {session(final)})",
+            [TG],
+            lambda r: weight_bw_pct(final, r),
+            "% of membw",
+            ref=100,
+            caption="membw = highest probe across models at that t. Bytes = GGUF file size; "
+            "TinyLlama's untied token_embd (~131 MB) is counted but not read per token.",
+        ),
     }
     os.makedirs(a.out, exist_ok=True)
     for name, svg in charts.items():
