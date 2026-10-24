@@ -1,5 +1,15 @@
 # nibble
 
+[![CI](https://github.com/dpologdvinity/nibble/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/dpologdvinity/nibble/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/dpologdvinity/nibble)](LICENSE)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+[![Platform: Linux x86-64](https://img.shields.io/badge/platform-linux--x86--64-lightgrey.svg)](#build)
+[![Dependencies: none](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](ARCHITECTURE.md)
+[![Last commit](https://img.shields.io/github/last-commit/dpologdvinity/nibble/master)](https://github.com/dpologdvinity/nibble/commits/master)
+[![Open issues](https://img.shields.io/github/issues/dpologdvinity/nibble)](https://github.com/dpologdvinity/nibble/issues)
+[![Code size](https://img.shields.io/github/languages/code-size/dpologdvinity/nibble)](https://github.com/dpologdvinity/nibble)
+[![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c.svg?logo=dependabot)](.github/dependabot.yml)
+
 nibble is a from-scratch LLM inference engine in C++20. It loads GGUF model
 files directly (mmap, no conversion step), implements its own byte-level BPE
 tokenizer and transformer forward pass, and is checked against llama.cpp as a
