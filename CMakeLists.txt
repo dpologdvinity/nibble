@@ -7,7 +7,8 @@
 # - fuzz_gguf, fuzz_load, make_seed (NIBBLE_FUZZ=ON, clang only): libFuzzer targets and their seed generator.
 #
 # Options: NIBBLE_NATIVE (-march=native), NIBBLE_SIMD (use the AVX2 kernels when the target supports them),
-# NIBBLE_SANITIZE (value for -fsanitize=, e.g. address,undefined or thread), NIBBLE_FUZZ.
+# NIBBLE_SANITIZE (value for -fsanitize=, e.g. address,undefined or thread), NIBBLE_BUILD_TESTS (default ON;
+# OFF skips Catch2 and every test target, e.g. for container or release builds), NIBBLE_FUZZ.
 #
 # Typical use: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j && ctest --test-dir
 # build -LE e2e
@@ -64,6 +65,25 @@ add_library(nibble STATIC ${NIBBLE_SOURCES})
 target_include_directories(nibble PUBLIC include PRIVATE src)
 target_link_libraries(nibble PUBLIC nibble_flags Threads::Threads)
 
+# CLI
+# The CLI. nibble_git.h (the build's git SHA, with a -dirty marker) is generated on every build by
+# tools/gen_git_header.cmake and only rewritten when its content changes.
+file(GLOB NIBBLE_CLI_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/cli/*.cpp)
+add_executable(nibble_cli ${NIBBLE_CLI_SOURCES})
+set_target_properties(nibble_cli PROPERTIES OUTPUT_NAME nibble)
+target_include_directories(nibble_cli PRIVATE cli src)
+add_custom_target(nibble_git_header ALL
+  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/generated/nibble_git.h
+          -P ${CMAKE_SOURCE_DIR}/tools/gen_git_header.cmake
+  BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/nibble_git.h
+  COMMENT "Generating nibble_git.h")
+add_dependencies(nibble_cli nibble_git_header)
+target_include_directories(nibble_cli PRIVATE ${CMAKE_BINARY_DIR}/generated)
+target_link_libraries(nibble_cli PRIVATE nibble)
+
+# Tests are optional so that release / container builds do not need to fetch Catch2.
+option(NIBBLE_BUILD_TESTS "Build the unit, integration and CLI tests (fetches Catch2)" ON)
+if(NIBBLE_BUILD_TESTS)
 # Catch2 is fetched at configure time (pinned tag).
 include(FetchContent)
 FetchContent_Declare(Catch2 GIT_REPOSITORY https://github.com/catchorg/Catch2.git GIT_TAG v3.16.1)
@@ -90,46 +110,6 @@ target_include_directories(nibble_alloc_tests PRIVATE include src tests)
 target_link_libraries(nibble_alloc_tests PRIVATE nibble Catch2::Catch2WithMain)
 catch_discover_tests(nibble_alloc_tests)
 
-# Fuzz targets: each compiles the library sources directly with the fuzzer + ASan + UBSan flags.
-option(NIBBLE_FUZZ "Build libFuzzer targets (requires clang)" OFF)
-if(NIBBLE_FUZZ)
-  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "NIBBLE_FUZZ requires clang (CXX=clang++)")
-  endif()
-  set(NIBBLE_FUZZ_FLAGS -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
-  add_executable(fuzz_gguf tests/fuzz/fuzz_gguf.cpp ${NIBBLE_SOURCES})
-  target_include_directories(fuzz_gguf PRIVATE include src)
-  target_compile_options(fuzz_gguf PRIVATE -Wall -Wextra -Wpedantic -Werror ${NIBBLE_FUZZ_FLAGS})
-  target_link_options(fuzz_gguf PRIVATE ${NIBBLE_FUZZ_FLAGS})
-  target_link_libraries(fuzz_gguf PRIVATE Threads::Threads)
-
-  add_executable(fuzz_load tests/fuzz/fuzz_load.cpp ${NIBBLE_SOURCES})
-  target_include_directories(fuzz_load PRIVATE include src)
-  target_compile_options(fuzz_load PRIVATE -Wall -Wextra -Wpedantic -Werror ${NIBBLE_FUZZ_FLAGS})
-  target_link_options(fuzz_load PRIVATE ${NIBBLE_FUZZ_FLAGS})
-  target_link_libraries(fuzz_load PRIVATE Threads::Threads)
-
-  add_executable(make_seed tests/fuzz/make_seed.cpp ${NIBBLE_SOURCES})
-  target_include_directories(make_seed PRIVATE include src tests)
-  target_compile_options(make_seed PRIVATE -Wall -Wextra -Wpedantic -Werror)
-  target_link_libraries(make_seed PRIVATE Threads::Threads)
-endif()
-
-# CLI
-# The CLI. nibble_git.h (the build's git SHA, with a -dirty marker) is generated on every build by
-# tools/gen_git_header.cmake and only rewritten when its content changes.
-file(GLOB NIBBLE_CLI_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/cli/*.cpp)
-add_executable(nibble_cli ${NIBBLE_CLI_SOURCES})
-set_target_properties(nibble_cli PROPERTIES OUTPUT_NAME nibble)
-target_include_directories(nibble_cli PRIVATE cli src)
-add_custom_target(nibble_git_header ALL
-  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/generated/nibble_git.h
-          -P ${CMAKE_SOURCE_DIR}/tools/gen_git_header.cmake
-  BYPRODUCTS ${CMAKE_BINARY_DIR}/generated/nibble_git.h
-  COMMENT "Generating nibble_git.h")
-add_dependencies(nibble_cli nibble_git_header)
-target_include_directories(nibble_cli PRIVATE ${CMAKE_BINARY_DIR}/generated)
-target_link_libraries(nibble_cli PRIVATE nibble)
 # make_test_gguf generates the GGUF fixtures the CLI tests read; a post-build step runs it into
 # <build>/tests/data.
 add_executable(make_test_gguf tests/make_test_gguf.cpp)
@@ -262,3 +242,30 @@ set_tests_properties(cli_info_big_u8_clean PROPERTIES FIXTURES_CLEANUP big_u8)
 endif()
 
 nibble_cli_test(cli_info_kernels 0 ARGS info ${NIBBLE_DATA}/small.gguf REGEX "kernels: (avx2\\+fma\\+f16c(\\+avxvnni)?|scalar)\n")
+
+endif()
+
+# Fuzz targets: each compiles the library sources directly with the fuzzer + ASan + UBSan flags.
+option(NIBBLE_FUZZ "Build libFuzzer targets (requires clang)" OFF)
+if(NIBBLE_FUZZ)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "NIBBLE_FUZZ requires clang (CXX=clang++)")
+  endif()
+  set(NIBBLE_FUZZ_FLAGS -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+  add_executable(fuzz_gguf tests/fuzz/fuzz_gguf.cpp ${NIBBLE_SOURCES})
+  target_include_directories(fuzz_gguf PRIVATE include src)
+  target_compile_options(fuzz_gguf PRIVATE -Wall -Wextra -Wpedantic -Werror ${NIBBLE_FUZZ_FLAGS})
+  target_link_options(fuzz_gguf PRIVATE ${NIBBLE_FUZZ_FLAGS})
+  target_link_libraries(fuzz_gguf PRIVATE Threads::Threads)
+
+  add_executable(fuzz_load tests/fuzz/fuzz_load.cpp ${NIBBLE_SOURCES})
+  target_include_directories(fuzz_load PRIVATE include src)
+  target_compile_options(fuzz_load PRIVATE -Wall -Wextra -Wpedantic -Werror ${NIBBLE_FUZZ_FLAGS})
+  target_link_options(fuzz_load PRIVATE ${NIBBLE_FUZZ_FLAGS})
+  target_link_libraries(fuzz_load PRIVATE Threads::Threads)
+
+  add_executable(make_seed tests/fuzz/make_seed.cpp ${NIBBLE_SOURCES})
+  target_include_directories(make_seed PRIVATE include src tests)
+  target_compile_options(make_seed PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  target_link_libraries(make_seed PRIVATE Threads::Threads)
+endif()
