@@ -7,3 +7,15 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci"
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build"
