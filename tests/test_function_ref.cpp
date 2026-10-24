@@ -1,3 +1,5 @@
+// Tests for FunctionRef (src/util/function_ref.h), the non-owning callable wrapper used for thread-pool task
+// bodies.
 #include <catch2/catch_test_macros.hpp>
 
 #include "util/function_ref.h"
@@ -10,6 +12,8 @@ struct Adder {
 int call_with_temp(nibble::FunctionRef<int(int)> f) { return f(1); }
 }  // namespace
 
+// Binds to a lambda (and sees later changes to its captures, proving it does not copy), a functor lvalue and
+// a functor temporary passed as a function argument.
 TEST_CASE("FunctionRef calls lambdas and functors") {
   int base = 10;
   auto lam = [&](int x) { return x + base; };
@@ -23,9 +27,13 @@ TEST_CASE("FunctionRef calls lambdas and functors") {
   CHECK(call_with_temp(Adder{7}) == 8);  // rvalue lives until the end of the full expression
 }
 
+// Reference parameters stay references through the trampoline, and a void-returning callable works.
 TEST_CASE("FunctionRef forwards reference arguments and void returns") {
   int sum = 0;
-  auto f = [&](int& out, int v) { out += v; sum += v; };
+  auto f = [&](int& out, int v) {
+    out += v;
+    sum += v;
+  };
   nibble::FunctionRef<void(int&, int)> r(f);
   int o = 1;
   r(o, 3);

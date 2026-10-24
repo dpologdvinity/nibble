@@ -12,14 +12,14 @@
 
 #include "corpus.h"
 
+// One recorded llama.cpp run: the token sequence (prompt followed by the greedily generated continuation) and
+// the logits row produced at every position.
 struct Golden {
   uint32_t n_vocab = 0, n_prompt = 0, n_gen = 0;
   std::vector<int32_t> tokens;
   std::vector<float> logits;
 
-  std::span<const float> row(size_t i) const {
-    return {logits.data() + i * n_vocab, n_vocab};
-  }
+  std::span<const float> row(size_t i) const { return {logits.data() + i * n_vocab, n_vocab}; }
 
   static Golden load(const std::string& path) {
     std::ifstream f(path, std::ios::binary);

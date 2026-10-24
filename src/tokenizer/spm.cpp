@@ -1,3 +1,4 @@
+// SentencePiece BPE merge loop (see spm.h). Line references (llama-vocab.cpp:N) point at the code ported.
 #include "tokenizer/spm.h"
 
 #include <queue>
@@ -6,10 +7,13 @@ namespace nibble::tok {
 
 namespace {
 
+// A symbol: byte range of the text plus doubly linked neighbours (-1 at the ends). Merging a pair absorbs the
+// right symbol into the left one (right.len becomes 0).
 struct Sym {
   size_t off, len;
   int prev, next;
 };
+// A candidate merge of two adjacent symbols, ordered by the vocabulary score of the merged text.
 struct Bigram {
   int left, right;
   float score;
@@ -24,6 +28,10 @@ struct BigramCmp {
 
 }  // namespace
 
+// Algorithm: one symbol per UTF-8 character; queue every adjacent pair whose concatenation is a vocabulary
+// token; repeatedly pop the best-scoring pair (skipping stale ones), merge it and queue the new
+// neighbouring pairs; finally emit each remaining symbol as its token, or as byte tokens if the symbol is
+// not in the vocabulary.
 void spm_encode(const SpmVocab& v, std::string_view text, std::vector<int32_t>& out) {
   // Split into UTF-8 code points without validating; a truncated tail is clamped (llama-vocab.cpp:120-131).
   std::vector<Sym> syms;

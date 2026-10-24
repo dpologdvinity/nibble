@@ -1,3 +1,6 @@
+// `nibble info <model.gguf>`: dumps the GGUF header, every metadata key/value (long arrays abbreviated) and
+// the tensor table (name, ggml type, shape, offset). Useful to see which quantization mix a file really
+// contains. All text from the file is passed through escape_control before printing.
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -16,6 +19,7 @@ namespace {
 
 using gguf::ValueType;
 
+// Lower-case GGUF type name used in array summaries, e.g. "string".
 const char* value_type_name(ValueType t) {
   switch (t) {
     case ValueType::U8: return "u8";
@@ -35,46 +39,59 @@ const char* value_type_name(ValueType t) {
   return "unknown";
 }
 
+// Shortest %g rendering of a double.
 std::string fmt_double(double d) {
   char buf[64];
   std::snprintf(buf, sizeof buf, "%g", d);
   return buf;
 }
 
+// "[string x 151936] \"!\", ...": element type, count and the first three elements.
 std::string fmt_array(const gguf::Array& a) {
   constexpr size_t kShow = 3;
   std::string out;
   for (size_t k = 0; k < a.size() && k < kShow; ++k) {
     if (k) out += ", ";
-    if (a.is_string()) out += "\"" + escape_control(a.str_at(k)) + "\"";
-    else if (a.is_float()) out += fmt_double(a.float_at(k));
-    else out += std::to_string(a.int_at(k));
+    if (a.is_string())
+      out += "\"" + escape_control(a.str_at(k)) + "\"";
+    else if (a.is_float())
+      out += fmt_double(a.float_at(k));
+    else
+      out += std::to_string(a.int_at(k));
   }
   return std::string("[") + value_type_name(a.elem_type()) + " x " + std::to_string(a.size()) + "] " + out + "...";
 }
 
+// One-line rendering of any metadata value.
 std::string fmt_value(const gguf::Value& v) {
   return std::visit(
       [](const auto& x) -> std::string {
         using T = std::decay_t<decltype(x)>;
-        if constexpr (std::is_same_v<T, int64_t>) return std::to_string(x);
-        else if constexpr (std::is_same_v<T, double>) return fmt_double(x);
-        else if constexpr (std::is_same_v<T, bool>) return x ? "true" : "false";
-        else if constexpr (std::is_same_v<T, std::string>) return escape_control(x);
-        else return fmt_array(x);
+        if constexpr (std::is_same_v<T, int64_t>)
+          return std::to_string(x);
+        else if constexpr (std::is_same_v<T, double>)
+          return fmt_double(x);
+        else if constexpr (std::is_same_v<T, bool>)
+          return x ? "true" : "false";
+        else if constexpr (std::is_same_v<T, std::string>)
+          return escape_control(x);
+        else
+          return fmt_array(x);
       },
       v);
 }
 
 }  // namespace
 
+// Exactly one argument (the file) is required; anything else throws a usage Error.
 int cmd_info(int argc, char** argv) {
   if (argc != 2) throw Error("usage: nibble info <model.gguf>");
   const gguf::File f = gguf::File::open(argv[1]);
 
   std::printf("kernels: %s\n", simd::kernel_set());
   std::printf("GGUF v%u\n\n", f.version());
-  for (const auto& [key, val] : f.metadata()) std::printf("%s = %s\n", escape_control(key).c_str(), fmt_value(val).c_str());
+  for (const auto& [key, val] : f.metadata())
+    std::printf("%s = %s\n", escape_control(key).c_str(), fmt_value(val).c_str());
 
   std::printf("\ntensors: %zu\n", f.tensors().size());
   uint64_t total = 0;

@@ -9,6 +9,8 @@ namespace nibble::simd {
 namespace {
 
 // y[t*out + r] for r in [rb, re): 4 rows share each x load; 8-wide FMA accumulators per row.
+// L supplies how to load weights (LoadF32 / LoadF16). Summation order: 8 FMA lanes over k in steps of 8,
+// horizontal sum, then the scalar tail - differs from the scalar oracle only in float rounding.
 template <class L>
 void matmul_t(const typename L::T* w, int64_t in, int64_t out, const float* x, float* y, int64_t n, int64_t rb,
               int64_t re) {
@@ -38,7 +40,10 @@ void matmul_t(const typename L::T* w, int64_t in, int64_t out, const float* x, f
         s2 += xt[k] * L::one(w2[k]);
         s3 += xt[k] * L::one(w3[k]);
       }
-      yt[r] = s0; yt[r + 1] = s1; yt[r + 2] = s2; yt[r + 3] = s3;
+      yt[r] = s0;
+      yt[r + 1] = s1;
+      yt[r + 2] = s2;
+      yt[r + 3] = s3;
     }
     for (; r < re; ++r) {
       const typename L::T* w0 = w + r * in;
@@ -54,6 +59,7 @@ void matmul_t(const typename L::T* w, int64_t in, int64_t out, const float* x, f
 
 }  // namespace
 
+// Type dispatch (F32 or F16 weights).
 void matmul_rows_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
   const int64_t in = w.ne[0], out = w.rows();
   if (w.type == DType::F32)
@@ -62,6 +68,7 @@ void matmul_rows_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t
     matmul_t<LoadF16>(static_cast<const uint16_t*>(w.data), in, out, x, y, n, row_begin, row_end);
 }
 
+// Widens d halves to floats, 8 at a time with a scalar tail.
 void embed_row_f16(const uint16_t* row, float* out, int64_t d) {
   int64_t k = 0;
   for (; k + 8 <= d; k += 8) _mm256_storeu_ps(out + k, load_f16x8(row + k));

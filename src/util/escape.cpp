@@ -1,3 +1,4 @@
+// Implementation of escape_control (see util/escape.h).
 #include "util/escape.h"
 
 namespace nibble {

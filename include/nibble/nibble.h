@@ -1,5 +1,15 @@
 #pragma once
-// Public API for nibble. Include only this header (plus nibble/error.h, pulled in here).
+// Public API for nibble: load a GGUF model, open a Session over it and generate text, optionally through a
+// Chat that applies the model's chat template.
+//
+//   nibble::Model model = nibble::Model::load("qwen2.5-0.5b-instruct-q4_k_m.gguf");
+//   nibble::Session session(model);
+//   nibble::Chat chat(session);
+//   chat.send("What is the capital of France?", {}, [](std::string_view piece) { std::cout << piece; return true; });
+//
+// Everything is synchronous and single-threaded from the caller's point of view (the engine uses its own
+// worker threads internally). Failures that depend on input or on a file throw nibble::Error.
+// Include only this header (plus nibble/error.h, pulled in here).
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -12,14 +22,16 @@
 
 namespace nibble {
 
+// Options for Model::load.
 // Model::load throws Error for negative values (before opening the file) and for
 // n_ctx above the model's context_length.
 struct ModelParams {
-  int64_t n_ctx = 0;   // 0 = auto: min(4096, model context length)
-  int n_threads = 0;   // 0 = auto: the fastest CPUs if hybrid, else 2/3 of hardware_concurrency.
-                       // The hybrid count is of logical CPUs, so SMT siblings are included.
+  int64_t n_ctx = 0;  // 0 = auto: min(4096, model context length)
+  int n_threads = 0;  // 0 = auto: the fastest CPUs if hybrid, else 2/3 of hardware_concurrency.
+                      // The hybrid count is of logical CPUs, so SMT siblings are included.
 };
 
+// Sampling and stopping options for one generate/send call.
 struct GenParams {
   int max_tokens = 256;  // <= 0: return MaxTokens at once without prefilling (append = false still resets n_past to 0)
   // Sampling order: top-k, then temperature-scaled softmax, then top-p. llama.cpp's
@@ -44,20 +56,32 @@ struct PromptPart {
   bool special;
 };
 
+// Why a generate/send call returned.
+//   Eos         the model produced an end-of-generation token (not delivered to the callback)
+//   MaxTokens   GenParams::max_tokens tokens were produced
+//   ContextFull the context window (n_ctx) is full or the new tokens do not fit
+//   Cancelled   the on_token callback returned false
 enum class StopReason { Eos, MaxTokens, ContextFull, Cancelled };
 
+// A loaded model: the memory-mapped weights, tokenizer, hyperparameters and compute backend. Heavy to
+// create, cheap to keep; build one per model file and share it with one Session at a time.
 // Move-only. Throws nibble::Error on any load failure.
 class Model {
  public:
+  // Opens and validates the GGUF file at path, maps its weights and builds the tokenizer. Throws Error with a
+  // message naming the problem (unreadable file, unsupported architecture or tensor type, missing tensor,
+  // inconsistent shapes, out of memory).
   static Model load(const std::string& path, ModelParams = {});
-  Model(Model&&) noexcept;
+  Model(Model&&) noexcept;  // leaves the source in a moved-from state
   Model& operator=(Model&&) noexcept;
   ~Model();
-  Model(const Model&) = delete;
+  Model(const Model&) = delete;  // a model owns a file mapping and thread pool: not copyable
   Model& operator=(const Model&) = delete;
 
   // Throw Error("use of moved-from Model") on a moved-from Model (as does Session(Model&)).
+  // GGUF `general.architecture` of the model, e.g. "qwen2" or "llama".
   const std::string& architecture() const;
+  // Context window in tokens that Sessions over this model use (ModelParams::n_ctx after auto-sizing).
   int64_t n_ctx() const;
 
  private:
@@ -71,8 +95,11 @@ class Model {
 // at a time (the backend's attention scratch is shared).
 class Chat;
 
+// One conversation state over a Model: the KV cache plus the sampler. generate() runs prefill and decoding.
 class Session {
  public:
+  // Allocates the KV cache for model.n_ctx() tokens. Throws Error if that does not fit in memory or if the
+  // model was moved from.
   explicit Session(Model&);
   ~Session();
   Session(const Session&) = delete;
@@ -160,8 +187,7 @@ class Chat {
   // earlier reply tokens stay cached (the token whose delivery threw does not)
   // and the conversation continues.
   // Throws Error on a moved-from Chat.
-  StopReason send(std::string_view user, const GenParams&,
-                  const std::function<bool(std::string_view piece)>& on_token);
+  StopReason send(std::string_view user, const GenParams&, const std::function<bool(std::string_view piece)>& on_token);
 
  private:
   struct Impl;

@@ -1,3 +1,9 @@
+// GGUF parser. See gguf.h for the format overview and the guarantees this file implements.
+//
+// Structure: a bounds-checked Reader walks the bytes; parse_impl reads the header, the metadata, then the
+// tensor descriptors, and finally resolves each tensor's data pointer against the aligned data section.
+// Every count that comes from the file is compared with the bytes actually remaining *before* anything is
+// reserved or looped over, which is what bounds memory and time by the file size.
 #include "gguf/gguf.h"
 
 #include <algorithm>
@@ -11,16 +17,21 @@
 namespace nibble::gguf {
 namespace {
 
+// Data-section alignment when the file has no `general.alignment` key.
 constexpr uint32_t kDefaultAlignment = 32;
+// Largest value representable as int64_t; sizes and dimensions above it are rejected as malformed.
 constexpr uint64_t kMaxI64 = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
 
+// Sequential little-endian reader over the file bytes. Every read checks the remaining length and throws
+// Error ("unexpected end of file while reading <what>") rather than running past the end.
 class Reader {
  public:
   explicit Reader(std::span<const uint8_t> b) : bytes_(b) {}
 
-  size_t pos() const { return pos_; }
+  size_t pos() const { return pos_; }  // offset of the next unread byte
   size_t remaining() const { return bytes_.size() - pos_; }
 
+  // Reads one T (a fixed-size scalar) and advances. memcpy keeps it alignment- and aliasing-safe.
   template <class T>
   T read(const char* what) {
     if (remaining() < sizeof(T)) fail_eof(what);
@@ -30,21 +41,27 @@ class Reader {
     return v;
   }
 
+  // Pointer to the next unread byte (valid for remaining() bytes).
   const uint8_t* here() const { return bytes_.data() + pos_; }
   void skip(size_t n) { pos_ += n; }  // caller checked n <= remaining()
+  // The bytes consumed since offset `start`.
   std::span<const uint8_t> span_from(size_t start) const { return bytes_.subspan(start, pos_ - start); }
+  // Skips a length-prefixed string (u64 length + bytes), validating the length against the file.
   void skip_string(const char* what) {
     uint64_t len = read<uint64_t>(what);
     if (len > remaining()) {
-      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " + what);
+      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " +
+                  what);
     }
     pos_ += static_cast<size_t>(len);
   }
 
+  // Reads a length-prefixed string into a new std::string (the length is validated before allocating).
   std::string read_string(const char* what) {
     uint64_t len = read<uint64_t>(what);
     if (len > remaining()) {
-      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " + what);
+      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " +
+                  what);
     }
     std::string s(reinterpret_cast<const char*>(bytes_.data() + pos_), static_cast<size_t>(len));
     pos_ += static_cast<size_t>(len);
@@ -62,14 +79,22 @@ class Reader {
 // Wire size of a fixed-size scalar type; 0 for String/Array/unknown.
 size_t scalar_size(ValueType t) {
   switch (t) {
-    case ValueType::U8: case ValueType::I8: case ValueType::Bool: return 1;
-    case ValueType::U16: case ValueType::I16: return 2;
-    case ValueType::U32: case ValueType::I32: case ValueType::F32: return 4;
-    case ValueType::U64: case ValueType::I64: case ValueType::F64: return 8;
+    case ValueType::U8:
+    case ValueType::I8:
+    case ValueType::Bool: return 1;
+    case ValueType::U16:
+    case ValueType::I16: return 2;
+    case ValueType::U32:
+    case ValueType::I32:
+    case ValueType::F32: return 4;
+    case ValueType::U64:
+    case ValueType::I64:
+    case ValueType::F64: return 8;
     default: return 0;
   }
 }
 
+// Reads a u32 value-type id and range-checks it; `key` is only used in the error message.
 ValueType read_value_type(Reader& r, const std::string& key) {
   uint32_t t = r.read<uint32_t>("value type");
   if (t > static_cast<uint32_t>(ValueType::F64)) {
@@ -78,12 +103,15 @@ ValueType read_value_type(Reader& r, const std::string& key) {
   return static_cast<ValueType>(t);
 }
 
-// Reads one integer/float scalar. Integers go to `i`, floats to `f`.
+// Reads one integer/float scalar of type t. Integers go to `i`, floats to `f` (is_float says which). A U64
+// above INT64_MAX is rejected so every integer fits the int64 contract of Value.
 void read_scalar(Reader& r, ValueType t, const std::string& key, int64_t& i, double& f, bool& is_float) {
   is_float = false;
   switch (t) {
     case ValueType::U8: i = r.read<uint8_t>("u8"); break;
-    case ValueType::I8: i = r.read<int8_t>("i8"); break;
+    case ValueType::I8:
+      i = r.read<int8_t>("i8");  // NOLINT(bugprone-signed-char-misuse): sign extension intended
+      break;
     case ValueType::U16: i = r.read<uint16_t>("u16"); break;
     case ValueType::I16: i = r.read<int16_t>("i16"); break;
     case ValueType::U32: i = r.read<uint32_t>("u32"); break;
@@ -92,12 +120,19 @@ void read_scalar(Reader& r, ValueType t, const std::string& key, int64_t& i, dou
     case ValueType::I64: i = r.read<int64_t>("i64"); break;
     case ValueType::U64: {
       uint64_t v = r.read<uint64_t>("u64");
-      if (v > kMaxI64) throw Error("gguf: key '" + escape_control(key) + "' u64 value " + std::to_string(v) + " exceeds int64 range");
+      if (v > kMaxI64)
+        throw Error("gguf: key '" + escape_control(key) + "' u64 value " + std::to_string(v) + " exceeds int64 range");
       i = static_cast<int64_t>(v);
       break;
     }
-    case ValueType::F32: f = r.read<float>("f32"); is_float = true; break;
-    case ValueType::F64: f = r.read<double>("f64"); is_float = true; break;
+    case ValueType::F32:
+      f = r.read<float>("f32");
+      is_float = true;
+      break;
+    case ValueType::F64:
+      f = r.read<double>("f64");
+      is_float = true;
+      break;
     default: throw Error("gguf: key '" + escape_control(key) + "' internal: not a scalar type");
   }
 }
@@ -111,10 +146,15 @@ struct detail::ArrayAccess {
   static Array read(Reader& r, const std::string& key);
 };
 
+// Parses an array value: element type, count, then the elements. Validates count * minimum element size
+// against the remaining bytes first, so an absurd count fails before any reservation. String arrays record
+// each element's offset; numeric arrays are only length-checked (U64 elements are range-checked so
+// int_at() can promise int64).
 Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
   Array a;
   a.elem_type_ = read_value_type(r, key);
-  if (a.elem_type_ == ValueType::Array) throw Error("gguf: key '" + escape_control(key) + "' is a nested array (unsupported)");
+  if (a.elem_type_ == ValueType::Array)
+    throw Error("gguf: key '" + escape_control(key) + "' is a nested array (unsupported)");
   uint64_t count = r.read<uint64_t>("array count");
   uint64_t min_elem = a.elem_type_ == ValueType::String ? 8 : scalar_size(a.elem_type_);
   uint64_t need;
@@ -136,8 +176,8 @@ Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
         uint64_t v;
         std::memcpy(&v, r.here() + k * 8, 8);
         if (v > kMaxI64) {
-          throw Error("gguf: key '" + escape_control(key) + "' u64 element " + std::to_string(k) + " value " + std::to_string(v) +
-                      " exceeds int64 range");
+          throw Error("gguf: key '" + escape_control(key) + "' u64 element " + std::to_string(k) + " value " +
+                      std::to_string(v) + " exceeds int64 range");
         }
       }
     }
@@ -149,6 +189,7 @@ Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
 
 namespace {
 
+// Reads a value of type t (scalar, string or array) into the Value variant.
 Value read_value(Reader& r, ValueType t, const std::string& key) {
   if (t == ValueType::String) return r.read_string("string value");
   if (t == ValueType::Array) return detail::ArrayAccess::read(r, key);
@@ -161,12 +202,14 @@ Value read_value(Reader& r, ValueType t, const std::string& key) {
   return i;
 }
 
+// Rounds v up to a multiple of a, throwing instead of wrapping around on overflow.
 uint64_t align_up(uint64_t v, uint64_t a, const char* what) {
   uint64_t s;
   if (__builtin_add_overflow(v, a - 1, &s)) throw Error(std::string("gguf: overflow aligning ") + what);
   return s / a * a;
 }
 
+// Human-readable name of the type currently held by v, for error messages.
 const char* type_label(const Value& v) {
   switch (v.index()) {
     case 0: return "integer";
@@ -179,6 +222,8 @@ const char* type_label(const Value& v) {
 
 }  // namespace
 
+// Maps the file, parses it, and attaches the mapping to the result. std::bad_alloc from any allocation is
+// reported as an Error (a hostile file must not terminate the process).
 File File::open(const std::string& path) {
   try {
     MappedFile m = MappedFile::open(path);
@@ -190,6 +235,7 @@ File File::open(const std::string& path) {
   }
 }
 
+// Parses caller-owned bytes (used by tests and fuzzers); the File keeps views into them.
 File File::parse(std::span<const uint8_t> bytes) {
   try {
     return parse_impl(bytes);
@@ -198,6 +244,11 @@ File File::parse(std::span<const uint8_t> bytes) {
   }
 }
 
+// The parser proper. Steps: header (magic, version, counts); metadata key/values; alignment; tensor
+// descriptors (shape, type, offset, with overflow-checked sizes); then the tensor data pointers, each
+// checked to lie inside the file. Counts are first bounded by the minimum bytes each entry needs (12 for a
+// metadata entry, 24 for a descriptor), and container reservations are capped at 4096 entries because the
+// counts are untrusted.
 File File::parse_impl(std::span<const uint8_t> bytes) {
   Reader r(bytes);
   File f;
@@ -211,14 +262,16 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
   uint64_t n_tensors = r.read<uint64_t>("tensor count");
   uint64_t n_kv = r.read<uint64_t>("kv count");
   if (n_kv > r.remaining() / 12) throw Error("gguf: kv count " + std::to_string(n_kv) + " exceeds file size");
-  if (n_tensors > r.remaining() / 24) throw Error("gguf: tensor count " + std::to_string(n_tensors) + " exceeds file size");
+  if (n_tensors > r.remaining() / 24)
+    throw Error("gguf: tensor count " + std::to_string(n_tensors) + " exceeds file size");
 
   f.metadata_.reserve(std::min<uint64_t>(n_kv, 4096));  // count is untrusted
   for (uint64_t k = 0; k < n_kv; ++k) {
     std::string key = r.read_string("key");
     ValueType t = read_value_type(r, key);
     Value v = read_value(r, t, key);
-    if (!f.kv_index_.emplace(key, f.metadata_.size()).second) throw Error("gguf: duplicate key '" + escape_control(key) + "'");
+    if (!f.kv_index_.emplace(key, f.metadata_.size()).second)
+      throw Error("gguf: duplicate key '" + escape_control(key) + "'");
     f.metadata_.emplace_back(std::move(key), std::move(v));
   }
 
@@ -240,7 +293,8 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     const std::string& name = ti.name;
     uint32_t n_dims = r.read<uint32_t>("tensor n_dims");
     if (n_dims < 1 || n_dims > 4) {
-      throw Error("gguf: tensor '" + escape_control(name) + "' has n_dims " + std::to_string(n_dims) + " (must be 1..4)");
+      throw Error("gguf: tensor '" + escape_control(name) + "' has n_dims " + std::to_string(n_dims) +
+                  " (must be 1..4)");
     }
     ti.tensor.n_dims = static_cast<int>(n_dims);
     for (uint32_t d = 0; d < n_dims; ++d) {
@@ -253,17 +307,27 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     uint32_t ggml_type = r.read<uint32_t>("tensor type");
     ti.offset = r.read<uint64_t>("tensor offset");
 
+    // Only the ggml type ids nibble can run are accepted (see DType in tensor.h); everything else gets an
+    // actionable error naming the type and the supported set.
     switch (ggml_type) {
-      case 0: case 1: case 2: case 8: ti.tensor.type = static_cast<DType>(ggml_type); break;
+      case 0:
+      case 1:
+      case 2:
+      case 6:
+      case 7:
+      case 8:
+      case 12:
+      case 13:
+      case 14: ti.tensor.type = static_cast<DType>(ggml_type); break;
       default:
         throw Error("gguf: unsupported tensor type " + std::string(ggml_type_name(ggml_type)) + " (" +
                     std::to_string(ggml_type) + ") for " + escape_control(name) +
-                    " \xe2\x80\x94 v1 supports F32/F16/Q8_0/Q4_0; convert with llama-quantize");
+                    " \xe2\x80\x94 supported: " + kSupportedTypes + "; convert with llama-quantize");
     }
     const DTypeInfo& info = dtype_info(ti.tensor.type);
     if (ti.tensor.ne[0] % info.block_size != 0) {
-      throw Error("gguf: tensor '" + escape_control(name) + "' ne[0]=" + std::to_string(ti.tensor.ne[0]) + " is not a multiple of " +
-                  info.name + " block size " + std::to_string(info.block_size));
+      throw Error("gguf: tensor '" + escape_control(name) + "' ne[0]=" + std::to_string(ti.tensor.ne[0]) +
+                  " is not a multiple of " + info.name + " block size " + std::to_string(info.block_size));
     }
     uint64_t elems = 1;
     for (int d = 0; d < 4; ++d) {
@@ -283,8 +347,8 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
       throw Error("gguf: tensor '" + escape_control(name) + "' byte size overflows");
     }
     if (ti.offset % alignment != 0) {
-      throw Error("gguf: tensor '" + escape_control(name) + "' offset " + std::to_string(ti.offset) + " is not a multiple of alignment " +
-                  std::to_string(alignment));
+      throw Error("gguf: tensor '" + escape_control(name) + "' offset " + std::to_string(ti.offset) +
+                  " is not a multiple of alignment " + std::to_string(alignment));
     }
     if (!f.tensor_index_.emplace(name, f.tensors_.size()).second) {
       throw Error("gguf: duplicate tensor '" + escape_control(name) + "'");
@@ -305,17 +369,20 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
   return f;
 }
 
+// Hash lookup in the key index built while parsing.
 const Value* File::find(std::string_view key) const {
   auto it = kv_index_.find(key);
   return it == kv_index_.end() ? nullptr : &metadata_[it->second].second;
 }
 
 namespace {
+// Like File::find but throws Error naming the missing key.
 const Value& require(const File& f, std::string_view key) {
   const Value* v = f.find(key);
   if (!v) throw Error("gguf: missing metadata key '" + escape_control(key) + "'");
   return *v;
 }
+// Throws the "key expected <want>, got <actual type>" error used by the typed getters.
 [[noreturn]] void wrong_type(std::string_view key, const char* want, const Value& v) {
   throw Error("gguf: key '" + escape_control(key) + "' expected " + want + ", got " + type_label(v));
 }
@@ -346,10 +413,12 @@ const Array& File::get_array(std::string_view key) const {
 }
 
 namespace {
+// Error for an out-of-range index or wrong-kind access on an Array.
 [[noreturn]] void bad_access(const char* want, ValueType have, size_t i, size_t n) {
   throw Error(std::string("gguf: array access ") + want + "_at(" + std::to_string(i) + ") on array of type " +
               std::to_string(static_cast<uint32_t>(have)) + " with " + std::to_string(n) + " elements");
 }
+// Unaligned little-endian load of one T from p (array data sits at arbitrary offsets in the file).
 template <class T>
 T load(const uint8_t* p) {
   T v;
@@ -358,6 +427,7 @@ T load(const uint8_t* p) {
 }
 }  // namespace
 
+// Decodes element i on demand; the element width follows elem_type_.
 int64_t Array::int_at(size_t i) const {
   if (!is_int() || i >= count_) bad_access("int", elem_type_, i, count_);
   const uint8_t* p = data_.data();
@@ -388,6 +458,7 @@ std::string_view Array::str_at(size_t i) const {
   return {reinterpret_cast<const char*>(p + 8), static_cast<size_t>(len)};
 }
 
+// Hash lookup in the tensor index built while parsing.
 const TensorInfo* File::find_tensor(std::string_view name) const {
   auto it = tensor_index_.find(name);
   return it == tensor_index_.end() ? nullptr : &tensors_[it->second];

@@ -1,4 +1,7 @@
 #pragma once
+// SentencePiece-style BPE encoder (the "llama" tokenizer model, used by TinyLlama): symbols are merged in
+// order of the vocabulary scores of the merged pieces, highest first. Port of llm_tokenizer_spm_session from
+// llama.cpp.
 #include <array>
 #include <cstdint>
 #include <string>

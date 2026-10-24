@@ -1,3 +1,5 @@
 build*/
 models/
 third_party/
+.env
+.venv/

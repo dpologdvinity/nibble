@@ -9,14 +9,14 @@
 #include <cstdio>
 #include <cstdlib>
 
-#define NIBBLE_DCHECK(cond, ...)                                                 \
-  do {                                                                           \
-    if (!(cond)) {                                                               \
+#define NIBBLE_DCHECK(cond, ...)                                                            \
+  do {                                                                                      \
+    if (!(cond)) {                                                                          \
       std::fprintf(stderr, "%s:%d: NIBBLE_DCHECK(%s) failed: ", __FILE__, __LINE__, #cond); \
-      std::fprintf(stderr, __VA_ARGS__);                                         \
-      std::fputc('\n', stderr);                                                  \
-      std::abort();                                                              \
-    }                                                                            \
+      std::fprintf(stderr, __VA_ARGS__);                                                    \
+      std::fputc('\n', stderr);                                                             \
+      std::abort();                                                                         \
+    }                                                                                       \
   } while (0)
 #else
 #define NIBBLE_DCHECK(cond, ...) \

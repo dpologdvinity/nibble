@@ -1,4 +1,6 @@
 #pragma once
+// A memory-bandwidth probe used by `nibble bench --mem`: token generation reads every weight once per token, so
+// sustained DRAM read bandwidth bounds decode speed (the roofline in the README).
 #include <cstddef>
 #include <vector>
 

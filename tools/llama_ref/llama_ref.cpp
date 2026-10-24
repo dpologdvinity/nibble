@@ -1,7 +1,18 @@
 // Reference tool built against pinned llama.cpp (see tools/llama_cpp_version.txt).
 //   llama_ref tokenize [--special] <model.gguf> <corpus.txt> <out.txt>   (--special: parse_special, no bos)
 //   llama_ref eog      <model.gguf> <out.txt>   (ascending ids with llama_vocab_is_eog, vocab only)
-//   llama_ref logits   <model.gguf> <prompt.txt> <n_gen> <out.bin>
+//   llama_ref logits   <model.gguf> <prompt.txt> <n_gen> <out.bin> [--kv-f32]
+//   llama_ref sysinfo  (prints the CPU feature string of this build)
+//
+// This is the oracle for nibble's end-to-end tests: it runs the real llama.cpp and records what it does.
+//   tokenize  writes one line of token ids per corpus entry (tests/corpus.h splitting rule).
+//   eog       writes the ids llama.cpp treats as end-of-generation tokens.
+//   logits    tokenizes the prompt (special tokens parsed, BOS added), decodes it in one batch, then greedily
+//             generates n_gen more tokens, and writes a golden file: the magic "NBGL", u32 version = 1,
+//             n_vocab, n_prompt, n_gen, the token ids (prompt + generated), then the logits row at every
+//             position (tests/golden_file.h reads it).
+// --kv-f32 is used for the quantized-model goldens: F32 K/V cache and no flash attention, the configuration
+// nibble reproduces (see tools/make_golden.sh). LLAMA_REF_THREADS caps the thread count.
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -16,19 +27,21 @@
 #include "corpus.h"
 #include "llama.h"
 
+// Prints the message and exits with status 1.
 [[noreturn]] static void die(const std::string& m) {
   std::fprintf(stderr, "llama_ref: %s\n", m.c_str());
   std::exit(1);
 }
 
+// Whole-file read.
 static std::string read_file(const std::string& p) {
   std::ifstream f(p, std::ios::binary);
   if (!f) die("cannot open " + p);
   return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
-static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, bool add_special,
-                                    bool parse_special) {
+// Tokenizes with llama.cpp's own tokenizer (retrying with a larger buffer when the first guess is too small).
+static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, bool add_special, bool parse_special) {
   std::vector<llama_token> t(s.size() + 16);
   int n = llama_tokenize(v, s.data(), int32_t(s.size()), t.data(), int32_t(t.size()), add_special, parse_special);
   if (n < 0) {
@@ -40,6 +53,7 @@ static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, 
   return t;
 }
 
+// Loads a model with default parameters.
 static llama_model* load(const char* path) {
   llama_backend_init();
   llama_model_params mp = llama_model_default_params();
@@ -48,11 +62,16 @@ static llama_model* load(const char* path) {
   return m;
 }
 
+// `tokenize`: one output line of space-separated ids per corpus entry.
 static int cmd_tokenize(char** a, bool parse_special) {
   llama_model* m = load(a[0]);
   const llama_vocab* v = llama_model_get_vocab(m);
   std::vector<std::string> entries;
-  try { entries = read_corpus(a[1]); } catch (std::exception& e) { die(e.what()); }
+  try {
+    entries = read_corpus(a[1]);
+  } catch (std::exception& e) {
+    die(e.what());
+  }
   std::ofstream out(a[2], std::ios::binary);
   if (!out) die(std::string("cannot write ") + a[2]);
   for (auto& e : entries) {
@@ -66,6 +85,7 @@ static int cmd_tokenize(char** a, bool parse_special) {
   return 0;
 }
 
+// `eog`: a vocabulary-only load is enough to ask which ids are end-of-generation.
 static int cmd_eog(char** a) {
   llama_backend_init();
   llama_model_params mp = llama_model_default_params();
@@ -83,8 +103,10 @@ static int cmd_eog(char** a) {
   return 0;
 }
 
+// Set by the --kv-f32 flag.
 static bool g_kv_f32 = false;
 
+// `logits`: records llama.cpp's logits for a prompt and its greedy continuation (see the file header).
 static int cmd_logits(char** a) {
   int n_gen = std::atoi(a[2]);
   if (n_gen < 0) die("bad n_gen");
@@ -98,8 +120,16 @@ static int cmd_logits(char** a) {
   llama_context_params cp = llama_context_default_params();
   cp.n_ctx = uint32_t(n_prompt + n_gen + 8);
   cp.n_batch = cp.n_ctx;
-  if (g_kv_f32) cp.type_k = cp.type_v = GGML_TYPE_F32;
-  cp.n_threads = cp.n_threads_batch = int(std::max(1u, std::thread::hardware_concurrency()));
+  if (g_kv_f32) {
+    // --kv-f32 is the nibble-faithful reference: F32 K/V and no flash attention, whose CPU kernel rounds K/V
+    // through F16 and (amplified by activation requantization) moves quantized-model logits by ~1e-3 cosine.
+    cp.type_k = cp.type_v = GGML_TYPE_F32;
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+  }
+  // LLAMA_REF_THREADS caps the thread count: ggml's workers spin, so more threads than free cores is slower.
+  const char* env_threads = std::getenv("LLAMA_REF_THREADS");
+  cp.n_threads = cp.n_threads_batch =
+      env_threads ? std::max(1, std::atoi(env_threads)) : int(std::max(1u, std::thread::hardware_concurrency()));
   llama_context* ctx = llama_init_from_model(m, cp);
   if (!ctx) die("cannot create context");
 
@@ -165,6 +195,7 @@ static int cmd_logits(char** a) {
   return 0;
 }
 
+// Dispatches on the subcommand; the --kv-f32 flag is only valid for `logits`.
 int main(int argc, char** argv) {
   if (argc == 5 && std::string(argv[1]) == "tokenize") return cmd_tokenize(argv + 2, false);
   if (argc == 6 && std::string(argv[1]) == "tokenize" && std::string(argv[2]) == "--special")

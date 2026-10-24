@@ -1,3 +1,5 @@
+// Tests for the prefill path: the tiled GEMM kernels (src/backend/cpu/simd/gemm.cpp) must give the same
+// results as the row-at-a-time kernels, so prompt processing and token generation agree.
 #include <catch2/catch_test_macros.hpp>
 #include <bit>
 #include <cmath>
@@ -69,7 +71,8 @@ TEST_CASE("cpu backend prefill matmul matches scalar for all dtypes", "[gemm][cp
             xq.resize(size_t(n * in / 32));
             cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
           }
-          cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, xq.empty() ? nullptr : xq.data());
+          const QuantActs qa{xq.data()};
+          cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, xq.empty() ? nullptr : &qa);
           be.matmul(w.t, x.data(), got.data(), n);
           int64_t mismatches = 0;
           for (int64_t t = 0; t < n; ++t)
@@ -82,8 +85,9 @@ TEST_CASE("cpu backend prefill matmul matches scalar for all dtypes", "[gemm][cp
               }
               double mag = 0;
               for (int64_t k = 0; k < in; ++k)
-                mag += std::fabs(double(x[size_t(t * in + k)]) *
-                                 (type == DType::F16 ? fp16_to_fp32(w.f16[size_t(r * in + k)]) : w.f32[size_t(r * in + k)]));
+                mag += std::fabs(double(x[size_t(t * in + k)]) * (type == DType::F16
+                                                                      ? fp16_to_fp32(w.f16[size_t(r * in + k)])
+                                                                      : w.f32[size_t(r * in + k)]));
               if (!(std::fabs(double(got[i]) - want[i]) <= 1e-5 * mag) && mismatches++ == 0)
                 UNSCOPED_INFO("first mismatch t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i]
                                                   << " mag=" << mag);
@@ -117,7 +121,7 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
   if (quant(type)) simd::quantize_row_q8_0(x, xq.data(), n * in);
   std::vector<float> want(size_t(n * rows), -7.f), got(want);
   if (quant(type)) {
-    simd::matmul_rows_q(w.t, xq.data(), want.data(), n, rb, re);
+    simd::matmul_rows_q(w.t, QuantActs{xq.data()}, want.data(), n, rb, re);
     std::vector<simd::BlockQ8_0x8> xp(size_t((n + 7) / 8 * (in / 32)));
     simd::pack_q8_0_x8(xq.data(), n, in / 32, xp.data());
     simd::gemm_q(w.t, xp.data(), got.data(), n, rb, re);
@@ -133,10 +137,12 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
 }
 }  // namespace
 
+// Calls the tiled kernels and the row kernels directly on the same misaligned data and row ranges and
+// requires identical bits for every dtype and token count.
 TEST_CASE("gemm equals the row-at-a-time simd path bitwise", "[gemm][simd]") {
   for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {
-    const std::vector<int64_t> ins = quant(t) ? std::vector<int64_t>{32, 96, 896, 4864}
-                                              : std::vector<int64_t>{8, 13, 300, 896, 4864};
+    const std::vector<int64_t> ins =
+        quant(t) ? std::vector<int64_t>{32, 96, 896, 4864} : std::vector<int64_t>{8, 13, 300, 896, 4864};
     for (int64_t in : ins)
       for (int64_t rows : {1, 3, 4, 37, 64})
         for (int64_t n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 17, 64}) {

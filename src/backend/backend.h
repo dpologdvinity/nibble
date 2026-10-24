@@ -1,4 +1,10 @@
 #pragma once
+// The compute-backend interface: every operation the transformer needs, over opaque activation buffers.
+//
+// Model code (model/transformer.cpp) is written only against this interface. CpuBackend is the sole
+// implementation today; a CUDA backend (planned) would implement the same operations over device memory.
+// Weights are passed as Tensor views; activations are plain float pointers that only the backend may
+// dereference.
 #include <cstdint>
 #include <span>
 
@@ -6,9 +12,10 @@
 
 namespace nibble {
 
+// Rotary position embedding options.
 struct RopeParams {
-  float freq_base;
-  bool neox;
+  float freq_base;            // frequency base theta (e.g. 10000, 500000, 1e6)
+  bool neox;                  // true: rotate (i, i + head_dim/2); false: rotate adjacent pairs (i, i + 1)
   const float* freq_factors;  // nullptr or head_dim/2 floats (host)
 };
 
@@ -29,6 +36,8 @@ struct ReserveParams {
 class Backend {
  public:
   virtual ~Backend() = default;
+  // Whether matmul/embed can run weights of this type; checked at load time so the hot path never sees an
+  // unsupported type.
   virtual bool supports(DType weight_type) const = 0;
   // Called once by the model before generation. Afterwards, ops with pos0 + n <= n_ctx,
   // n_heads <= the reserved head count, n <= max_rows and matmul input width <= max_width
@@ -40,7 +49,9 @@ class Backend {
   // backend did not allocate (or freeing twice) is a precondition violation. Blocks not
   // freed are released when the backend is destroyed.
   virtual void free(float* p) = 0;
+  // Copies n floats from a backend buffer to host memory.
   virtual void read(float* host_dst, const float* src, int64_t n) = 0;
+  // Looks up rows `ids` of the embedding table (any supported type) and writes them dequantized to out.
   virtual void embed(const Tensor& table, std::span<const int32_t> ids, float* out) = 0;  // out[n, ne0]
   virtual void matmul(const Tensor& w, const float* x, float* y, int64_t n) = 0;  // y[n, w.ne1] = x[n, w.ne0] . W^T
   // ys[i] = matmul(*ws[i], x, n) for weights sharing one input; results equal separate calls.
@@ -48,11 +59,12 @@ class Backend {
     for (size_t i = 0; i < ws.size(); ++i) matmul(*ws[i], x, ys[i], n);
   }
   virtual void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) = 0;  // weight F32 [dim]
-  virtual void add(float* x, const float* y, int64_t count) = 0;                   // x += y
-  virtual void add_bias(float* x, const Tensor& bias, int64_t n) = 0;              // each of n rows += bias (F32)
+  virtual void add(float* x, const float* y, int64_t count) = 0;                                   // x += y
+  virtual void add_bias(float* x, const Tensor& bias, int64_t n) = 0;  // each of n rows += bias (F32)
   virtual void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, const RopeParams&) = 0;
   virtual void copy(float* dst, const float* src, int64_t count) = 0;
-  // q,out: [n, n_heads, head_dim]; k,v: [n_ctx, n_kv_heads, head_dim]; row t has position pos0+t and attends to 0..pos0+t
+  // q,out: [n, n_heads, head_dim]; k,v: [n_ctx, n_kv_heads, head_dim]; row t has position pos0+t and attends to
+  // 0..pos0+t
   virtual void attention(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
                          int64_t n_heads, int64_t n_kv_heads, int64_t head_dim) = 0;
   virtual void silu_mul(float* gate, const float* up, int64_t count) = 0;  // gate = silu(gate) * up

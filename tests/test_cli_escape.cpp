@@ -1,3 +1,5 @@
+// Test for escape_control (src/util/escape.h), which keeps text taken from model files from reaching a
+// terminal as raw control sequences.
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -6,6 +8,7 @@
 
 using nibble::escape_control;
 
+// ESC sequences, newline/tab, NUL and DEL are escaped; ordinary text and UTF-8 pass through unchanged.
 TEST_CASE("cli escape_control neutralizes terminal control bytes", "[cli]") {
   const std::string out = escape_control("\x1b[31mred\x1b[0m");
   CHECK(out == "\\x1b[31mred\\x1b[0m");

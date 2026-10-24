@@ -1,3 +1,7 @@
+// Fixture generator used by the CLI tests (CMake invokes it at test time): writes small GGUF files into a
+// directory - a minimal model, a tiny runnable model, a ChatML one for `nibble chat`, an escape-sequence
+// probe for `nibble info`, a Q6_K tensor file - and, with --big-u8, a file whose metadata holds a huge u8
+// array to probe memory amplification.
 // Test helper: writes GGUF fixtures into the directory given as argv[1].
 #include <fstream>
 #include <iostream>
@@ -7,6 +11,7 @@
 #include "gguf_writer.h"
 #include "tiny_model.h"
 
+// Writes bytes to a file, exiting the process on failure (it is a build-time helper).
 static void write_file(const std::string& path, const std::vector<uint8_t>& bytes) {
   std::ofstream f(path, std::ios::binary);
   f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
@@ -16,6 +21,7 @@ static void write_file(const std::string& path, const std::vector<uint8_t>& byte
   }
 }
 
+// Usage: make_test_gguf <outdir>, or make_test_gguf --big-u8 <path> <n>.
 int main(int argc, char** argv) {
   if (argc == 4 && std::string(argv[1]) == "--big-u8") {
     // A valid GGUF whose metadata holds one u8 array of N elements (memory-amplification probe).
@@ -55,6 +61,11 @@ int main(int argc, char** argv) {
     w.add_string("evil", "\x1b[31mred\n");
     w.add_string_array("evil.arr", {"\x1b[0m"});
     write_file(dir + "/escape.gguf", w.build());
+  }
+  {
+    GgufWriter w;  // one Q6_K tensor, for `nibble info`
+    w.add_tensor("w", nibble::DType::Q6_K, {256}, std::vector<uint8_t>(210, 0));
+    write_file(dir + "/q6k.gguf", w.build());
   }
   return 0;
 }

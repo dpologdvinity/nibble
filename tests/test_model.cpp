@@ -1,3 +1,7 @@
+// Tests for model loading and the transformer forward pass (src/model/*) on tiny synthetic models built by
+// tests/tiny_model.h: the logits must match an independent naive double-precision implementation
+// (tests/naive_llama.h), chunked/incremental evaluation must not change a bit, and bad model files must be
+// rejected with a specific message.
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -15,6 +19,8 @@
 #include "nibble/error.h"
 #include "tiny_model.h"
 
+// Sanitizer detection (GCC defines macros, Clang uses __has_feature): a few tests skip behaviour the
+// sanitizers cannot support.
 #ifdef __has_feature
 #define NIBBLE_HAS_FEATURE(x) __has_feature(x)
 #else
@@ -35,8 +41,10 @@ using namespace nibble;
 using Catch::Matchers::ContainsSubstring;
 
 namespace {
+// A fixed 5-token prompt used by most tests (includes the BOS-like id 1 and a merged token 257).
 const std::vector<int32_t> kToks = {1, 50, 257, 3, 99};
 
+// Largest absolute difference between two logits vectors.
 double maxdiff(const std::vector<float>& a, const std::vector<float>& b) {
   REQUIRE(a.size() == b.size());
   double m = 0;
@@ -44,25 +52,33 @@ double maxdiff(const std::vector<float>& a, const std::vector<float>& b) {
   return m;
 }
 
+// Exact comparison of two float vectors by bytes.
 bool bitwise_equal(const std::vector<float>& a, const std::vector<float>& b) {
   return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
 }
 
+// A parsed tiny model: owns the file bytes, the File, the config and the bound Weights (declared in
+// dependency order so destruction is safe).
 struct Loaded {
   std::vector<uint8_t> bytes;
   gguf::File file;
   model::LlamaConfig cfg;
   model::Weights w;
   Loaded(std::vector<uint8_t> b, const Backend& be)
-      : bytes(std::move(b)), file(gguf::File::parse(bytes)), cfg(model::LlamaConfig::from_gguf(file)),
+      : bytes(std::move(b)),
+        file(gguf::File::parse(bytes)),
+        cfg(model::LlamaConfig::from_gguf(file)),
         w(model::Weights::bind(file, cfg, be)) {}
 };
 
+// Runs the tokens through a fresh Transformer and returns the last position's logits, either as one batch or
+// one token at a time, with the given chunk size (max_batch).
 std::vector<float> run(Loaded& m, Backend& be, std::vector<int32_t> toks, int64_t max_batch, bool one_by_one) {
   model::Transformer t(m.cfg, m.w, be, 64, max_batch);
   std::vector<float> out(static_cast<size_t>(m.cfg.n_vocab));
   if (one_by_one) {
-    for (size_t i = 0; i < toks.size(); ++i) t.forward(std::span(toks).subspan(i, 1), static_cast<int64_t>(i), out.data());
+    for (size_t i = 0; i < toks.size(); ++i)
+      t.forward(std::span(toks).subspan(i, 1), static_cast<int64_t>(i), out.data());
   } else {
     t.forward(toks, 0, out.data());
   }
@@ -70,6 +86,8 @@ std::vector<float> run(Loaded& m, Backend& be, std::vector<int32_t> toks, int64_
 }
 }  // namespace
 
+// The config read from a qwen2-style tiny file: dimensions, derived head_dim, rope base, and the qwen2 flags
+// (NeoX rope, QKV bias).
 TEST_CASE("model config of tiny model", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -88,6 +106,7 @@ TEST_CASE("model config of tiny model", "[model]") {
   CHECK(m.cfg.qkv_bias);
 }
 
+// F32 and F16 logits agree with the naive reference to 1e-4.
 TEST_CASE("model matches naive reference", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -98,6 +117,8 @@ TEST_CASE("model matches naive reference", "[model]") {
   }
 }
 
+// The llama architecture (no bias, adjacent-pair rope, optional rope_freqs tensor) also matches the naive
+// reference.
 TEST_CASE("llama arch matches naive", "[model][llama]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -116,6 +137,7 @@ TEST_CASE("llama arch matches naive", "[model][llama]") {
     }
 }
 
+// Batch, one-token-at-a-time and 2-token-chunk evaluation produce identical bits.
 TEST_CASE("llama chunked prefill equals incremental", "[model][llama]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -128,6 +150,8 @@ TEST_CASE("llama chunked prefill equals incremental", "[model][llama]") {
   CHECK(bitwise_equal(run(m, be, kToks, 2, false), batch));
 }
 
+// A rope_freqs tensor of the wrong length or type, and rope.dimension_count / attention.key_length that
+// disagree with embedding_length / head_count, are rejected naming the key.
 TEST_CASE("llama bad rope_freqs and head_dim throw", "[model][llama]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -142,8 +166,8 @@ TEST_CASE("llama bad rope_freqs and head_dim throw", "[model][llama]") {
   o = {};
   o.arch = "llama";
   o.rope_dim = 8;  // head_dim is 4
-  CHECK_THROWS_WITH(load(o), ContainsSubstring("llama.rope.dimension_count") && ContainsSubstring("8") &&
-                                 ContainsSubstring("4"));
+  CHECK_THROWS_WITH(
+      load(o), ContainsSubstring("llama.rope.dimension_count") && ContainsSubstring("8") && ContainsSubstring("4"));
   o.rope_dim = 4;
   CHECK_NOTHROW(load(o));
   o.key_length = 6;
@@ -151,6 +175,7 @@ TEST_CASE("llama bad rope_freqs and head_dim throw", "[model][llama]") {
   CHECK_THROWS_WITH(load(o), ContainsSubstring("invalid model"));
 }
 
+// A llama-architecture file carrying attention biases is rejected rather than silently ignoring them.
 TEST_CASE("llama file with qkv bias throws", "[model][llama]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -161,6 +186,7 @@ TEST_CASE("llama file with qkv bias throws", "[model][llama]") {
                     ContainsSubstring("unsupported tensor blk.0.attn_q.bias for architecture llama"));
 }
 
+// The same head-dimension consistency checks apply to qwen2 files.
 TEST_CASE("qwen2 head_dim keys are checked", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -177,6 +203,8 @@ TEST_CASE("qwen2 head_dim keys are checked", "[model]") {
                     ContainsSubstring("qwen2.attention.key_length"));
 }
 
+// Q8_0 and Q4_0 tiny models: logits have cosine >= 0.999 with the naive model run on the dequantized weights,
+// the same argmax, and batch equals incremental bit for bit.
 TEST_CASE("quantized model matches naive on dequantized weights", "[model][quant]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -205,6 +233,7 @@ TEST_CASE("quantized model matches naive on dequantized weights", "[model][quant
   }
 }
 
+// With 1 to 8 threads (and so different row splits and the packed GEMM path) the logits are bit-identical.
 TEST_CASE("quantized prefill logits do not depend on the thread count", "[model][quant]") {
   TinyModelOpts o;
   o.quant_dims = true;
@@ -220,6 +249,7 @@ TEST_CASE("quantized prefill logits do not depend on the thread count", "[model]
   }
 }
 
+// Kernels use a fixed accumulation order per row, so how tokens are batched cannot change a single bit.
 TEST_CASE("incremental and chunked prefill equal batch", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -230,6 +260,8 @@ TEST_CASE("incremental and chunked prefill equal batch", "[model]") {
   CHECK(bitwise_equal(run(m, be, kToks, 2, false), batch));
 }
 
+// Files without output.weight tie the output to the embedding; an explicit output matrix is used when present
+// and gives different logits.
 TEST_CASE("model tied and explicit output", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -251,6 +283,8 @@ TEST_CASE("model tied and explicit output", "[model]") {
   CHECK(maxdiff(run(tied, be, kToks, 512, false), run(expl, be, kToks, 512, false)) > 1e-3);
 }
 
+// Missing tensor, wrong tensor shape, unsupported architecture and unsupported tensor type are each rejected
+// with a message naming the culprit.
 TEST_CASE("model rejects bad files", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -274,11 +308,12 @@ TEST_CASE("model rejects bad files", "[model]") {
   SECTION("unsupported dtype") {
     TinyModelOpts o;
     o.raw_type_tensor = "blk.0.ffn_down.weight";
-    CHECK_THROWS_WITH(load(o), ContainsSubstring("12"));
+    CHECK_THROWS_WITH(load(o), ContainsSubstring("Q3_K"));
     CHECK_THROWS_WITH(load(o), ContainsSubstring("blk.0.ffn_down.weight"));
   }
 }
 
+// Feeding tokens past the end of the context is an Error.
 TEST_CASE("forward bounds and head divisibility", "[model]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -290,6 +325,8 @@ TEST_CASE("forward bounds and head divisibility", "[model]") {
   CHECK_NOTHROW(t.forward(std::span(kToks).subspan(0, 2), 2, out.data()));
 }
 
+// Head counts that do not divide the embedding width, or an odd head dimension (rope needs pairs), are
+// rejected.
 TEST_CASE("config rejects indivisible head counts", "[model]") {
   auto cfg = [](int64_t heads, int64_t kv) {
     TinyModelOpts o;
@@ -305,6 +342,7 @@ TEST_CASE("config rejects indivisible head counts", "[model]") {
   CHECK_NOTHROW(cfg(4, 2));
 }
 
+// A Weights object with fewer layers than the config says is rejected at construction.
 TEST_CASE("transformer rejects weights with the wrong layer count", "[model]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -313,6 +351,7 @@ TEST_CASE("transformer rejects weights with the wrong layer count", "[model]") {
   CHECK_THROWS_WITH(model::Transformer(m.cfg, m.w, be, 8), ContainsSubstring("layers"));
 }
 
+// Constructing and destroying Transformers repeatedly leaves no live backend allocations.
 TEST_CASE("transformer destroy frees all backend allocations", "[model]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -325,6 +364,8 @@ TEST_CASE("transformer destroy frees all backend allocations", "[model]") {
   CHECK(be.live_allocations() == base);
 }
 
+// Absurd context sizes fail with an Error mentioning n_ctx (overflow paths and, outside sanitizers, a real
+// huge allocation) and leak nothing.
 TEST_CASE("transformer huge n_ctx throws Error naming n_ctx", "[model]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -343,6 +384,7 @@ TEST_CASE("transformer huge n_ctx throws Error naming n_ctx", "[model]") {
 #ifndef NDEBUG
 // Spec 6.4: Debug builds check shape agreement at every op call. A valid model must
 // pass every check in all prefill modes.
+// In debug builds, a valid model passes every NIBBLE_DCHECK in all evaluation modes.
 TEST_CASE("debug checks pass on a valid tiny-model forward", "[model][dcheck]") {
   ThreadPool pool(2);
   cpu::CpuBackend be(pool);
@@ -358,6 +400,8 @@ TEST_CASE("debug checks pass on a valid tiny-model forward", "[model][dcheck]") 
   CHECK(run(expl, be, kToks, 512, false).size() == size_t(expl.cfg.n_vocab));
 }
 
+// A deliberately wrong argument (an F16 RMSNorm weight) makes a forked child abort with SIGABRT and a message
+// naming the check, proving the checks are live.
 TEST_CASE("debug check failure aborts naming the op", "[model][dcheck]") {
   int fds[2];
   REQUIRE(::pipe(fds) == 0);
@@ -387,7 +431,6 @@ TEST_CASE("debug check failure aborts naming the op", "[model][dcheck]") {
   INFO("child stderr: " << err);
   REQUIRE(WIFSIGNALED(status));
   CHECK(WTERMSIG(status) == SIGABRT);
-  CHECK_THAT(err, ContainsSubstring("NIBBLE_DCHECK") && ContainsSubstring("rmsnorm") &&
-                      ContainsSubstring("need F32"));
+  CHECK_THAT(err, ContainsSubstring("NIBBLE_DCHECK") && ContainsSubstring("rmsnorm") && ContainsSubstring("need F32"));
 }
 #endif

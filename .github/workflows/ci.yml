@@ -1,45 +1,271 @@
+# Continuous integration for nibble. Runs on every push and pull request to the default branch.
+#
+#   environment      provisions the toolchain and the pinned Python tools (cached) and fetches Catch2 once
+#   lint             clang-format, ruff, mypy, shellcheck           (fails fast: the build jobs wait for it)
+#   static-analysis  clang-tidy over src/ and cli/
+#   test             build + unit/integration tests in a matrix: portable, native gcc/clang, scalar kernels,
+#                    AddressSanitizer + UBSan, ThreadSanitizer
+#   coverage         gcc --coverage build, gcovr report (artifact + job summary) with a minimum line coverage
+#   fuzz             60 s each of the GGUF-parser and full-load libFuzzer targets on a seeded corpus
+#   package          release tarballs and the container image (see package.yml)
+#
+# The end-to-end tests (tests labelled e2e) compare against llama.cpp on multi-gigabyte models and run locally only.
+# Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
 name: ci
+
 on:
   push:
+    branches: [master, main]
   pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+  workflow_call:  # release.yml runs the whole suite on the tagged commit before publishing anything
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Only superseded pull-request pushes are cancelled; every commit on master/main (and tag) gets a full run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DEPS_DIR: ${{ github.workspace }}/.deps-cache
+
 jobs:
-  release:
+  environment:
+    name: environment
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
-      - run: cmake --build build -j
-      - run: ctest --test-dir build -LE e2e --output-on-failure
-  # Runner CPUs have AVX2/FMA/F16C, so the NATIVE=ON jobs (native, clang, sanitize) exercise the
-  # SIMD kernels; release and fuzz stay NATIVE=OFF (portable, scalar). Runners usually lack
-  # AVX-VNNI: the VNNI path is only tested locally.
-  native:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install pinned Python tools
+        run: python -m pip install -r requirements-ci.txt
+      - name: Toolchain versions (fail early if something is missing or too old)
+        run: |
+          set -eux
+          cmake --version
+          g++ --version
+          clang++ --version
+          python --version
+          clang-format --version
+          clang-tidy --version
+          ruff --version
+          mypy --version
+          shellcheck --version
+          gcovr --version
+          cmake --version | awk 'NR==1 { split($3, v, "."); exit !(v[1] > 3 || (v[1] == 3 && v[2] >= 25)) }'
+      - name: Cache Catch2 (fetched at configure time)
+        id: deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Fetch dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        run: cmake -S . -B build-env -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+
+  lint:
+    name: lint and format
+    needs: environment
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
-      - run: cmake --build build -j
-      - run: ctest --test-dir build -LE e2e --output-on-failure
-  clang:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0  # the commit-subject check needs the PR's commits and the base branch
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - run: python -m pip install -r requirements-ci.txt
+      - name: clang-format
+        run: git ls-files '*.cpp' '*.h' | grep -v '^third_party/' | xargs clang-format --dry-run -Werror
+      - name: ruff (lint and format) and mypy (strict types)
+        run: |
+          ruff check bench tools
+          ruff format --check bench tools
+          mypy
+      - name: shellcheck
+        run: shellcheck tools/*.sh
+      - name: Conventional-commit subjects (pull requests)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bad=$(git log --no-merges --format='%s' "$BASE_SHA..$HEAD_SHA" \
+                | grep -Ev '^(feat|fix|perf|refactor|test|docs|build|ci|style|chore|revert)(\([a-z0-9_.,-]+\))?!?: .+' || true)
+          if [ -n "$bad" ]; then echo "Not Conventional Commits:"; echo "$bad"; exit 1; fi
+
+  static-analysis:
+    name: clang-tidy
+    needs: environment
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - run: CXX=clang++ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
-      - run: cmake --build build -j
-      - run: ctest --test-dir build -LE e2e --output-on-failure
-  sanitize:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - run: python -m pip install -r requirements-ci.txt
+      - name: Configure (compile database only; tests are not needed)
+        run: |
+          cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build build --target nibble_git_header
+      - name: clang-tidy
+        run: |
+          mapfile -t files < <(git ls-files 'src/*.cpp' 'cli/*.cpp' | sed "s|^|^$PWD/|; s|\$|\$|")
+          run-clang-tidy.py -p build -j "$(nproc)" -quiet "${files[@]}"
+
+  test:
+    name: test (${{ matrix.name }})
+    needs: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: portable gcc
+            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
+            kernels: scalar
+          - name: native gcc
+            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
+            kernels: avx2
+          - name: native clang
+            cxx: clang++
+            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
+            kernels: avx2
+          - name: scalar kernels on a native build
+            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON -DNIBBLE_SIMD=OFF
+            kernels: scalar
+          - name: asan+ubsan
+            cmake: -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=address,undefined
+            kernels: avx2
+            sanitizer: true
+          - name: tsan
+            cmake: -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=thread
+            kernels: avx2
+            sanitizer: true
     steps:
-      - uses: actions/checkout@v5
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=address,undefined
-      - run: cmake --build build -j
-      - run: ctest --test-dir build -LE e2e --output-on-failure
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Restore Catch2
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Install ccache
+        run: sudo apt-get install -y --no-install-recommends ccache
+      # -march=native objects are only valid on the CPU that built them, but ccache hashes the literal flag, so the
+      # cache key must carry the CPU model or a different runner CPU executes illegal instructions.
+      - name: CPU model (ccache key)
+        id: cpu
+        run: echo "id=$(grep -m1 'model name' /proc/cpuinfo | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+      - name: Restore ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.name }}-${{ steps.cpu.outputs.id }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.name }}-${{ steps.cpu.outputs.id }}-
+      - name: Let the sanitizers map memory (lower ASLR entropy)
+        if: matrix.sanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Configure
+        env:
+          CXX: ${{ matrix.cxx || 'g++' }}
+        run: |
+          cmake -S . -B build ${{ matrix.cmake }} -DFETCHCONTENT_BASE_DIR="$DEPS_DIR" \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+      - name: Check the expected kernel set was compiled in
+        run: |
+          kernels=$(build/nibble info build/tests/data/small.gguf | sed -n 's/^kernels: //p')
+          echo "kernels: $kernels"
+          case "${{ matrix.kernels }}" in
+            avx2) [[ "$kernels" == avx2* ]] ;;
+            scalar) [[ "$kernels" == scalar ]] ;;
+          esac
+      - name: Test (everything except the end-to-end tests)
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+
+  coverage:
+    name: coverage
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - run: python -m pip install -r requirements-ci.txt
+      - name: Restore Catch2
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Build with coverage instrumentation
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="--coverage -O0" -DNIBBLE_NATIVE=ON \
+                -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
+      - name: Coverage report
+        run: |
+          # no_working_dir_found/source_not_found only come from CMake's compiler-id probes and Catch2, which the
+          # --filter flags exclude from the report anyway.
+          set -o pipefail  # a gcovr failure (or the threshold) must fail the step, not be masked by tee
+          mkdir -p coverage
+          gcovr --root . --object-directory build --filter 'src/' --filter 'cli/' --exclude-throw-branches \
+                --exclude-directories '.*\.deps-cache' \
+                --gcov-ignore-parse-errors=negative_hits.warn \
+                --gcov-ignore-errors=no_working_dir_found --gcov-ignore-errors=source_not_found \
+                --print-summary --xml-pretty --xml coverage/coverage.xml --html-details coverage/index.html \
+                --fail-under-line "${MIN_LINE_COVERAGE}" | tee coverage/summary.txt
+          { echo '### Coverage (src/ and cli/)'; echo '```'; cat coverage/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          MIN_LINE_COVERAGE: "80"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
   fuzz:
+    name: fuzz (60 s each)
+    needs: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - run: CXX=clang++ cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF
-      - run: cmake --build build-fuzz -j --target fuzz_gguf fuzz_load make_seed
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build fuzz targets
+        env:
+          CXX: clang++
+        run: |
+          cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF \
+                -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build build-fuzz -j "$(nproc)" --target fuzz_gguf fuzz_load make_seed
       - run: build-fuzz/make_seed build-fuzz/seed
       - run: build-fuzz/fuzz_gguf -max_total_time=60 build-fuzz/seed
       - run: build-fuzz/fuzz_load -max_total_time=60 build-fuzz/seed
+
+  package:
+    name: package
+    needs: [test, static-analysis, coverage, fuzz]
+    uses: ./.github/workflows/package.yml
+    permissions:
+      contents: read

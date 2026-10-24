@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Builds the pinned llama.cpp reference tools (the version in tools/llama_cpp_version.txt), cloning the source
+# into third_party/ if needed.
+#
+# Usage: tools/build_llama_cpp.sh [--generic]
+#   (default)   third_party/build:         native build (AVX2 etc.) of llama_ref, llama-quantize, llama-bench - used for F16 goldens, making quantized models, and benchmark comparisons
+#   --generic   third_party/build-generic: ggml's generic scalar path (no SIMD, no repack) of llama_ref - used for the quantized goldens, because that is the algorithm nibble's scalar code reproduces
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAG="$(tr -d '[:space:]' < "$ROOT/tools/llama_cpp_version.txt")"

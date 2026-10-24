@@ -1,3 +1,6 @@
+// End-to-end tokenizer tests: nibble's tokens for a corpus of tricky strings must equal what llama.cpp
+// produced (recorded by tools/llama_ref into models/golden/). They skip themselves when the model files or
+// goldens have not been generated.
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
@@ -9,12 +12,15 @@
 #include "nibble/error.h"
 #include "tokenizer/tokenizer.h"
 
+// Space-separated ids, for failure messages.
 static std::string join(const std::vector<int32_t>& v) {
   std::string s;
   for (auto x : v) s += std::to_string(x) + " ";
   return s;
 }
 
+// Tokenizes every corpus entry with the model's tokenizer, compares with the recorded llama.cpp ids, and also
+// checks that decoding the tokens reproduces the original text (plus SentencePiece's one-space prefix).
 static void check_golden(const std::string& model_file, const std::string& golden_dir) {
   const std::string root = NIBBLE_SOURCE_DIR;
   const std::string model = root + "/models/" + model_file;
@@ -47,20 +53,27 @@ static void check_golden(const std::string& model_file, const std::string& golde
   CHECK(n == 37);
 }
 
+// Qwen2.5 (byte-level BPE, qwen2 pre-tokenizer).
 TEST_CASE("tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
   check_golden("qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16");
 }
 
+// Llama 3.2 (byte-level BPE, llama3 pre-tokenizer).
 TEST_CASE("llama 3.2 tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
   check_golden("llama-3.2-1b-instruct-f16.gguf", "llama32-1b-f16");
 }
 
+// TinyLlama (SentencePiece).
 TEST_CASE("tinyllama spm tokenizer matches llama.cpp golden", "[e2e][tokenizer]") {
   check_golden("tinyllama-1.1b-chat-f16.gguf", "tinyllama-1.1b-f16");
 }
 
+// The set of end-of-generation token ids equals llama.cpp's for every model that has a recorded list
+// (including the quantized files, which share the vocabulary).
 TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
-  struct M { const char *file, *dir; };
+  struct M {
+    const char *file, *dir;
+  };
   const M models[] = {{"qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16"},
                       {"qwen2.5-0.5b-instruct-q8_0.gguf", "qwen2.5-0.5b-q8_0"},
                       {"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-q4_0"},
@@ -77,7 +90,8 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
     std::ifstream gf(gold);
     std::vector<int32_t> want, got;
     for (int32_t x; gf >> x;) want.push_back(x);
-    for (int32_t id = 0; id < tok->n_vocab(); ++id) if (tok->is_eog(id)) got.push_back(id);
+    for (int32_t id = 0; id < tok->n_vocab(); ++id)
+      if (tok->is_eog(id)) got.push_back(id);
     std::string msg;
     for (auto id : want) msg += " " + std::to_string(id) + "='" + tok->decode_token(id) + "'";
     std::string msg2;
@@ -94,8 +108,12 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
   if (ran == 0) SKIP("no model with eog golden");
 }
 
+// Special-token parsing (parse_special = true) on a small corpus of strings containing control tokens, per
+// model.
 TEST_CASE("special-parsed tokenize matches llama.cpp golden", "[e2e][tokenizer][special]") {
-  struct M { const char *file, *dir; };
+  struct M {
+    const char *file, *dir;
+  };
   const M models[] = {{"qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16"},
                       {"qwen2.5-0.5b-instruct-q8_0.gguf", "qwen2.5-0.5b-q8_0"},
                       {"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-q4_0"},

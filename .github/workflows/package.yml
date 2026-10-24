@@ -1,0 +1,108 @@
+# Reusable workflow: builds the release artifacts (CLI tarballs for two instruction-set levels, and the container
+# image) and uploads them. Called by ci.yml on every push/PR (artifacts only) and by release.yml on tags (which
+# also pushes the image). Binaries are built without the tests, so no Catch2 download is needed.
+name: package
+
+on:
+  workflow_call:
+    inputs:
+      push-image:
+        description: Push the container image to ghcr.io (the caller must grant the packages write permission)
+        type: boolean
+        default: false
+      version:
+        description: "Version string used in artifact names (default: the short commit SHA)"
+        type: string
+        default: ""
+
+jobs:
+  binaries:
+    name: binary (${{ matrix.suffix }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # AVX2 + FMA + F16C kernels: x86-64-v3 CPUs (Intel Haswell / AMD Excavator or newer; older parts die with SIGILL).
+          - suffix: linux-x86_64-avx2
+            march: x86-64-v3
+          # Scalar kernels only: runs anywhere, much slower.
+          - suffix: linux-x86_64-portable
+            march: x86-64
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_BUILD_TESTS=OFF -DNIBBLE_NATIVE=OFF \
+                -DCMAKE_CXX_FLAGS="-march=${{ matrix.march }}"
+          cmake --build build --target nibble_cli -j "$(nproc)"
+          strip build/nibble
+      - name: Smoke test
+        run: build/nibble --version && build/nibble --help > /dev/null
+      - name: Package
+        id: pkg
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="$INPUT_VERSION"
+          [ -n "$version" ] || version="$(git rev-parse --short HEAD)"
+          name="nibble-${version}-${{ matrix.suffix }}"
+          mkdir -p "dist/$name"
+          cp build/nibble LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          rm -rf "dist/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  image:
+    name: container image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+          flavor: latest=false  # never move a floating tag from an automated run; the owner tags releases deliberately
+      - name: Build and smoke-test
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: nibble:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm nibble:ci --version
+      - name: Log in to ghcr.io
+        if: inputs.push-image
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        if: inputs.push-image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

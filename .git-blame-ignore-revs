@@ -1,0 +1,4 @@
+# Revisions ignored by `git blame` (mechanical reformatting). Enable with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# style: format all C++ with clang-format
+801166a2a7b9aca51a4669a3f236299767ea309a

@@ -16,6 +16,8 @@
 
 using namespace nibble;
 
+// libFuzzer entry point. The backend is static so that the corpus run does not spend its time constructing
+// thread pools.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   static ThreadPool pool(1);
   static cpu::CpuBackend backend(pool);

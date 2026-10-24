@@ -1,0 +1,14 @@
+# Tooling configuration for the Python helper scripts (bench/, tools/). nibble itself is C++; this file only
+# configures linting (ruff) and type checking (mypy) and is not a Python package.
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I", "C4", "SIM"]
+ignore = ["E731"]  # assigning small lambdas to names is used deliberately for local helpers
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["bench", "tools"]

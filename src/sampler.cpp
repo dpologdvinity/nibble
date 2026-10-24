@@ -1,3 +1,5 @@
+// Sampler implementation: top-k selection, temperature softmax in double precision, top-p truncation and
+// inverse-CDF draw from a xoshiro256** stream.
 #include "sampler.h"
 
 #include <algorithm>
@@ -18,6 +20,7 @@ std::string fmt(float v) {
 }
 }  // namespace
 
+// Standard splitmix64 (Vigna): used both to expand a user seed into generator state and to derive per-call seeds.
 uint64_t splitmix64(uint64_t& x) {
   uint64_t z = (x += 0x9E3779B97F4A7C15ULL);
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -25,6 +28,8 @@ uint64_t splitmix64(uint64_t& x) {
   return z ^ (z >> 31);
 }
 
+// Walks the cumulative sum until it exceeds u. If rounding keeps it from ever exceeding u, falls back to the
+// last index with nonzero probability so a zero-probability token is never returned.
 size_t pick_index(const double* prob, size_t n, double u) {
   double cum = 0.0;
   for (size_t i = 0; i < n; ++i) {
@@ -44,12 +49,11 @@ uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 
 }  // namespace
 
+// Validates the parameters, seeds the four-word generator state with splitmix64, and sizes the work buffers.
 Sampler::Sampler(const SamplerParams& p, int64_t n_vocab) : params_(p), n_vocab_(n_vocab) {
   if (std::isnan(p.temperature) || p.temperature < 0.0f)
-    throw Error("sampler: invalid temperature " + fmt(p.temperature) +
-                " (must be >= 0)");
-  if (std::isnan(p.top_p) || p.top_p < 0.0f)
-    throw Error("sampler: invalid top_p " + fmt(p.top_p) + " (must be >= 0)");
+    throw Error("sampler: invalid temperature " + fmt(p.temperature) + " (must be >= 0)");
+  if (std::isnan(p.top_p) || p.top_p < 0.0f) throw Error("sampler: invalid top_p " + fmt(p.top_p) + " (must be >= 0)");
   if (n_vocab <= 0) throw Error("sampler: invalid n_vocab " + std::to_string(n_vocab));
   uint64_t x = p.seed;
   for (auto& s : state_) s = splitmix64(x);
@@ -69,10 +73,13 @@ uint64_t Sampler::next() {  // xoshiro256**
   return result;
 }
 
+// Pipeline: find the best token (handles NaN/inf and greedy) -> top-k partial sort -> softmax with
+// temperature over the kept tokens -> top-p cut and renormalize -> draw u in [0,1) from the top 53 bits of the
+// generator and invert the CDF. The sort order is total (descending logit, then ascending id), so equal
+// seeds give equal results on every platform.
 int32_t Sampler::sample(std::span<const float> logits) {
   if (static_cast<int64_t>(logits.size()) != n_vocab_)
-    throw Error("sampler: got " + std::to_string(logits.size()) + " logits, expected " +
-                std::to_string(n_vocab_));
+    throw Error("sampler: got " + std::to_string(logits.size()) + " logits, expected " + std::to_string(n_vocab_));
   const auto better = [&](int32_t a, int32_t b) {
     const float la = key(logits[static_cast<size_t>(a)]), lb = key(logits[static_cast<size_t>(b)]);
     return la > lb || (la == lb && a < b);

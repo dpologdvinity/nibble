@@ -1,3 +1,12 @@
+// Hand-written implementation of the Qwen2 / Llama 3 pre-tokenizer regex (see pretokenize.h).
+//
+// The pattern, as alternatives tried in order at each position:
+//   1. contractions         's 't 'm 'd 're 've 'll (case-insensitive)
+//   2. [^\r\n\p{L}\p{N}]?\p{L}+   an optional non-letter prefix, then letters
+//   3. \p{N}{1,k}           digit runs of at most k (k = 1 Qwen2, 3 Llama 3)
+//   4. " ?[^\s\p{L}\p{N}]+[\r\n]*"   punctuation/symbols, optional leading space and trailing newlines
+//   5-7. whitespace: runs ending at the last newline; else all but the last blank before a word; else the run
+//   8. any single remaining character
 #include "tokenizer/pretokenize.h"
 
 #include "nibble/error.h"
@@ -7,12 +16,15 @@ namespace nibble::tok {
 
 namespace {
 
+// Small character predicates matching the regex classes above ("other" = neither whitespace, letter nor digit).
 bool is_nl(char32_t c) { return c == U'\r' || c == U'\n'; }
 bool is_other(char32_t c) { return !is_whitespace(c) && !is_letter(c) && !is_number(c); }
 char32_t lower_ascii(char32_t c) { return (c >= U'A' && c <= U'Z') ? c + 32 : c; }
 
 }  // namespace
 
+// Works on code points but returns byte slices of the input, so no text is copied. The slices tile the input
+// exactly (their concatenation is `text`).
 std::vector<std::string_view> pretokenize(std::string_view text, int max_digit_run) {
   if (max_digit_run < 1) throw Error("pretokenize: max_digit_run must be >= 1");
   const std::vector<char32_t> cp = utf8_decode(text);

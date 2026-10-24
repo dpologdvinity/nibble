@@ -1,3 +1,6 @@
+// Tests for the backend operations beyond matmul: fused multi-weight matmul equivalence, and the AVX2
+// elementwise kernels (exp, add, RMSNorm, SiLU gating, attention) against their scalar oracles in
+// ref_ops.cpp.
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstring>
@@ -15,6 +18,7 @@
 using namespace nibble;
 
 namespace {
+// Uniform random floats in [-scale, scale).
 std::vector<float> rnd(size_t n, std::mt19937& g, float scale = 1.f) {
   std::uniform_real_distribution<float> d(-scale, scale);
   std::vector<float> v(n);
@@ -88,6 +92,8 @@ TEST_CASE("matmul_multi equals separate matmul calls bitwise", "[cpu_backend][op
   }
 }
 
+// Weights with different input widths cannot share a quantized copy of x, so matmul_multi must fall back to
+// one call per weight and still give the separate-call results.
 TEST_CASE("matmul_multi with different input widths equals separate matmul calls", "[cpu_backend][ops]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -111,6 +117,7 @@ TEST_CASE("matmul_multi with different input widths equals separate matmul calls
 
 #ifdef NIBBLE_HAVE_AVX2
 namespace {
+// e^x of one value through the 8-lane vector function.
 float exp1(float x) {
   alignas(32) float v[8];
   _mm256_store_ps(v, simd::exp_ps(_mm256_set1_ps(x)));
@@ -147,6 +154,8 @@ TEST_CASE("simd exp_ps max relative error vs std::exp <= 2e-7 over [-88, 88]", "
   CHECK(worst <= 2e-7);
 }
 
+// Special values: e^0 = 1, e^-inf = 0, e^inf = inf, NaN stays NaN, overflow gives inf, and underflow lands in
+// the subnormal range within one ulp (never negative).
 TEST_CASE("simd exp_ps edge inputs: underflow to 0 or subnormal, overflow to inf, no NaN", "[simd][ops]") {
   const float inf = std::numeric_limits<float>::infinity();
   CHECK(exp1(0.f) == 1.f);
@@ -165,6 +174,8 @@ TEST_CASE("simd exp_ps edge inputs: underflow to 0 or subnormal, overflow to inf
   }
 }
 
+// Elementwise add is exact, so the vector and scalar versions agree bit for bit for sizes around the vector
+// width.
 TEST_CASE("simd add equals scalar bitwise", "[simd][ops]") {
   std::mt19937 g(1);
   for (int64_t count : {1, 7, 8, 13, 896, 4867}) {
@@ -175,6 +186,8 @@ TEST_CASE("simd add equals scalar bitwise", "[simd][ops]") {
   }
 }
 
+// The vector RMSNorm sums squares in a different order than the scalar, so results agree to 1e-6 relative
+// across widths and input magnitudes.
 TEST_CASE("simd rmsnorm matches scalar within 1e-6 relative", "[simd][ops]") {
   std::mt19937 g(2);
   for (int64_t d : {8, 13, 64, 896, 2048})
@@ -196,6 +209,8 @@ TEST_CASE("simd rmsnorm matches scalar within 1e-6 relative", "[simd][ops]") {
     }
 }
 
+// SwiGLU gating with the polynomial exp agrees with the scalar std::exp version, including very large
+// positive and negative gate values.
 TEST_CASE("simd silu_mul matches scalar within 1e-6 relative, including saturated gates", "[simd][ops]") {
   std::mt19937 g(3);
   for (int64_t count : {1, 7, 8, 13, 4864, 4871}) {

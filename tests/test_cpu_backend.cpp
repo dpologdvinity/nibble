@@ -1,3 +1,6 @@
+// Tests for CpuBackend (src/backend/cpu/cpu_backend.cpp): matmul/attention against the scalar oracle,
+// supported types, scratch reservation (no growth after reserve), allocation bookkeeping, and the quantized
+// matmul/embed paths for every quantized weight type.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <cmath>
@@ -14,12 +17,14 @@
 using namespace nibble;
 
 namespace {
+// Uniform random floats in [-1, 1).
 std::vector<float> rnd(size_t n, std::mt19937& g) {
   std::uniform_real_distribution<float> d(-1.f, 1.f);
   std::vector<float> v(n);
   for (auto& x : v) x = d(g);
   return v;
 }
+// Largest absolute difference between two arrays.
 double maxdiff(const float* a, const float* b, size_t n) {
   double m = 0;
   for (size_t i = 0; i < n; ++i) m = std::max(m, double(std::fabs(a[i] - b[i])));
@@ -27,6 +32,7 @@ double maxdiff(const float* a, const float* b, size_t n) {
 }
 }  // namespace
 
+// F32 and F16 matmul through the backend agree with the scalar oracle to 1e-5.
 TEST_CASE("cpu backend matmul", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -53,6 +59,8 @@ TEST_CASE("cpu backend matmul", "[cpu_backend]") {
   }
 }
 
+// Backend attention (parallel over heads) agrees with the scalar attention for a grouped-query case, twice in
+// a row to exercise scratch reuse.
 TEST_CASE("cpu backend attention", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -68,15 +76,17 @@ TEST_CASE("cpu backend attention", "[cpu_backend]") {
   }
 }
 
+// The backend runs F32, F16 and all seven quantized weight types.
 TEST_CASE("cpu backend supports", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
   CHECK(be.supports(DType::F32));
   CHECK(be.supports(DType::F16));
-  CHECK(be.supports(DType::Q4_0));
-  CHECK(be.supports(DType::Q8_0));
+  for (DType t : {DType::Q4_0, DType::Q5_0, DType::Q5_1, DType::Q8_0, DType::Q4_K, DType::Q5_K, DType::Q6_K})
+    CHECK(be.supports(t));
 }
 
+// After reserve(), attention for every position up to n_ctx does not grow the scratch buffer.
 TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
@@ -92,6 +102,7 @@ TEST_CASE("cpu backend reserve prevents scratch growth", "[cpu_backend]") {
   }
 }
 
+// alloc/free bookkeeping: freeing returns blocks, free(nullptr) is a no-op.
 TEST_CASE("cpu backend free releases allocation", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -107,6 +118,7 @@ TEST_CASE("cpu backend free releases allocation", "[cpu_backend]") {
   REQUIRE(be.live_allocations() == base);
 }
 
+// Negative and overflowing sizes throw Error and leave no allocation behind.
 TEST_CASE("cpu backend alloc rejects bad sizes", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -117,6 +129,7 @@ TEST_CASE("cpu backend alloc rejects bad sizes", "[cpu_backend]") {
 }
 
 namespace {
+// A 2-D quantized tensor view over raw bytes.
 Tensor q_tensor(DType t, const std::vector<uint8_t>& bytes, int64_t in, int64_t out) {
   Tensor w;
   w.type = t;
@@ -127,61 +140,144 @@ Tensor q_tensor(DType t, const std::vector<uint8_t>& bytes, int64_t in, int64_t 
 }
 }  // namespace
 
+// All block-quantized weight types the backend runs.
+constexpr DType kQuantTypes[] = {DType::Q4_0, DType::Q5_0, DType::Q5_1, DType::Q8_0,
+                                 DType::Q4_K, DType::Q5_K, DType::Q6_K};
+
+// For every quantized type, one token and a small batch: the backend matmul (SIMD where available) equals the
+// scalar oracle bit for bit.
 TEST_CASE("cpu backend quantized matmul equals ref_ops bitwise", "[cpu_backend][quant]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
   std::mt19937 g(5);
-  const int64_t in = 96, out = 37, n = 3;
-  be.reserve({64, 4, n, in});
-  for (DType t : {DType::Q8_0, DType::Q4_0}) {
-    auto wb = test_quantize_rows(t, rnd(static_cast<size_t>(in * out), g), in);
-    Tensor w = q_tensor(t, wb, in, out);
-    auto x = rnd(static_cast<size_t>(n * in), g);
-    std::vector<BlockQ8_0> xq(static_cast<size_t>(n * in / 32));
-    cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
-    std::vector<float> ref(static_cast<size_t>(n * out)), got(ref.size());
-    cpu::matmul_rows(w, x.data(), ref.data(), n, 0, out, xq.data());
-    be.matmul(w, x.data(), got.data(), n);
-    CHECK(std::memcmp(ref.data(), got.data(), ref.size() * sizeof(float)) == 0);
-  }
+  const int64_t in = 512, out = 37;  // 512 is a block multiple of every type
+  be.reserve({64, 4, 5, in});
+  for (DType t : kQuantTypes)
+    for (int64_t n : {1, 5}) {
+      INFO("type=" << dtype_info(t).name << " n=" << n);
+      auto wb = test_weight_rows(t, 100 + static_cast<uint64_t>(t), out, in);
+      Tensor w = q_tensor(t, wb, in, out);
+      auto x = rnd(static_cast<size_t>(n * in), g);
+      const TestActs acts = test_quantize_acts(t, x.data(), n, in);
+      const QuantActs qa = acts.view();
+      std::vector<float> ref(static_cast<size_t>(n * out)), got(ref.size());
+      cpu::matmul_rows(w, x.data(), ref.data(), n, 0, out, &qa);
+      be.matmul(w, x.data(), got.data(), n);
+      CHECK(std::memcmp(ref.data(), got.data(), ref.size() * sizeof(float)) == 0);
+    }
 }
 
+// Embedding lookup in a quantized table returns exactly dequantize_row of the selected rows, for every
+// quantized type.
 TEST_CASE("cpu backend quantized embed dequantizes the row", "[cpu_backend][quant]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
-  std::mt19937 g(6);
-  for (DType t : {DType::Q8_0, DType::Q4_0}) {
-    auto wb = test_quantize_rows(t, rnd(64 * 5, g), 64);
-    Tensor tab = q_tensor(t, wb, 64, 5);
+  const int64_t d = 512;
+  for (DType t : kQuantTypes) {
+    INFO("type=" << dtype_info(t).name);
+    auto wb = test_weight_rows(t, 7 + static_cast<uint64_t>(t), 5, d);
+    Tensor tab = q_tensor(t, wb, d, 5);
     std::vector<int32_t> ids = {3, 0};
-    std::vector<float> got(128), want(64);
+    std::vector<float> got(2 * d), want(d);
     be.embed(tab, ids, got.data());
-    const size_t rb = 64 / 32 * (t == DType::Q4_0 ? 18 : 34);
-    dequantize_row(t, wb.data() + 3 * rb, want.data(), 64);
-    CHECK(std::memcmp(got.data(), want.data(), 64 * sizeof(float)) == 0);
-    dequantize_row(t, wb.data(), want.data(), 64);
-    CHECK(std::memcmp(got.data() + 64, want.data(), 64 * sizeof(float)) == 0);
+    const size_t rb = static_cast<size_t>(tab.row_bytes());
+    dequantize_row(t, wb.data() + 3 * rb, want.data(), d);
+    CHECK(std::memcmp(got.data(), want.data(), d * sizeof(float)) == 0);
+    dequantize_row(t, wb.data(), want.data(), d);
+    CHECK(std::memcmp(got.data() + d, want.data(), d * sizeof(float)) == 0);
   }
 }
 
+namespace {
+// A weight-type combination for matmul_multi, with the expected number of activation-quantization passes.
+struct MixCase {
+  std::vector<DType> types;
+  uint64_t quantizations;  // expected activation-quantization passes for one matmul_multi call
+};
+}  // namespace
+
+// Weights of different types sharing one input (as in real k-quant files, where e.g. attn_v differs from
+// attn_q) must give the same bits as separate calls, and x must be quantized once per activation type:
+// {Q4_K,Q4_K,Q6_K} once, {Q5_1,Q5_1,Q8_0} twice.
+TEST_CASE("matmul_multi with mixed weight types equals separate matmuls", "[cpu_backend][quant]") {
+  ThreadPool pool(4);
+  cpu::CpuBackend be(pool);
+  std::mt19937 g(21);
+  const int64_t in = 512, out = 24;
+  be.reserve({64, 4, 5, in});
+  const MixCase cases[] = {{{DType::Q4_K, DType::Q4_K, DType::Q6_K}, 1},
+                           {{DType::Q5_1, DType::Q5_1, DType::Q8_0}, 2},
+                           {{DType::Q5_0, DType::Q8_0, DType::Q5_0}, 1},
+                           {{DType::F32, DType::Q4_K}, 1}};
+  for (const MixCase& c : cases)
+    for (int64_t n : {1, 5}) {
+      INFO("first type=" << dtype_info(c.types[0]).name << " n=" << n);
+      std::vector<std::vector<uint8_t>> bytes;
+      std::vector<Tensor> ts;
+      for (size_t i = 0; i < c.types.size(); ++i) {
+        if (c.types[i] == DType::F32) {
+          const auto f = rnd(static_cast<size_t>(in * out), g);
+          bytes.emplace_back(reinterpret_cast<const uint8_t*>(f.data()),
+                             reinterpret_cast<const uint8_t*>(f.data() + f.size()));
+        } else {
+          bytes.push_back(test_weight_rows(c.types[i], 300 + i, out, in));
+        }
+      }
+      for (size_t i = 0; i < c.types.size(); ++i) ts.push_back(q_tensor(c.types[i], bytes[i], in, out));
+      std::vector<const Tensor*> ws;
+      for (const Tensor& t : ts) ws.push_back(&t);
+      const auto x = rnd(static_cast<size_t>(n * in), g);
+      std::vector<std::vector<float>> want(ts.size(), std::vector<float>(static_cast<size_t>(n * out))), got = want;
+      std::vector<float*> ys;
+      for (auto& v : got) ys.push_back(v.data());
+      for (size_t i = 0; i < ts.size(); ++i) be.matmul(ts[i], x.data(), want[i].data(), n);
+      const uint64_t before = be.quantize_calls();
+      be.matmul_multi(ws, x.data(), ys, n);
+      CHECK(be.quantize_calls() - before == c.quantizations);
+      for (size_t i = 0; i < ts.size(); ++i)
+        CHECK(std::memcmp(want[i].data(), got[i].data(), want[i].size() * sizeof(float)) == 0);
+    }
+}
+
+// After reserve(), repeated quantized matmuls (single and mixed-type groups) neither allocate nor grow the
+// activation scratch.
 TEST_CASE("cpu backend reserve prevents quantized matmul allocation", "[cpu_backend][quant]") {
   ThreadPool pool(4);
   cpu::CpuBackend be(pool);
   std::mt19937 g(8);
-  const int64_t in = 64, out = 24;
+  const int64_t in = 512, out = 24;
   be.reserve({64, 4, 4, in});
-  auto wb = test_quantize_rows(DType::Q4_0, rnd(static_cast<size_t>(in * out), g), in);
-  Tensor w = q_tensor(DType::Q4_0, wb, in, out);
-  auto x = rnd(static_cast<size_t>(in), g);
-  float* y = be.alloc(out);
+  float* y = be.alloc(4 * out);
+  const auto x = rnd(static_cast<size_t>(4 * in), g);
   const size_t live = be.live_allocations(), cap = be.quant_scratch_capacity();
-  for (int i = 0; i < 64; ++i) {
-    be.matmul(w, x.data(), y, 1);
-    REQUIRE(be.live_allocations() == live);
-    REQUIRE(be.quant_scratch_capacity() == cap);
+  for (DType t : {DType::Q4_0, DType::Q4_K, DType::Q5_1}) {
+    auto wb = test_weight_rows(t, 9, out, in);
+    Tensor w = q_tensor(t, wb, in, out);
+    for (int i = 0; i < 64; ++i) {
+      be.matmul(w, x.data(), y, 1);
+      REQUIRE(be.live_allocations() == live);
+      REQUIRE(be.quant_scratch_capacity() == cap);
+    }
+  }
+  auto w4 = test_weight_rows(DType::Q4_K, 1, out, in), w6 = test_weight_rows(DType::Q6_K, 2, out, in),
+       w8 = test_weight_rows(DType::Q8_0, 3, out, in), w51 = test_weight_rows(DType::Q5_1, 4, out, in);
+  const Tensor t4 = q_tensor(DType::Q4_K, w4, in, out), t6 = q_tensor(DType::Q6_K, w6, in, out),
+               t8 = q_tensor(DType::Q8_0, w8, in, out), t51 = q_tensor(DType::Q5_1, w51, in, out);
+  const Tensor* ws[] = {&t4, &t6, &t8, &t51};
+  float* y2 = be.alloc(4 * out);
+  float* y3 = be.alloc(4 * out);
+  float* y4 = be.alloc(4 * out);
+  float* const ys[] = {y, y2, y3, y4};
+  const size_t live2 = be.live_allocations(), cap2 = be.quant_scratch_capacity();
+  for (int64_t n : {1, 4}) {
+    be.matmul_multi(ws, x.data(), ys, n);
+    REQUIRE(be.live_allocations() == live2);
+    REQUIRE(be.quant_scratch_capacity() == cap2);
   }
 }
 
+// F16 and F32 embedding lookups, including a width that is not a multiple of 8 (vector tail), equal the
+// scalar embed.
 TEST_CASE("cpu backend F16 and F32 embed match the scalar oracle for several ids", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);
@@ -207,6 +303,7 @@ TEST_CASE("cpu backend F16 and F32 embed match the scalar oracle for several ids
 // Debug/ASan builds abort in the DCHECK at the top of CpuBackend::embed before the throw is reached,
 // so the release-mode range check is only testable under NDEBUG.
 #ifdef NDEBUG
+// A token id outside the table is an Error (release builds only; debug builds abort in a DCHECK first).
 TEST_CASE("cpu backend embed throws on out-of-range token ids", "[cpu_backend]") {
   ThreadPool pool(1);
   cpu::CpuBackend be(pool);

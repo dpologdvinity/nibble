@@ -12,6 +12,7 @@
 namespace nibble::cli {
 namespace {
 
+// Prints the `run` usage line to stderr.
 void usage() {
   std::fputs(
       "usage: nibble run -m <model.gguf> (-p <prompt> | -f <prompt-file>) "
@@ -20,6 +21,7 @@ void usage() {
       stderr);
 }
 
+// Whole-file read for -f; a prompt file is passed to the model byte for byte.
 std::string read_file(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
   if (!f) throw Error("cannot read prompt file '" + path + "'");
@@ -30,6 +32,9 @@ std::string read_file(const std::string& path) {
 
 }  // namespace
 
+// Flow: parse flags (exit 2 on any problem), load the model, open a Session, stream the reply to stdout
+// as it is generated, then print timing statistics to stderr. The prompt is sent as raw text with special
+// token parsing enabled, i.e. no chat template is applied (use `chat` for that).
 int cmd_run(int argc, char** argv) {
   std::string prompt, prompt_file;
   bool have_p = false, have_f = false;
@@ -43,8 +48,16 @@ int cmd_run(int argc, char** argv) {
       return 2;
     }
     const char* v = argv[++i];
-    if (a == "-p") { prompt = v; have_p = true; continue; }
-    if (a == "-f") { prompt_file = v; have_f = true; continue; }
+    if (a == "-p") {
+      prompt = v;
+      have_p = true;
+      continue;
+    }
+    if (a == "-f") {
+      prompt_file = v;
+      have_f = true;
+      continue;
+    }
     if (parse_common(a, v, ca) == FlagResult::BadValue) {
       std::fprintf(stderr, "error: bad value '%s' for %s\n", v, a.c_str());
       usage();

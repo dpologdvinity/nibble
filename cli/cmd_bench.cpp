@@ -30,6 +30,7 @@
 namespace nibble::cli {
 namespace {
 
+// Prints the `bench` usage line to stderr.
 void usage() {
   std::fputs(
       "usage: nibble bench -m <model.gguf> [-t <list=1, e.g. 1,2,4,8>] [-p <prompt tokens=512>] "
@@ -37,6 +38,7 @@ void usage() {
       stderr);
 }
 
+// Strict decimal parse of an integer in [lo, 1000000].
 bool parse_int(const char* s, long lo, long& out) {
   char* end = nullptr;
   errno = 0;
@@ -46,6 +48,7 @@ bool parse_int(const char* s, long lo, long& out) {
   return true;
 }
 
+// Parses a comma-separated thread-count list such as "1,2,4,8".
 bool parse_threads(const std::string& s, std::vector<int>& out) {
   size_t i = 0;
   while (true) {
@@ -58,14 +61,17 @@ bool parse_threads(const std::string& s, std::vector<int>& out) {
   }
 }
 
+// 1-minute load average (path overridable through NIBBLE_LOADAVG_PATH for tests).
 double load1() {
-  const char* p = std::getenv("NIBBLE_LOADAVG_PATH");
+  // getenv is safe here: the CLI is single-threaded when this runs (before any thread pool exists).
+  const char* p = std::getenv("NIBBLE_LOADAVG_PATH");  // NOLINT(concurrency-mt-unsafe)
   std::ifstream f(p ? p : "/proc/loadavg");
   double v = 0;
   f >> v;
   return v;
 }
 
+// Current UTC time, ISO 8601.
 std::string iso_now() {
   const std::time_t t = std::time(nullptr);
   char b[32];
@@ -75,48 +81,67 @@ std::string iso_now() {
   return b;
 }
 
-struct Stats { double med, mn, mx; };
+// Median, minimum and maximum of the timed repetitions.
+struct Stats {
+  double med, mn, mx;
+};
 Stats stats(std::vector<double> v) {
   std::sort(v.begin(), v.end());
   const size_t n = v.size();
   return {n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2, v.front(), v.back()};
 }
 
+// Escapes a string for embedding in a JSON string literal.
 std::string json_escape(const std::string& s) {
   std::string o;
   for (const unsigned char ch : s) {
-    if (ch == '"' || ch == '\\') { o += '\\'; o += static_cast<char>(ch); }
-    else if (ch < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", ch); o += b; }
-    else o += static_cast<char>(ch);
+    if (ch == '"' || ch == '\\') {
+      o += '\\';
+      o += static_cast<char>(ch);
+    } else if (ch < 0x20) {
+      char b[8];
+      std::snprintf(b, sizeof b, "\\u%04x", ch);
+      o += b;
+    } else
+      o += static_cast<char>(ch);
   }
   return o;
 }
 
+// Output sink: prints one table row and, when --out is given, appends a JSON line with the same numbers
+// plus provenance (commit, kernel set, model file name, load average, date).
 struct Sink {
   std::string model, date;
   double load;
   std::ofstream out;
   void emit(const char* test, int threads, int reps, Stats s, const char* unit) {
-    std::printf("%-8s %7d %10.2f %10.2f %10.2f  %s%s\n", test, threads, s.med, s.mn, s.mx, unit, std::string(unit) == "GB/s" ? " (1e9 bytes/s)" : "");
+    std::printf("%-8s %7d %10.2f %10.2f %10.2f  %s%s\n", test, threads, s.med, s.mn, s.mx, unit,
+                std::string(unit) == "GB/s" ? " (1e9 bytes/s)" : "");
     std::fflush(stdout);
     if (!out.is_open()) return;
     char nums[256];
-    const int len = std::snprintf(nums, sizeof nums,
-                  "\",\"threads\":%d,\"reps\":%d,\"median\":%.4f,\"min\":%.4f,\"max\":%.4f,\"unit\":\"%s\","
-                  "\"load1\":%.2f,\"date\":\"%s\"}\n",
-                  threads, reps, s.med, s.mn, s.mx, unit, load, date.c_str());
+    const int len =
+        std::snprintf(nums, sizeof nums,
+                      "\",\"threads\":%d,\"reps\":%d,\"median\":%.4f,\"min\":%.4f,\"max\":%.4f,\"unit\":\"%s\","
+                      "\"load1\":%.2f,\"date\":\"%s\"}\n",
+                      threads, reps, s.med, s.mn, s.mx, unit, load, date.c_str());
     if (len < 0 || len >= static_cast<int>(sizeof nums)) throw Error("bench: JSON line too long");
-    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"kernels\":\"" << simd::kernel_set() << "\",\"model\":\"" << json_escape(model)
-        << "\",\"test\":\"" << test << nums;
+    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"kernels\":\"" << simd::kernel_set()
+        << "\",\"model\":\"" << json_escape(model) << "\",\"test\":\"" << test << nums;
     out.flush();
   }
 };
 
 using clock_ = std::chrono::steady_clock;
+// Seconds elapsed since a.
 double secs(clock_::time_point a) { return std::chrono::duration<double>(clock_::now() - a).count(); }
 
 }  // namespace
 
+// Measures prompt processing (ppN: one N-token forward from position 0) and token generation (tgN: N greedy
+// single-token steps after a 1-token prompt) for each thread count, `-r` timed repetitions after one
+// untimed warm-up, and optionally a memory-bandwidth probe. It drives the Transformer directly so tokenizer
+// and sampler costs are excluded. `--version` prints the build's git SHA (used by tests and bench_final.sh).
 int cmd_bench(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--version") {
     std::puts(NIBBLE_GIT_SHA);
@@ -128,7 +153,10 @@ int cmd_bench(int argc, char** argv) {
   bool mem = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
-    if (a == "--mem") { mem = true; continue; }
+    if (a == "--mem") {
+      mem = true;
+      continue;
+    }
     const bool known = a == "-m" || a == "-t" || a == "-p" || a == "-n" || a == "-r" || a == "--out";
     if (!known || i + 1 >= argc) {
       std::fprintf(stderr, known ? "error: flag '%s' needs a value\n" : "error: unknown argument '%s'\n", a.c_str());
@@ -137,12 +165,19 @@ int cmd_bench(int argc, char** argv) {
     }
     const char* v = argv[++i];
     bool ok = true;
-    if (a == "-m") model_path = v;
-    else if (a == "--out") out_path = v;
-    else if (a == "-t") { threads.clear(); ok = parse_threads(v, threads); }
-    else if (a == "-p") ok = parse_int(v, 1, p);
-    else if (a == "-n") ok = parse_int(v, 1, n);
-    else ok = parse_int(v, 1, r);
+    if (a == "-m")
+      model_path = v;
+    else if (a == "--out")
+      out_path = v;
+    else if (a == "-t") {
+      threads.clear();
+      ok = parse_threads(v, threads);
+    } else if (a == "-p")
+      ok = parse_int(v, 1, p);
+    else if (a == "-n")
+      ok = parse_int(v, 1, n);
+    else
+      ok = parse_int(v, 1, r);
     if (!ok) {
       std::fprintf(stderr, "error: bad value '%s' for %s\n", v, a.c_str());
       usage();
@@ -211,7 +246,8 @@ int cmd_bench(int argc, char** argv) {
   if (mem) {
     const int t = *std::max_element(threads.begin(), threads.end());
     ThreadPool pool(t);
-    sink.emit("membw", t, static_cast<int>(r), stats(bench::measure_membw(pool, bench::membw_default_bytes(), static_cast<int>(r))), "GB/s");
+    sink.emit("membw", t, static_cast<int>(r),
+              stats(bench::measure_membw(pool, bench::membw_default_bytes(), static_cast<int>(r))), "GB/s");
   }
   return 0;
 }

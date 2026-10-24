@@ -1,3 +1,7 @@
+// Tests for Chat and the chat-template layer (src/chat.cpp): the exact token sequences each format produces
+// (ChatML for Qwen, Llama 3 headers, Zephyr for TinyLlama), protection against users injecting control
+// tokens, multi-turn KV-cache reuse, the context-full and "chat context lost" behaviours, and parity with
+// prompts rendered by llama.cpp. Uses tiny synthetic models with the real formats' control tokens.
 #include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -19,19 +23,22 @@ using Catch::Matchers::Equals;
 using Catch::Matchers::MessageMatches;
 
 namespace {
+// Writes the GGUF bytes to a unique temporary file, deleted on destruction.
 struct TmpModel {
   std::filesystem::path path;
   explicit TmpModel(const std::vector<uint8_t>& bytes) {
     static std::atomic<int> n{0};
     path = std::filesystem::temp_directory_path() /
            ("nibble_chat_" + std::to_string(::getpid()) + "_" + std::to_string(n++) + ".gguf");
-    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()),
-                                                static_cast<std::streamsize>(bytes.size()));
+    std::ofstream(path, std::ios::binary)
+        .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
   }
   ~TmpModel() { std::filesystem::remove(path); }
 };
 
 // A tiny qwen2 model with the ChatML control tokens, plus its tokenizer.
+// A tiny qwen2 model with the ChatML control tokens (<|im_start|> = 261, <|im_end|> = 262) written to a temp
+// file, together with its tokenizer, plus helpers to encode expected token sequences.
 struct ChatFixture {
   std::vector<uint8_t> bytes;
   TmpModel file;
@@ -79,10 +86,14 @@ struct ChatFixture {
   }
 };
 
+// Callback that accepts every piece.
 auto keep_going = [](std::string_view) { return true; };
+// Greedy, 3 tokens: deterministic and short.
 const GenParams kGreedy{.max_tokens = 3, .temperature = 0, .seed = 7};
+// The default Qwen system prompt, as documented on Chat.
 const char* kQwenDefault = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.";
 
+// What a turn looked like from the outside: reply text and token counts, comparable with ==
 struct Turn {
   std::string text;
   int64_t n_prompt, n_gen;
@@ -100,12 +111,17 @@ Turn fresh_turns(const ChatFixture& fx, const std::vector<std::vector<PromptPart
   for (size_t i = 0; i < turns.size(); ++i) {
     gp.append = i > 0;
     text.clear();
-    s.generate(turns[i], gp, [&](std::string_view p) { text += p; return true; });
+    s.generate(turns[i], gp, [&](std::string_view p) {
+      text += p;
+      return true;
+    });
   }
   return last_turn(s, text);
 }
 }  // namespace
 
+// The format comes from markers in the model's chat template, falling back to ChatML for qwen2; a template
+// always beats the architecture; unknown templates throw with the (escaped) architecture name.
 TEST_CASE("chat: format chosen by architecture", "[chat]") {
   CHECK(chat_format_for("qwen2", "") == ChatFormat::ChatML);
   CHECK(chat_format_for("llama", "x <|im_start|> y") == ChatFormat::ChatML);
@@ -120,6 +136,7 @@ TEST_CASE("chat: format chosen by architecture", "[chat]") {
                        MessageMatches(Equals("no chat template for architecture ev\\nil\\x1b")));
 }
 
+// Sanity check of the fixture: ids of the ChatML markers and that <|im_end|> is an end-of-generation token.
 TEST_CASE("chat: tiny chatml tokenizer", "[chat]") {
   ChatFixture fx;
   CHECK(fx.tk.n_vocab() == 263);
@@ -133,6 +150,8 @@ TEST_CASE("chat: tiny chatml tokenizer", "[chat]") {
 // Token-sequence checks: chat_turn's parts must encode to exactly the expected
 // IDs, and the Chat turn must prefill that many tokens and give the same greedy
 // reply as a plain generate of those parts.
+// The first ChatML turn encodes to the exact expected token ids, a Chat prefills exactly that many tokens,
+// and its greedy reply equals a plain generate of the same parts.
 TEST_CASE("chat: first turn token sequence", "[chat]") {
   ChatFixture fx;
   const std::vector<int32_t> want = fx.enc({{"<|im_start|>system\n", true},
@@ -152,7 +171,10 @@ TEST_CASE("chat: first turn token sequence", "[chat]") {
     // Stale context from an earlier generate must not leak into the first turn.
     s.generate("abc", {.max_tokens = 2, .temperature = 0}, keep_going);
     std::string out;
-    c.send("hello", kGreedy, [&](std::string_view p) { out += p; return true; });
+    c.send("hello", kGreedy, [&](std::string_view p) {
+      out += p;
+      return true;
+    });
     chat = last_turn(s, out);
     CHECK(s.n_prompt_tokens() == static_cast<int64_t>(want.size()));
     CHECK(s.n_past() == static_cast<int64_t>(want.size()) + s.n_generated());
@@ -160,6 +182,7 @@ TEST_CASE("chat: first turn token sequence", "[chat]") {
   CHECK(chat == fresh_turns(fx, {parts}));
 }
 
+// An empty system prompt selects Qwen's default system message.
 TEST_CASE("chat: empty system prompt uses qwen default", "[chat]") {
   ChatFixture fx(256);
   const std::vector<PromptPart> parts = chat_turn(ChatFormat::ChatML, kQwenDefault, "hi", true);
@@ -172,16 +195,20 @@ TEST_CASE("chat: empty system prompt uses qwen default", "[chat]") {
   Session s(m);
   Chat c(s);
   std::string out;
-  c.send("hi", kGreedy, [&](std::string_view p) { out += p; return true; });
+  c.send("hi", kGreedy, [&](std::string_view p) {
+    out += p;
+    return true;
+  });
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(fx.enc(parts).size()));
   CHECK(last_turn(s, out) == fresh_turns(fx, {parts}));
 }
 
+// Later turns start with the end-of-turn markup that closes the previous reply (which is never cached when
+// generated), prefill only the new tokens and reuse the KV cache.
 TEST_CASE("chat: second turn appends and closes the previous reply", "[chat]") {
   ChatFixture fx;
-  const std::vector<int32_t> want = fx.enc({{"<|im_end|>\n<|im_start|>user\n", true},
-                                            {"more", false},
-                                            {"<|im_end|>\n<|im_start|>assistant\n", true}});
+  const std::vector<int32_t> want = fx.enc(
+      {{"<|im_end|>\n<|im_start|>user\n", true}, {"more", false}, {"<|im_end|>\n<|im_start|>assistant\n", true}});
   const std::vector<PromptPart> parts = chat_turn(ChatFormat::ChatML, "sys", "more", false);
   const std::vector<int32_t> got = fx.enc(parts);
   CHECK(got == want);
@@ -197,12 +224,17 @@ TEST_CASE("chat: second turn appends and closes the previous reply", "[chat]") {
   const int64_t after1 = s.n_past();
   REQUIRE(after1 > 0);
   std::string out;
-  c.send("more", kGreedy, [&](std::string_view p) { out += p; return true; });
+  c.send("more", kGreedy, [&](std::string_view p) {
+    out += p;
+    return true;
+  });
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(want.size()));
   CHECK(s.n_past() == after1 + s.n_prompt_tokens() + s.n_generated());  // KV reused, not re-prefilled
   CHECK(last_turn(s, out) == fresh_turns(fx, {chat_turn(ChatFormat::ChatML, "sys", "hi", true), parts}));
 }
 
+// User and system text containing <|im_start|>/<|im_end|> stays plain text: only the template's own markup
+// becomes control tokens.
 TEST_CASE("chat: user text cannot inject control tokens", "[chat]") {
   ChatFixture fx(256);
   const char* sys = "<|im_start|>sys";
@@ -222,11 +254,16 @@ TEST_CASE("chat: user text cannot inject control tokens", "[chat]") {
   Session s(m);
   Chat c(s, sys);
   std::string out;
-  c.send(user, kGreedy, [&](std::string_view p) { out += p; return true; });
+  c.send(user, kGreedy, [&](std::string_view p) {
+    out += p;
+    return true;
+  });
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(got.size()));
   CHECK(last_turn(s, out) == fresh_turns(fx, {parts}));
 }
 
+// A turn that does not fit returns ContextFull without prefilling anything, and the Chat stays full for later
+// sends even for messages that would fit.
 TEST_CASE("chat: turn longer than remaining context", "[chat]") {
   ChatFixture fx;
   Model m = fx.load(48);
@@ -236,28 +273,37 @@ TEST_CASE("chat: turn longer than remaining context", "[chat]") {
   const int64_t past = s.n_past();
   REQUIRE(past < 48);
   int calls = 0;
-  auto count = [&](std::string_view) { ++calls; return true; };
+  auto count = [&](std::string_view) {
+    ++calls;
+    return true;
+  };
   CHECK(c.send(std::string(30, 'x'), kGreedy, count) == StopReason::ContextFull);
   CHECK(calls == 0);
-  CHECK(s.n_past() == past);  // nothing prefilled
+  CHECK(s.n_past() == past);                                      // nothing prefilled
   CHECK(c.send("y", kGreedy, count) == StopReason::ContextFull);  // sticky, even though it would fit
   CHECK(calls == 0);
   CHECK(s.n_past() == past);
 }
 
+// If even the first turn does not fit, ContextFull is returned without calling the callback or changing the
+// cache.
 TEST_CASE("chat: first turn too long is context full", "[chat]") {
   ChatFixture fx;
   Model m = fx.load(16);
   Session s(m);
   Chat c(s);
   int calls = 0;
-  auto count = [&](std::string_view) { ++calls; return true; };
+  auto count = [&](std::string_view) {
+    ++calls;
+    return true;
+  };
   CHECK(c.send("hi", kGreedy, count) == StopReason::ContextFull);
   CHECK(c.send("hi", kGreedy, count) == StopReason::ContextFull);
   CHECK(calls == 0);
   CHECK(s.n_past() == 0);
 }
 
+// A reply that fills the context ends with ContextFull and every later send returns ContextFull at once.
 TEST_CASE("chat: generation filling the context is sticky", "[chat]") {
   ChatFixture fx;
   Model m = fx.load(40);
@@ -268,10 +314,15 @@ TEST_CASE("chat: generation filling the context is sticky", "[chat]") {
   REQUIRE(r == StopReason::ContextFull);
   CHECK(s.n_past() == 40);
   int calls = 0;
-  CHECK(c.send("y", kGreedy, [&](std::string_view) { ++calls; return true; }) == StopReason::ContextFull);
+  CHECK(c.send("y", kGreedy, [&](std::string_view) {
+    ++calls;
+    return true;
+  }) == StopReason::ContextFull);
   CHECK(calls == 0);
 }
 
+// Cancelling a reply keeps the delivered token cached, and the next send continues the conversation with the
+// correct markup.
 TEST_CASE("chat: cancel then continue", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -298,6 +349,7 @@ TEST_CASE("chat: cancel then continue", "[chat]") {
   CHECK(s.n_past() == p1 + g1 + p2 + g2);
 }
 
+// GenParams::append is overridden by Chat: the first turn always starts fresh and later turns always append.
 TEST_CASE("chat: append flag in params is ignored", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -314,6 +366,8 @@ TEST_CASE("chat: append flag in params is ignored", "[chat]") {
   CHECK(s.n_past() == past + s.n_prompt_tokens() + s.n_generated());
 }
 
+// A send that returns before prefilling (max_tokens <= 0) does not count as the first turn, so the system
+// prompt is still sent next time.
 TEST_CASE("chat: max_tokens <= 0 on the first turn keeps it the first turn", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -326,17 +380,19 @@ TEST_CASE("chat: max_tokens <= 0 on the first turn keeps it the first turn", "[c
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(fx.enc(chat_turn(ChatFormat::ChatML, "s", "hi", true)).size()));
 }
 
+// Using a moved-from Chat throws; the moved-to one works.
 TEST_CASE("chat: moved-from chat throws", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
   Session s(m);
   Chat a(s, "s");
   Chat b = std::move(a);
-  CHECK_THROWS_MATCHES(a.send("hi", kGreedy, keep_going), Error,
-                       MessageMatches(Equals("use of moved-from Chat")));
+  CHECK_THROWS_MATCHES(a.send("hi", kGreedy, keep_going), Error, MessageMatches(Equals("use of moved-from Chat")));
   CHECK(b.send("hi", kGreedy, keep_going) == StopReason::MaxTokens);
 }
 
+// Calling Session::generate directly between sends desynchronizes the cache, so the next send throws "chat
+// context lost" before doing anything.
 TEST_CASE("chat: direct session use between sends is context lost", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -345,12 +401,17 @@ TEST_CASE("chat: direct session use between sends is context lost", "[chat]") {
   c.send("hi", kGreedy, keep_going);
   s.generate("abc", {.max_tokens = 2, .temperature = 0}, keep_going);
   int calls = 0;
-  CHECK_THROWS_MATCHES(c.send("more", kGreedy, [&](std::string_view) { ++calls; return true; }), Error,
-                       MessageMatches(Equals("chat context lost")));
+  CHECK_THROWS_MATCHES(c.send("more", kGreedy,
+                              [&](std::string_view) {
+                                ++calls;
+                                return true;
+                              }),
+                       Error, MessageMatches(Equals("chat context lost")));
   CHECK(calls == 0);
   CHECK_THROWS_MATCHES(c.send("more", kGreedy, keep_going), Error, MessageMatches(Equals("chat context lost")));
 }
 
+// An appended direct generate is detected as well.
 TEST_CASE("chat: direct append between sends is context lost", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -362,6 +423,8 @@ TEST_CASE("chat: direct append between sends is context lost", "[chat]") {
   CHECK_THROWS_MATCHES(c.send("more", kGreedy, keep_going), Error, MessageMatches(Equals("chat context lost")));
 }
 
+// Even direct calls that leave n_past unchanged (max_tokens 0, or one that throws) are detected, through the
+// Session's call counter.
 TEST_CASE("chat: a direct generate that leaves n_past unchanged is context lost", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -369,9 +432,7 @@ TEST_CASE("chat: a direct generate that leaves n_past unchanged is context lost"
   Chat c(s, "s");
   c.send("hi", kGreedy, keep_going);
   const int64_t past = s.n_past();
-  SECTION("max_tokens 0 with append") {
-    s.generate("", {.max_tokens = 0, .append = true}, keep_going);
-  }
+  SECTION("max_tokens 0 with append") { s.generate("", {.max_tokens = 0, .append = true}, keep_going); }
   SECTION("a call that throws") {
     CHECK_THROWS_AS(s.generate("x", {.temperature = -1.0f, .append = true}, keep_going), Error);
   }
@@ -379,6 +440,8 @@ TEST_CASE("chat: a direct generate that leaves n_past unchanged is context lost"
   CHECK_THROWS_MATCHES(c.send("more", kGreedy, keep_going), Error, MessageMatches(Equals("chat context lost")));
 }
 
+// An exception from the user callback propagates, but the cache is consistent so the conversation can
+// continue.
 TEST_CASE("chat: callback exception is not context lost", "[chat]") {
   ChatFixture fx(256);
   Model m = fx.load();
@@ -389,9 +452,7 @@ TEST_CASE("chat: callback exception is not context lost", "[chat]") {
     c.send("hi", kGreedy, keep_going);
     CHECK_THROWS_AS(c.send("more", kGreedy, boom), std::runtime_error);
   }
-  SECTION("on the first turn") {
-    CHECK_THROWS_AS(c.send("hi", kGreedy, boom), std::runtime_error);
-  }
+  SECTION("on the first turn") { CHECK_THROWS_AS(c.send("hi", kGreedy, boom), std::runtime_error); }
   // The prompt was prefilled before the throw, so the conversation continues: the
   // next send is a later turn appended to the cache as it was left.
   const int64_t past = s.n_past();
@@ -401,6 +462,7 @@ TEST_CASE("chat: callback exception is not context lost", "[chat]") {
   CHECK(s.n_past() == past + s.n_prompt_tokens() + s.n_generated());
 }
 
+// Invalid sampling parameters throw before any state changes; the conversation continues.
 TEST_CASE("chat: invalid params leave the conversation intact", "[chat]") {
   ChatFixture fx;
   Model m = fx.load();
@@ -417,6 +479,8 @@ TEST_CASE("chat: invalid params leave the conversation intact", "[chat]") {
 namespace {
 // A tiny llama-arch model whose template selects a format. Llama 3: BPE with the header
 // Control tokens. Zephyr: SentencePiece (as TinyLlama), where only </s> is Control.
+// Options for a tiny llama-architecture model whose chat template selects Llama 3 (BPE with header control
+// tokens) or Zephyr (SentencePiece, where only </s> is a control token).
 TinyModelOpts llama_opts(const char* tmpl, bool spm) {
   TinyModelOpts mo;
   mo.arch = "llama";
@@ -433,6 +497,7 @@ const char* kLlama3Tmpl = "{{ '<|start_header_id|>' }}";
 const char* kZephyrTmpl = "{{ '<|assistant|>' }}";
 }  // namespace
 
+// A model whose template matches no known format cannot be chatted with.
 TEST_CASE("chat: unknown template throws at construction", "[chat]") {
   ChatFixture fx(llama_opts("{{ nothing }}", false));
   Model m = fx.load();
@@ -440,9 +505,12 @@ TEST_CASE("chat: unknown template throws at construction", "[chat]") {
   CHECK_THROWS_MATCHES(Chat(s), Error, MessageMatches(Equals("no chat template for architecture llama")));
 }
 
+// Exact Llama 3 token sequences for first and later turns, including the default knowledge-cutoff/date
+// header, and the cache accounting.
 TEST_CASE("chat: llama3 token sequences", "[chat]") {
   ChatFixture fx(llama_opts(kLlama3Tmpl, false));
-  const int32_t sh = fx.tk.find("<|start_header_id|>"), eh = fx.tk.find("<|end_header_id|>"), eot = fx.tk.find("<|eot_id|>");
+  const int32_t sh = fx.tk.find("<|start_header_id|>"), eh = fx.tk.find("<|end_header_id|>"),
+                eot = fx.tk.find("<|eot_id|>");
   REQUIRE(sh >= 0);
   REQUIRE(eot >= 0);
   auto t = [&](std::string_view x) { return fx.tk.encode(x, false); };
@@ -451,10 +519,22 @@ TEST_CASE("chat: llama3 token sequences", "[chat]") {
     for (auto& x : v) o.insert(o.end(), x.begin(), x.end());
     return o;
   };
-  const std::vector<int32_t> first = cat({{sh}, t("system"), {eh}, t("\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n"),
-                                          t("be brief"), {eot, sh}, t("user"), {eh}, t("\n\n"), t("hello"), {eot, sh},
-                                          t("assistant"), {eh}, t("\n\n")});
-  const std::vector<int32_t> later = cat({{eot, sh}, t("user"), {eh}, t("\n\n"), t("more"), {eot, sh}, t("assistant"), {eh}, t("\n\n")});
+  const std::vector<int32_t> first = cat({{sh},
+                                          t("system"),
+                                          {eh},
+                                          t("\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n"),
+                                          t("be brief"),
+                                          {eot, sh},
+                                          t("user"),
+                                          {eh},
+                                          t("\n\n"),
+                                          t("hello"),
+                                          {eot, sh},
+                                          t("assistant"),
+                                          {eh},
+                                          t("\n\n")});
+  const std::vector<int32_t> later =
+      cat({{eot, sh}, t("user"), {eh}, t("\n\n"), t("more"), {eot, sh}, t("assistant"), {eh}, t("\n\n")});
   CHECK(fx.enc(chat_turn(ChatFormat::Llama3, "be brief", "hello", true)) == first);
   CHECK(fx.enc(chat_turn(ChatFormat::Llama3, "", "more", false)) == later);
   Model m = fx.load();
@@ -468,6 +548,8 @@ TEST_CASE("chat: llama3 token sequences", "[chat]") {
   CHECK(s.n_past() == past + s.n_prompt_tokens() + s.n_generated());
 }
 
+// Llama 3 trims ASCII whitespace around system and user text (like the Jinja |trim) but keeps inner
+// whitespace; ChatML and Zephyr do not trim.
 TEST_CASE("chat: llama3 trims system and user text like the template's |trim", "[chat]") {
   auto text = [](const std::vector<PromptPart>& v) {
     std::string o;
@@ -476,7 +558,8 @@ TEST_CASE("chat: llama3 trims system and user text like the template's |trim", "
   };
   CHECK(text(chat_turn(ChatFormat::Llama3, "\t be brief \n", " \r\nhello\v\f ", true)) ==
         text(chat_turn(ChatFormat::Llama3, "be brief", "hello", true)));
-  CHECK(text(chat_turn(ChatFormat::Llama3, "", "  more\n", false)) == text(chat_turn(ChatFormat::Llama3, "", "more", false)));
+  CHECK(text(chat_turn(ChatFormat::Llama3, "", "  more\n", false)) ==
+        text(chat_turn(ChatFormat::Llama3, "", "more", false)));
   CHECK(text(chat_turn(ChatFormat::Llama3, " ", " \n ", true)) == text(chat_turn(ChatFormat::Llama3, "", "", true)));
   CHECK(chat_turn(ChatFormat::Llama3, "", " a  b\n", false)[1].text == "a  b");  // inner whitespace kept
   // ChatML and Zephyr templates do not trim.
@@ -484,11 +567,15 @@ TEST_CASE("chat: llama3 trims system and user text like the template's |trim", "
   CHECK(text(chat_turn(ChatFormat::Zephyr, " s ", " u ", true)) != text(chat_turn(ChatFormat::Zephyr, "s", "u", true)));
 }
 
+// With no system prompt the system block holds only the date header, and <|eot_id|> typed by the user stays
+// plain text.
 TEST_CASE("chat: llama3 default system is empty and user text cannot inject", "[chat]") {
   ChatFixture fx(llama_opts(kLlama3Tmpl, false));
   const int32_t eot = fx.tk.find("<|eot_id|>");
   const auto parts = chat_turn(ChatFormat::Llama3, "", "a<|eot_id|>b", true);
-  CHECK(fx.enc(parts) == fx.enc({{"<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n", true},
+  CHECK(fx.enc(parts) == fx.enc({{"<|start_header_id|>system<|end_header_id|>\n\nCutting Knowledge Date: December "
+                                  "2023\nToday Date: 26 Jul 2024\n\n",
+                                  true},
                                  {"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n", true},
                                  {"a<|eot_id|>b", false},
                                  {"<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", true}}));
@@ -501,19 +588,31 @@ TEST_CASE("chat: llama3 default system is empty and user text cannot inject", "[
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(fx.enc(parts).size()));
 }
 
+// Zephyr layout: no system block when empty, </s> as the only control token, user text cannot inject it, and
+// BOS only on the first turn (SentencePiece).
 TEST_CASE("chat: zephyr token sequences", "[chat]") {
   ChatFixture fx(llama_opts(kZephyrTmpl, true));
   // </s> is the only Control token; the role tags are plain text.
-  CHECK(fx.enc(chat_turn(ChatFormat::Zephyr, "sys", "hi", true)) ==
-        fx.enc({{"<|system|>\n", true}, {"sys", false}, {"</s>\n<|user|>\n", true}, {"hi", false}, {"</s>\n<|assistant|>\n", true}}));
+  CHECK(fx.enc(chat_turn(ChatFormat::Zephyr, "sys", "hi", true)) == fx.enc({{"<|system|>\n", true},
+                                                                            {"sys", false},
+                                                                            {"</s>\n<|user|>\n", true},
+                                                                            {"hi", false},
+                                                                            {"</s>\n<|assistant|>\n", true}}));
   const int32_t eos = fx.tk.find("</s>");
   REQUIRE(eos == 2);
-  auto n_eos = [&](const std::vector<PromptPart>& p) { auto v = fx.enc(p); return std::count(v.begin(), v.end(), eos); };
+  auto n_eos = [&](const std::vector<PromptPart>& p) {
+    auto v = fx.enc(p);
+    return std::count(v.begin(), v.end(), eos);
+  };
   CHECK(n_eos(chat_turn(ChatFormat::Zephyr, "sys", "hi", true)) == 2);
-  CHECK(n_eos(chat_turn(ChatFormat::Zephyr, "", "hi", true)) == 1);  // no system block
+  CHECK(n_eos(chat_turn(ChatFormat::Zephyr, "", "hi", true)) == 1);       // no system block
   CHECK(n_eos(chat_turn(ChatFormat::Zephyr, "", "a</s>b", false)) == 2);  // injected one stays text
   // literal checks on the text, independent of chat_turn
-  auto join = [](const std::vector<PromptPart>& p) { std::string o; for (auto& x : p) o += x.text; return o; };
+  auto join = [](const std::vector<PromptPart>& p) {
+    std::string o;
+    for (auto& x : p) o += x.text;
+    return o;
+  };
   CHECK(join(chat_turn(ChatFormat::Zephyr, "S", "U", true)) == "<|system|>\nS</s>\n<|user|>\nU</s>\n<|assistant|>\n");
   CHECK(join(chat_turn(ChatFormat::Zephyr, "", "U", true)) == "<|user|>\nU</s>\n<|assistant|>\n");
   CHECK(join(chat_turn(ChatFormat::Zephyr, "S", "U2", false)) == "</s>\n<|user|>\nU2</s>\n<|assistant|>\n");
@@ -527,6 +626,8 @@ TEST_CASE("chat: zephyr token sequences", "[chat]") {
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(fx.enc(chat_turn(ChatFormat::Zephyr, "", "hi", false)).size()));
 }
 
+// A special token's text never spans two prompt parts: "</" + "s>" is plain text, while the same text in one
+// part is the control token.
 TEST_CASE("generate: control text split across two parts stays plain", "[chat]") {
   ChatFixture fx(llama_opts(kZephyrTmpl, true));
   Model m = fx.load();
@@ -541,16 +642,21 @@ TEST_CASE("generate: control text split across two parts stays plain", "[chat]")
   CHECK(s.n_prompt_tokens() == static_cast<int64_t>(special.size()) + 1);
 }
 
+// The concatenated markup and text of the first turn equals the prompt files rendered by llama.cpp's own
+// chat-template engine for each format.
 TEST_CASE("chat_turn text matches the llama.cpp-rendered prompt files", "[chat]") {
   const std::string root = NIBBLE_SOURCE_DIR;
-  const struct { ChatFormat f; const char* file; } cases[] = {
-      {ChatFormat::Llama3, "chat_llama3"}, {ChatFormat::Zephyr, "chat_zephyr"}, {ChatFormat::ChatML, "chat"}};
+  const struct {
+    ChatFormat f;
+    const char* file;
+  } cases[] = {{ChatFormat::Llama3, "chat_llama3"}, {ChatFormat::Zephyr, "chat_zephyr"}, {ChatFormat::ChatML, "chat"}};
   for (const auto& c : cases) {
     std::ifstream in(root + "/tests/e2e/prompts/" + c.file + ".txt", std::ios::binary);
     REQUIRE(in);
     const std::string want((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::string got;
-    for (const auto& p : chat_turn(c.f, "You are a helpful assistant.", "Name three primary colors.", true)) got += p.text;
+    for (const auto& p : chat_turn(c.f, "You are a helpful assistant.", "Name three primary colors.", true))
+      got += p.text;
     INFO(c.file);
     CHECK(got == want);
   }

@@ -24,6 +24,7 @@ using u8 = unsigned char;
 
 // ---- F32 / F16 ----
 
+// Tile shape: 4 weight rows x 3 tokens.
 constexpr int kRf = 4, kTf = 3;  // 12 accumulators + 3 activation vectors + 1 weight vector = 16 ymm
 
 // y[t*out + r] for R rows from w and T tokens from x.
@@ -51,14 +52,15 @@ void tile_f(const typename L::T* w, int64_t in, const float* x, float* y, int64_
     }
 }
 
+// Covers [rb, re) x [0, n) with full tiles, delegating the leftover rows/tokens to the row kernel so every
+// output element sees the same operation order as in the row path.
 template <class L>
 void gemm_ft(const Tensor& wt, const float* x, float* y, int64_t n, int64_t rb, int64_t re) {
   const auto* w = static_cast<const typename L::T*>(wt.data);
   const int64_t in = wt.ne[0], out = wt.rows();
   const int64_t re_full = rb + (re - rb) / kRf * kRf, n_full = n / kTf * kTf;
   for (int64_t t = 0; t < n_full; t += kTf)
-    for (int64_t r = rb; r < re_full; r += kRf)
-      tile_f<L, kRf, kTf>(w + r * in, in, x + t * in, y + t * out + r, out);
+    for (int64_t r = rb; r < re_full; r += kRf) tile_f<L, kRf, kTf>(w + r * in, in, x + t * in, y + t * out + r, out);
   if (n_full < n) matmul_rows_f(wt, x + n_full * in, y + n_full * out, n - n_full, rb, re_full);
   if (re_full < re) matmul_rows_f(wt, x, y, n, re_full, re);
 }
@@ -68,6 +70,7 @@ void gemm_ft(const Tensor& wt, const float* x, float* y, int64_t n, int64_t rb, 
 // group of 8 tokens, so a block's lanes end up holding each token's exact integer block sum without any
 // horizontal reduction. dot() writes those sums for TV vectors of 8 tokens.
 
+// Raw fp16 scale at the start of a block.
 uint16_t load_d(const u8* blk) {
   uint16_t d;
   std::memcpy(&d, blk, 2);
@@ -78,12 +81,17 @@ __m256i bcast_group(const u8* blk, int g) {  // weight quants 4g..4g+3 of a Q8_0
   std::memcpy(&v, blk + 2 + 4 * g, 4);
   return _mm256_set1_epi32(v);
 }
-__m256i load_group(const BlockQ8_0x8* a, int g) { return _mm256_load_si256(reinterpret_cast<const __m256i*>(a->qs[g])); }
+// Group g (4 quants per token, 8 tokens) / the per-token quant sums of a packed activation block.
+__m256i load_group(const BlockQ8_0x8* a, int g) {
+  return _mm256_load_si256(reinterpret_cast<const __m256i*>(a->qs[g]));
+}
 __m256i load_sum(const BlockQ8_0x8* a) { return _mm256_load_si256(reinterpret_cast<const __m256i*>(a->sum)); }
 
 // Q4_0 nibbles (0..15 = w + 8): qs[4g'..4g'+3] holds elements 4g'..4g'+3 (low nibbles) and 16+4g'.. (high),
 // i.e. groups g' and g' + 4.
 // dot() handles R rows (stride rowb bytes) at once so the R*TV accumulation chains interleave.
+// Weight trait for Q4_0 tiles. With AVX-VNNI the unsigned nibbles are multiplied directly and the +8 bias is
+// removed through the activation sums; without it, maddubs accumulates in int16 (bounded, see below).
 struct Q4 {
   static constexpr size_t kBytes = sizeof(BlockQ4_0);
   template <int R, int TV>
@@ -126,6 +134,7 @@ struct Q4 {
   // quant.cpp: float(s) * dw * da.
   static __m256 scale(__m256 s, __m256 dw, __m256 da) { return _mm256_mul_ps(_mm256_mul_ps(s, dw), da); }
 };
+// Weight trait for Q8_0 tiles (signed x signed via the sign trick, or VNNI with a +128 bias correction).
 struct Q8 {
   static constexpr size_t kBytes = sizeof(BlockQ8_0);
   template <int R, int TV>
@@ -188,6 +197,8 @@ void tile_q(const u8* w, size_t rowb, const BlockQ8_0x8* a, int64_t nb, float* y
 
 constexpr int kRq = 4, kTVq = 2;  // 4 rows x 16 tokens
 
+// Covers [rb, re) x [0, n): tiles of 16 tokens (two packed vectors), then a final tile of 8 if needed; 4-row
+// tiles with 1-row tiles for the remainder.
 template <class W>
 void gemm_qt(const Tensor& wt, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t rb, int64_t re) {
   const auto* w = static_cast<const u8*>(wt.data);
@@ -209,6 +220,7 @@ void gemm_qt(const Tensor& wt, const BlockQ8_0x8* xp, float* y, int64_t n, int64
 
 }  // namespace
 
+// Type dispatch for the float GEMM.
 void gemm_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
   if (w.type == DType::F32)
     gemm_ft<LoadF32>(w, x, y, n, row_begin, row_end);
@@ -216,6 +228,8 @@ void gemm_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_be
     gemm_ft<LoadF16>(w, x, y, n, row_begin, row_end);
 }
 
+// Transposes groups of 8 tokens' blocks into the interleaved BlockQ8_0x8 layout and precomputes each
+// token's scale (as float) and quant sum; padding tokens in the last group are zero.
 void pack_q8_0_x8(const BlockQ8_0* xq, int64_t n, int64_t nb, BlockQ8_0x8* xp) {
   const int64_t tiles = (n + 7) / 8;
   std::memset(static_cast<void*>(xp), 0, static_cast<size_t>(tiles * nb) * sizeof(BlockQ8_0x8));
@@ -232,6 +246,7 @@ void pack_q8_0_x8(const BlockQ8_0* xq, int64_t n, int64_t nb, BlockQ8_0x8* xp) {
     }
 }
 
+// Type dispatch for the quantized GEMM (Q4_0 and Q8_0 weights only).
 void gemm_q(const Tensor& w, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
   if (w.type == DType::Q4_0)
     gemm_qt<Q4>(w, xp, y, n, row_begin, row_end);

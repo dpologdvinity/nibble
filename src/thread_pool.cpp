@@ -1,3 +1,6 @@
+// Thread pool implementation. Synchronization: a 32-bit generation counter announces each parallel_for; each
+// worker acknowledges every generation through pending_ (so the caller knows nobody still reads the shared
+// fields), and sleeps on the counter (futex) after a short spin.
 #include "thread_pool.h"
 
 #include <algorithm>
@@ -22,6 +25,7 @@ namespace {
 // short serial gaps between them; this covers the gaps but not the time between tokens.
 constexpr auto kSpin = std::chrono::microseconds(50);
 
+// Polite busy-wait hint (PAUSE on x86, a yield elsewhere).
 inline void cpu_relax() {
 #if defined(__x86_64__) || defined(__i386__)
   _mm_pause();
@@ -32,6 +36,7 @@ inline void cpu_relax() {
 
 }  // namespace
 
+// Spawns the workers; exception-safe against a failure part-way through (see comment below).
 ThreadPool::ThreadPool(int n_threads) : n_threads_(n_threads) {
   if (n_threads <= 0) throw Error("ThreadPool: n_threads must be positive, got " + std::to_string(n_threads));
   // If creating a worker throws, the destructor will not run: stop and join the ones
@@ -47,17 +52,22 @@ ThreadPool::ThreadPool(int n_threads) : n_threads_(n_threads) {
   }
 }
 
+// Sets stop_, wakes everyone with a new generation and joins.
 ThreadPool::~ThreadPool() {
   stop_.store(true);
   publish();
   for (auto& t : workers_) t.join();
 }
 
+// Announces a new generation. The seq_cst increment/load pair with the sleepers' counter closes the race
+// where a worker decides to sleep just as the generation changes.
 void ThreadPool::publish() {
   generation_.fetch_add(1);  // seq_cst: pairs with the sleeper's sleeping_ increment (Dekker)
   if (sleeping_.load() > 0) generation_.notify_all();
 }
 
+// Claims chunks with an atomic fetch_add until none are left. The first exception thrown by fn is kept and
+// the remaining chunks are skipped.
 void ThreadPool::run_chunks() {
   for (;;) {
     int64_t b = next_.fetch_add(chunk_, std::memory_order_relaxed);
@@ -73,6 +83,8 @@ void ThreadPool::run_chunks() {
   }
 }
 
+// Wait (spin ~50 us, then futex-sleep) for a generation newer than the last seen one; exit on stop_;
+// otherwise help with the chunks and report completion.
 void ThreadPool::worker_loop() {
   uint32_t seen = 0;  // generation_ starts at 0; a worker that starts late must still ack the first call
   for (;;) {
@@ -97,8 +109,9 @@ void ThreadPool::worker_loop() {
   }
 }
 
-void ThreadPool::parallel_for(int64_t n, int64_t chunk,
-                              FunctionRef<void(int64_t, int64_t)> fn) {
+// With no workers the loop runs inline. Otherwise: publish the job fields, wake the workers, work alongside
+// them, spin until every worker has acknowledged, then rethrow any captured exception.
+void ThreadPool::parallel_for(int64_t n, int64_t chunk, FunctionRef<void(int64_t, int64_t)> fn) {
   if (n <= 0) return;
   if (chunk < 1) chunk = 1;
   if (workers_.empty()) {
@@ -114,12 +127,17 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
   run_chunks();
   // Every worker acks every generation, so none can still touch fn_ or the fields once this returns.
   for (unsigned i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {  // unsigned: wraps, no UB
-    if (i % 1024 == 0) std::this_thread::yield(); else cpu_relax();
+    if (i % 1024 == 0)
+      std::this_thread::yield();
+    else
+      cpu_relax();
   }
   // The acquire above orders every worker's error_ write before this read.
   if (error_) std::rethrow_exception(std::exchange(error_, nullptr));
 }
 
+// See the header comment for the policy. Reads <cpu_dir>/cpuN/cpu_capacity for every cpuN directory; any
+// unreadable value, or all values equal, means "no usable topology information" and selects the 2/3 rule.
 int default_thread_count(const std::filesystem::path& cpu_dir, unsigned hw) {
   const int fallback = std::max(1, static_cast<int>(hw) * 2 / 3);
   std::vector<long> caps;

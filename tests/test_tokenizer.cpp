@@ -1,3 +1,7 @@
+// Unit tests for the tokenizer (src/tokenizer/tokenizer.cpp) on tiny synthetic vocabularies built in memory
+// by tests/tiny_model.h, so they run without any model file. Covers byte-level BPE (Qwen2/Llama 3 style) and
+// SentencePiece ("llama" model) behaviour, special tokens, BOS/EOG handling and metadata validation. The
+// end-to-end comparison against llama.cpp on real vocabularies lives in test_tokenizer_golden.cpp.
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -13,11 +17,14 @@ using nibble::tok::Tokenizer;
 using Ids = std::vector<int32_t>;
 using Catch::Matchers::ContainsSubstring;
 
+// Builds a tokenizer from a synthetic GGUF described by the options (the bytes live only for this call
+// because the Tokenizer copies everything it needs).
 static Tokenizer make(const TinyTokOpts& o = {}) {
   auto bytes = tiny_tokenizer_gguf(o);
   return Tokenizer::from_gguf(nibble::gguf::File::parse(bytes));  // File non-owning; Tokenizer copies
 }
 
+// Basic merging with the three tiny-vocabulary merges, plus vocabulary size and lookup by text.
 TEST_CASE("bpe merges", "[tokenizer]") {
   auto t = make();
   CHECK(t.encode("hel", false) == Ids{257});
@@ -29,6 +36,7 @@ TEST_CASE("bpe merges", "[tokenizer]") {
   CHECK(t.find("nope") == -1);
 }
 
+// Merge rank decides order: with "e l" ranked before "h e", "hel" becomes h + el.
 TEST_CASE("merge priority", "[tokenizer]") {
   TinyTokOpts o;
   o.merges = {"e l", "h e"};
@@ -37,6 +45,8 @@ TEST_CASE("merge priority", "[tokenizer]") {
   CHECK(t.encode("hel", false) == Ids{'h', 261});
 }
 
+// Special-token text is matched only when parsing is enabled; decoding hides Control tokens but prints
+// UserDefined ones; the EOS id is end-of-generation.
 TEST_CASE("specials", "[tokenizer]") {
   auto t = make();
   CHECK(t.encode("a<|ctl|>b", true) == Ids{'a', 259, 'b'});
@@ -50,44 +60,100 @@ TEST_CASE("specials", "[tokenizer]") {
   CHECK_FALSE(t.is_eog(260));
 }
 
+// Invalid UTF-8 input, an unsupported pre-tokenizer or tokenizer model, a short token_type array and
+// malformed merges each fail with an Error naming the problem.
 TEST_CASE("tokenizer errors", "[tokenizer]") {
   auto t = make();
   CHECK_THROWS_AS(t.encode("\xFF", false), nibble::Error);
-  { TinyTokOpts o; o.pre = "deepseek-llm"; CHECK_THROWS_WITH(make(o), ContainsSubstring("deepseek-llm")); }
-  { TinyTokOpts o; o.model = "bert"; CHECK_THROWS_WITH(make(o), ContainsSubstring("bert")); }
-  { TinyTokOpts o; o.drop_type = true; CHECK_THROWS_AS(make(o), nibble::Error); }
-  { TinyTokOpts o; o.merges = {"h zz"}; CHECK_THROWS_WITH(make(o), ContainsSubstring("zz")); }
-  { TinyTokOpts o; o.merges = {"nospace"}; CHECK_THROWS_AS(make(o), nibble::Error); }
+  {
+    TinyTokOpts o;
+    o.pre = "deepseek-llm";
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("deepseek-llm"));
+  }
+  {
+    TinyTokOpts o;
+    o.model = "bert";
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bert"));
+  }
+  {
+    TinyTokOpts o;
+    o.drop_type = true;
+    CHECK_THROWS_AS(make(o), nibble::Error);
+  }
+  {
+    TinyTokOpts o;
+    o.merges = {"h zz"};
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("zz"));
+  }
+  {
+    TinyTokOpts o;
+    o.merges = {"nospace"};
+    CHECK_THROWS_AS(make(o), nibble::Error);
+  }
 }
 
+// The llama3-family pre-tokenizer names are accepted and default to add_bos; the metadata can override it;
+// add_bos without a BOS id, or an out-of-range or mistyped BOS id, is rejected (llama.cpp would silently use
+// id 11).
 TEST_CASE("llama-bpe pre accepted, bos and add_bos", "[tokenizer]") {
-  { auto t = make(); CHECK(t.bos() == -1); CHECK_FALSE(t.add_bos()); }  // qwen2 default
+  {
+    auto t = make();
+    CHECK(t.bos() == -1);
+    CHECK_FALSE(t.add_bos());
+  }  // qwen2 default
   for (const char* pre : {"llama-bpe", "llama3", "llama-v3"}) {
-    TinyTokOpts o; o.pre = pre; o.bos = 260;
+    TinyTokOpts o;
+    o.pre = pre;
+    o.bos = 260;
     auto t = make(o);
     CHECK(t.bos() == 260);
     CHECK(t.add_bos());  // llama.cpp default for LLAMA3 pre
     o.add_bos = 0;
     CHECK_FALSE(make(o).add_bos());
   }
-  { TinyTokOpts o; o.add_bos = 1; o.bos = 260; CHECK(make(o).add_bos()); }
+  {
+    TinyTokOpts o;
+    o.add_bos = 1;
+    o.bos = 260;
+    CHECK(make(o).add_bos());
+  }
   // add_bos without a bos id: llama.cpp would use id 11; fail closed instead.
-  { TinyTokOpts o; o.add_bos = 1; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing")); }
-  { TinyTokOpts o; o.pre = "llama-bpe"; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing")); }
-  { TinyTokOpts o; o.bos = 9999; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id")); }
-  { TinyTokOpts o; o.bos_as_string = true; CHECK_THROWS_AS(make(o), nibble::Error); }
+  {
+    TinyTokOpts o;
+    o.add_bos = 1;
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing"));
+  }
+  {
+    TinyTokOpts o;
+    o.pre = "llama-bpe";
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing"));
+  }
+  {
+    TinyTokOpts o;
+    o.bos = 9999;
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id"));
+  }
+  {
+    TinyTokOpts o;
+    o.bos_as_string = true;
+    CHECK_THROWS_AS(make(o), nibble::Error);
+  }
 }
 
+// Llama 3 groups digits by three and, with ignore_merges, a pre-token that is itself a vocabulary entry skips
+// the BPE merges.
 TEST_CASE("llama3 digits split in 3 and whole-word vocab hit", "[tokenizer]") {
   TinyTokOpts o;
   o.pre = "llama-bpe";
   o.bos = 260;
   o.extra = {"12", "123"};  // 261, 262
   auto t = make(o);
-  CHECK(t.encode("12345", false) == Ids{262, '4' , '5'});
+  CHECK(t.encode("12345", false) == Ids{262, '4', '5'});
   CHECK(t.encode("1234", false) == Ids{262, '4'});
 }
 
+// Tokens whose text is a known end-of-generation marker (<|eot_id|>, </s>, ...) count as EOG even when they
+// are ordinary tokens in the file.
 TEST_CASE("eog by name", "[tokenizer]") {
   TinyTokOpts o;
   o.extra = {"<|eot_id|>", "<|eom_id|>", "</s>", "<|end_of_text|>", "plain"};  // 261..265
@@ -96,6 +162,8 @@ TEST_CASE("eog by name", "[tokenizer]") {
   CHECK_FALSE(t.is_eog(265));
 }
 
+// EOG name hits are promoted to Control like llama.cpp does: special parsing matches them and decoding prints
+// nothing for them.
 TEST_CASE("eog name hits are promoted to control", "[tokenizer]") {
   TinyTokOpts o;
   o.extra = {"</s>", "<|fim_pad|>", "plain"};  // 261..263, all Normal-typed in the GGUF
@@ -113,6 +181,7 @@ TEST_CASE("eog name hits are promoted to control", "[tokenizer]") {
 // ---- SentencePiece ("llama") ----
 static const std::string SP = "\xE2\x96\x81";  // U+2581
 
+// Builds the synthetic SentencePiece tokenizer (optionally overriding add_space_prefix).
 static Tokenizer make_spm(int add_space_prefix = -1) {
   TinyTokOpts o;
   o.spm = true;
@@ -120,6 +189,8 @@ static Tokenizer make_spm(int add_space_prefix = -1) {
   return make(o);
 }
 
+// SentencePiece prepends a space, writes spaces as U+2581 and merges by score; add_space_prefix = false drops
+// the prefix.
 TEST_CASE("spm space prefix and escaping", "[tokenizer][spm]") {
   auto t = make_spm();
   CHECK(t.add_bos());
@@ -130,23 +201,28 @@ TEST_CASE("spm space prefix and escaping", "[tokenizer][spm]") {
   CHECK(np.encode("hi", false) == Ids{np.find("hi")});
 }
 
+// When two merges compete for a symbol, the higher-scored one wins and the loser disappears.
 TEST_CASE("spm highest score merge wins", "[tokenizer][spm]") {
   auto t = make_spm();
   // SP+"a" (-20) is a candidate but "ab" (-1) outranks it; "bc" (-2) is then gone.
   CHECK(t.encode("abc", false) == Ids{t.find(SP), t.find("ab"), t.find("c")});
 }
 
+// Characters missing from the vocabulary are emitted as <0xXX> byte tokens.
 TEST_CASE("spm byte fallback", "[tokenizer][spm]") {
   auto t = make_spm();
   CHECK(t.encode("\xC3\xA9", false) == Ids{t.find(SP), 3 + 0xC3, 3 + 0xA9});
 }
 
+// The space prefix is added again after a special token, as llama.cpp does.
 TEST_CASE("spm space prefix after special", "[tokenizer][spm]") {
   auto t = make_spm();
   CHECK(t.encode("a</s>b", true) == Ids{t.find(SP + "a"), 2, t.find(SP + "b")});
   CHECK(t.encode("</s>", true) == Ids{2});
 }
 
+// Decoding unescapes U+2581 to a space, hides Control tokens, and byte tokens decode to single bytes that
+// Utf8Streamer reassembles.
 TEST_CASE("spm decode", "[tokenizer][spm]") {
   auto t = make_spm();
   CHECK(t.decode_token(t.find(SP + "hi")) == " hi");
@@ -159,6 +235,7 @@ TEST_CASE("spm decode", "[tokenizer][spm]") {
   CHECK(s == "\xC3\xA9");
 }
 
+// A score array of the wrong length or element type is rejected.
 TEST_CASE("spm rejects bad scores", "[tokenizer][spm]") {
   TinyTokOpts o;
   o.spm = true;
@@ -168,12 +245,14 @@ TEST_CASE("spm rejects bad scores", "[tokenizer][spm]") {
   CHECK_THROWS_WITH(make(o), ContainsSubstring("scores is not a float array"));
 }
 
+// Equal-scoring overlapping merges resolve to the leftmost pair first (llama-vocab.cpp:99-101).
 TEST_CASE("spm equal-score tie goes to the lowest left index", "[tokenizer][spm]") {
   auto t = make_spm();
   // "ca" and "ab" both score -1 and overlap; llama-vocab.cpp:99-101 merges the left one first.
   CHECK(t.encode("cab", false) == Ids{t.find(SP), t.find("ca"), t.find("b")});
 }
 
+// Byte fallback order: <0xXX> token, else a one-character token holding the byte, else the unknown token.
 TEST_CASE("spm byte fallback via 1-char string token and via unk", "[tokenizer][spm]") {
   TinyTokOpts o;
   o.spm = true;
@@ -184,6 +263,7 @@ TEST_CASE("spm byte fallback via 1-char string token and via unk", "[tokenizer][
   CHECK(make(o).encode("\xC3\xA9", false) == Ids{make(o).find(SP), 0, 3 + 0xA9});
 }
 
+// NaN or infinite scores are rejected at load, with the element index in the message.
 TEST_CASE("spm rejects non-finite scores", "[tokenizer][spm]") {
   TinyTokOpts o;
   o.spm = true;
@@ -193,9 +273,12 @@ TEST_CASE("spm rejects non-finite scores", "[tokenizer][spm]") {
   CHECK_THROWS_WITH(make(o), ContainsSubstring("tokenizer.ggml.scores[6]"));
 }
 
+// Property test: splitting a string into parts at random cut points (never inside a special token) gives the
+// same tokens as encoding it whole, for both tokenizer families.
 TEST_CASE("encode_parts equals encode of the whole string", "[tokenizer]") {
   // Splits never land inside a special token's text.
-  const std::vector<std::string> bpe_corpus = {"hello world", "hel he", "a b  c", "he<tool>llo", "x\xC3\xA9y z", "hello"};
+  const std::vector<std::string> bpe_corpus = {"hello world", "hel he",       "a b  c",
+                                               "he<tool>llo", "x\xC3\xA9y z", "hello"};
   const std::vector<std::string> spm_corpus = {"hi there", "abc ab", "the re", "ab ab", "hi<unk>x", "\xC3\xA9 cab"};
   std::mt19937 rng(7);
   for (bool spm : {false, true}) {
@@ -217,7 +300,8 @@ TEST_CASE("encode_parts equals encode of the whole string", "[tokenizer]") {
           }
         if (bad) continue;
         std::vector<nibble::tok::Part> parts;
-        for (size_t k = 0; k + 1 < cuts.size(); ++k) parts.push_back({std::string_view(s).substr(cuts[k], cuts[k + 1] - cuts[k]), false});
+        for (size_t k = 0; k + 1 < cuts.size(); ++k)
+          parts.push_back({std::string_view(s).substr(cuts[k], cuts[k + 1] - cuts[k]), false});
         INFO((spm ? "spm '" : "bpe '") << s << "' with " << parts.size() << " parts");
         CHECK(t.encode_parts(parts, false) == want);
       }
@@ -225,6 +309,7 @@ TEST_CASE("encode_parts equals encode of the whole string", "[tokenizer]") {
   }
 }
 
+// The `special` flag applies per part: Control text in a non-special part stays plain text.
 TEST_CASE("encode_parts special flag is per part", "[tokenizer][spm]") {
   auto t = make_spm();
   using P = nibble::tok::Part;
@@ -234,6 +319,8 @@ TEST_CASE("encode_parts special flag is per part", "[tokenizer][spm]") {
   CHECK(t.encode_parts(b, false) == Ids{t.find(SP + "a"), 2, t.find(SP + "b")});
 }
 
+// BOS is prepended once when requested and wanted, never doubled if the text already starts with the BOS
+// token, and not added for models without it.
 TEST_CASE("encode_parts adds bos once", "[tokenizer][spm]") {
   using P = nibble::tok::Part;
   auto t = make_spm();
