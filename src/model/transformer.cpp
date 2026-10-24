@@ -41,16 +41,15 @@ void dcheck_heads(int64_t heads, int64_t want_heads, int64_t head_dim, int64_t w
                     pos0 + n <= n_ctx,
                 "%s: heads=%lld head_dim=%lld vs config heads=%lld head_dim=%lld, row width %lld; "
                 "pos0=%lld + n=%lld vs n_ctx=%lld",
-                op, static_cast<long long>(heads), static_cast<long long>(head_dim),
-                static_cast<long long>(want_heads), static_cast<long long>(want_head_dim),
-                static_cast<long long>(row_width), static_cast<long long>(pos0), static_cast<long long>(n),
-                static_cast<long long>(n_ctx));
+                op, static_cast<long long>(heads), static_cast<long long>(head_dim), static_cast<long long>(want_heads),
+                static_cast<long long>(want_head_dim), static_cast<long long>(row_width), static_cast<long long>(pos0),
+                static_cast<long long>(n), static_cast<long long>(n_ctx));
 }
 
 // add/silu_mul: the element count must be rows x the activation width.
 void dcheck_count(int64_t count, int64_t rows, int64_t width, [[maybe_unused]] const char* op) {
-  NIBBLE_DCHECK(count == rows * width, "%s: count=%lld vs rows=%lld x width=%lld", op,
-                static_cast<long long>(count), static_cast<long long>(rows), static_cast<long long>(width));
+  NIBBLE_DCHECK(count == rows * width, "%s: count=%lld vs rows=%lld x width=%lld", op, static_cast<long long>(count),
+                static_cast<long long>(rows), static_cast<long long>(width));
 }
 
 }  // namespace
@@ -148,7 +147,7 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
   const int64_t n = static_cast<int64_t>(tokens.size()), hd = c_.head_dim, E = c_.n_embd;
   const int64_t kvw = c_.n_kv_heads * hd;
   const RopeParams rp{c_.rope_base, c_.rope_neox,
-                       w_.rope_freqs ? static_cast<const float*>(w_.rope_freqs->data) : nullptr};
+                      w_.rope_freqs ? static_cast<const float*>(w_.rope_freqs->data) : nullptr};
   const int64_t Q = c_.n_heads * hd;
   NIBBLE_DCHECK(n > 0 && n <= max_batch_ && pos0 >= 0 && pos0 + n <= n_ctx_,
                 "run_chunk: n=%lld pos0=%lld vs max_batch=%lld n_ctx=%lld", static_cast<long long>(n),
@@ -178,8 +177,7 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
     const Tensor* const qkv_w[] = {&L.wq, &L.wk, &L.wv};
     float* const qkv_y[] = {q_, kc, vc};
     be_.matmul_multi(qkv_w, h_, qkv_y, n);
-    NIBBLE_DCHECK(L.bq.has_value() == c_.qkv_bias && L.bk.has_value() == c_.qkv_bias &&
-                      L.bv.has_value() == c_.qkv_bias,
+    NIBBLE_DCHECK(L.bq.has_value() == c_.qkv_bias && L.bk.has_value() == c_.qkv_bias && L.bv.has_value() == c_.qkv_bias,
                   "qkv bias presence vs config qkv_bias=%d", static_cast<int>(c_.qkv_bias));
     if (L.bq) {
       dcheck_vec(*L.bq, Q, "add_bias attn_q.bias");
@@ -194,13 +192,13 @@ void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
       be_.add_bias(vc, *L.bv, n);
     }
     dcheck_heads(c_.n_heads, c_.n_heads, hd, c_.head_dim, Q, pos0, n, n_ctx_, "rope q");
-    be_.rope(q_, n, c_.n_heads, hd, pos0, rp);   // q_ is [n, n_heads * head_dim] (checked via attn_q)
+    be_.rope(q_, n, c_.n_heads, hd, pos0, rp);  // q_ is [n, n_heads * head_dim] (checked via attn_q)
     dcheck_heads(c_.n_kv_heads, c_.n_kv_heads, hd, c_.head_dim, kvw, pos0, n, n_ctx_, "rope k");
     be_.rope(kc, n, c_.n_kv_heads, hd, pos0, rp);  // kc is [n, n_kv_heads * head_dim] (checked via attn_k)
     dcheck_heads(c_.n_heads, c_.n_heads, hd, c_.head_dim, Q, pos0, n, n_ctx_, "attention q heads");
     dcheck_heads(c_.n_kv_heads, c_.n_kv_heads, hd, c_.head_dim, kvw, pos0, n, n_ctx_, "attention kv heads");
-    be_.attention(q_, k_[static_cast<size_t>(l)], v_[static_cast<size_t>(l)], attn_, n, pos0, c_.n_heads,
-                  c_.n_kv_heads, hd);
+    be_.attention(q_, k_[static_cast<size_t>(l)], v_[static_cast<size_t>(l)], attn_, n, pos0, c_.n_heads, c_.n_kv_heads,
+                  hd);
     dcheck_matmul(be_, L.wo, Q, E, "attn_output");
     be_.matmul(L.wo, attn_, h_, n);
     dcheck_count(n * E, n, c_.n_embd, "add attn residual");

@@ -24,7 +24,8 @@ int main(int argc, char** argv) {
   };
   TinyModelOpts kq;
   kq.kquant_dims = true;
-  kq.tensor_types = {{"token_embd.weight", nibble::DType::Q5_0}, {"blk.0.attn_v.weight", nibble::DType::Q6_K},
+  kq.tensor_types = {{"token_embd.weight", nibble::DType::Q5_0},
+                     {"blk.0.attn_v.weight", nibble::DType::Q6_K},
                      {"blk.1.ffn_down.weight", nibble::DType::Q6_K}};
   return write("valid.gguf", GgufWriter::sample()) && write("tiny.gguf", tiny_model_gguf(1)) &&
                  write("tiny-kq.gguf", tiny_model_gguf(1, nibble::DType::Q4_K, false, 259, kq))

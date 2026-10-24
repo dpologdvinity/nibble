@@ -54,6 +54,4 @@ TEST_CASE("pretokenize concatenates to input on corpus", "[pretokenize]") {
 }
 
 // A digit-run limit below 1 is a programming error reported as nibble::Error.
-TEST_CASE("pretokenize rejects bad digit run", "[pretokenize]") {
-  CHECK_THROWS_AS(pretokenize("1", 0), nibble::Error);
-}
+TEST_CASE("pretokenize rejects bad digit run", "[pretokenize]") { CHECK_THROWS_AS(pretokenize("1", 0), nibble::Error); }

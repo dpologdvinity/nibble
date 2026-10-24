@@ -152,9 +152,7 @@ int nearest_int(float fval) {
 void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
   const auto* p = static_cast<const unsigned char*>(src);
   switch (t) {
-    case DType::F32:
-      std::memcpy(dst, src, static_cast<size_t>(n) * sizeof(float));
-      return;
+    case DType::F32: std::memcpy(dst, src, static_cast<size_t>(n) * sizeof(float)); return;
     case DType::F16:
       for (int64_t i = 0; i < n; ++i) {
         uint16_t h;
@@ -231,7 +229,8 @@ void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
         int8_t a[256];
         expand_k(blk, a);
         const float d = fp16_to_fp32(blk.d);
-        for (int i = 0; i < 256; ++i) dst[b * kQK_K + i] = d * static_cast<float>(blk.scales[i / 16]) * static_cast<float>(a[i]);
+        for (int i = 0; i < 256; ++i)
+          dst[b * kQK_K + i] = d * static_cast<float>(blk.scales[i / 16]) * static_cast<float>(a[i]);
       }
       return;
   }
@@ -410,10 +409,15 @@ float dot_q6_K_q8_K(const BlockQ6_K* w, const BlockQ8_K* act, int64_t n_blocks) 
 // Mirrors ggml's vec_dot_type table for the supported weight types.
 ActType act_type(DType w) {
   switch (w) {
-    case DType::Q4_0: case DType::Q5_0: case DType::Q8_0: return ActType::Q8_0;
+    case DType::Q4_0:
+    case DType::Q5_0:
+    case DType::Q8_0: return ActType::Q8_0;
     case DType::Q5_1: return ActType::Q8_1;
-    case DType::Q4_K: case DType::Q5_K: case DType::Q6_K: return ActType::Q8_K;
-    case DType::F32: case DType::F16: return ActType::None;
+    case DType::Q4_K:
+    case DType::Q5_K:
+    case DType::Q6_K: return ActType::Q8_K;
+    case DType::F32:
+    case DType::F16: return ActType::None;
   }
   throw Error("act_type: unsupported dtype");
 }

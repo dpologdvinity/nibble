@@ -50,7 +50,8 @@ class Reader {
   void skip_string(const char* what) {
     uint64_t len = read<uint64_t>(what);
     if (len > remaining()) {
-      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " + what);
+      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " +
+                  what);
     }
     pos_ += static_cast<size_t>(len);
   }
@@ -59,7 +60,8 @@ class Reader {
   std::string read_string(const char* what) {
     uint64_t len = read<uint64_t>(what);
     if (len > remaining()) {
-      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " + what);
+      throw Error(std::string("gguf: string length ") + std::to_string(len) + " exceeds file size while reading " +
+                  what);
     }
     std::string s(reinterpret_cast<const char*>(bytes_.data() + pos_), static_cast<size_t>(len));
     pos_ += static_cast<size_t>(len);
@@ -77,10 +79,17 @@ class Reader {
 // Wire size of a fixed-size scalar type; 0 for String/Array/unknown.
 size_t scalar_size(ValueType t) {
   switch (t) {
-    case ValueType::U8: case ValueType::I8: case ValueType::Bool: return 1;
-    case ValueType::U16: case ValueType::I16: return 2;
-    case ValueType::U32: case ValueType::I32: case ValueType::F32: return 4;
-    case ValueType::U64: case ValueType::I64: case ValueType::F64: return 8;
+    case ValueType::U8:
+    case ValueType::I8:
+    case ValueType::Bool: return 1;
+    case ValueType::U16:
+    case ValueType::I16: return 2;
+    case ValueType::U32:
+    case ValueType::I32:
+    case ValueType::F32: return 4;
+    case ValueType::U64:
+    case ValueType::I64:
+    case ValueType::F64: return 8;
     default: return 0;
   }
 }
@@ -109,12 +118,19 @@ void read_scalar(Reader& r, ValueType t, const std::string& key, int64_t& i, dou
     case ValueType::I64: i = r.read<int64_t>("i64"); break;
     case ValueType::U64: {
       uint64_t v = r.read<uint64_t>("u64");
-      if (v > kMaxI64) throw Error("gguf: key '" + escape_control(key) + "' u64 value " + std::to_string(v) + " exceeds int64 range");
+      if (v > kMaxI64)
+        throw Error("gguf: key '" + escape_control(key) + "' u64 value " + std::to_string(v) + " exceeds int64 range");
       i = static_cast<int64_t>(v);
       break;
     }
-    case ValueType::F32: f = r.read<float>("f32"); is_float = true; break;
-    case ValueType::F64: f = r.read<double>("f64"); is_float = true; break;
+    case ValueType::F32:
+      f = r.read<float>("f32");
+      is_float = true;
+      break;
+    case ValueType::F64:
+      f = r.read<double>("f64");
+      is_float = true;
+      break;
     default: throw Error("gguf: key '" + escape_control(key) + "' internal: not a scalar type");
   }
 }
@@ -135,7 +151,8 @@ struct detail::ArrayAccess {
 Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
   Array a;
   a.elem_type_ = read_value_type(r, key);
-  if (a.elem_type_ == ValueType::Array) throw Error("gguf: key '" + escape_control(key) + "' is a nested array (unsupported)");
+  if (a.elem_type_ == ValueType::Array)
+    throw Error("gguf: key '" + escape_control(key) + "' is a nested array (unsupported)");
   uint64_t count = r.read<uint64_t>("array count");
   uint64_t min_elem = a.elem_type_ == ValueType::String ? 8 : scalar_size(a.elem_type_);
   uint64_t need;
@@ -157,8 +174,8 @@ Array detail::ArrayAccess::read(Reader& r, const std::string& key) {
         uint64_t v;
         std::memcpy(&v, r.here() + k * 8, 8);
         if (v > kMaxI64) {
-          throw Error("gguf: key '" + escape_control(key) + "' u64 element " + std::to_string(k) + " value " + std::to_string(v) +
-                      " exceeds int64 range");
+          throw Error("gguf: key '" + escape_control(key) + "' u64 element " + std::to_string(k) + " value " +
+                      std::to_string(v) + " exceeds int64 range");
         }
       }
     }
@@ -243,14 +260,16 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
   uint64_t n_tensors = r.read<uint64_t>("tensor count");
   uint64_t n_kv = r.read<uint64_t>("kv count");
   if (n_kv > r.remaining() / 12) throw Error("gguf: kv count " + std::to_string(n_kv) + " exceeds file size");
-  if (n_tensors > r.remaining() / 24) throw Error("gguf: tensor count " + std::to_string(n_tensors) + " exceeds file size");
+  if (n_tensors > r.remaining() / 24)
+    throw Error("gguf: tensor count " + std::to_string(n_tensors) + " exceeds file size");
 
   f.metadata_.reserve(std::min<uint64_t>(n_kv, 4096));  // count is untrusted
   for (uint64_t k = 0; k < n_kv; ++k) {
     std::string key = r.read_string("key");
     ValueType t = read_value_type(r, key);
     Value v = read_value(r, t, key);
-    if (!f.kv_index_.emplace(key, f.metadata_.size()).second) throw Error("gguf: duplicate key '" + escape_control(key) + "'");
+    if (!f.kv_index_.emplace(key, f.metadata_.size()).second)
+      throw Error("gguf: duplicate key '" + escape_control(key) + "'");
     f.metadata_.emplace_back(std::move(key), std::move(v));
   }
 
@@ -272,7 +291,8 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     const std::string& name = ti.name;
     uint32_t n_dims = r.read<uint32_t>("tensor n_dims");
     if (n_dims < 1 || n_dims > 4) {
-      throw Error("gguf: tensor '" + escape_control(name) + "' has n_dims " + std::to_string(n_dims) + " (must be 1..4)");
+      throw Error("gguf: tensor '" + escape_control(name) + "' has n_dims " + std::to_string(n_dims) +
+                  " (must be 1..4)");
     }
     ti.tensor.n_dims = static_cast<int>(n_dims);
     for (uint32_t d = 0; d < n_dims; ++d) {
@@ -288,7 +308,15 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     // Only the ggml type ids nibble can run are accepted (see DType in tensor.h); everything else gets an
     // actionable error naming the type and the supported set.
     switch (ggml_type) {
-      case 0: case 1: case 2: case 6: case 7: case 8: case 12: case 13: case 14: ti.tensor.type = static_cast<DType>(ggml_type); break;
+      case 0:
+      case 1:
+      case 2:
+      case 6:
+      case 7:
+      case 8:
+      case 12:
+      case 13:
+      case 14: ti.tensor.type = static_cast<DType>(ggml_type); break;
       default:
         throw Error("gguf: unsupported tensor type " + std::string(ggml_type_name(ggml_type)) + " (" +
                     std::to_string(ggml_type) + ") for " + escape_control(name) +
@@ -296,8 +324,8 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
     }
     const DTypeInfo& info = dtype_info(ti.tensor.type);
     if (ti.tensor.ne[0] % info.block_size != 0) {
-      throw Error("gguf: tensor '" + escape_control(name) + "' ne[0]=" + std::to_string(ti.tensor.ne[0]) + " is not a multiple of " +
-                  info.name + " block size " + std::to_string(info.block_size));
+      throw Error("gguf: tensor '" + escape_control(name) + "' ne[0]=" + std::to_string(ti.tensor.ne[0]) +
+                  " is not a multiple of " + info.name + " block size " + std::to_string(info.block_size));
     }
     uint64_t elems = 1;
     for (int d = 0; d < 4; ++d) {
@@ -317,8 +345,8 @@ File File::parse_impl(std::span<const uint8_t> bytes) {
       throw Error("gguf: tensor '" + escape_control(name) + "' byte size overflows");
     }
     if (ti.offset % alignment != 0) {
-      throw Error("gguf: tensor '" + escape_control(name) + "' offset " + std::to_string(ti.offset) + " is not a multiple of alignment " +
-                  std::to_string(alignment));
+      throw Error("gguf: tensor '" + escape_control(name) + "' offset " + std::to_string(ti.offset) +
+                  " is not a multiple of alignment " + std::to_string(alignment));
     }
     if (!f.tensor_index_.emplace(name, f.tensors_.size()).second) {
       throw Error("gguf: duplicate tensor '" + escape_control(name) + "'");

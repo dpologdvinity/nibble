@@ -32,7 +32,7 @@ struct BlockQ5_K;
 struct BlockQ6_K;
 struct BlockQ8_K;
 struct QuantActs;
-}
+}  // namespace nibble
 
 namespace nibble::simd {
 
@@ -92,11 +92,11 @@ struct LoadF16 {
 // int8 dot per group of 4 consecutive bytes: lane k = sum of x[i]*y[i] for i in [4k, 4k+4), as 8 int32 lanes.
 // Sign trick after llama.cpp's mul_sum_i8_pairs_float (ggml-cpu/arch/x86/quants.c, MIT).
 // Exact unless some y[i] == -128 where x[i] < 0 (sign(-128) wraps). Q4_0 passes the activation as x (y in
-// [-8,7]: always exact); Q8_0 passes it as y, which is safe because quantize_row_q8_0 never emits -128 when d = amax/127 is a normal float (amax >~ 1.5e-36).
+// [-8,7]: always exact); Q8_0 passes it as y, which is safe because quantize_row_q8_0 never emits -128 when d =
+// amax/127 is a normal float (amax >~ 1.5e-36).
 static inline __m256i mul_sum_i8_maddubs(__m256i x, __m256i y) {
   // maddubs pair sums are at most 2*128*127 = 32512 in magnitude: no int16 saturation.
-  return _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_sign_epi8(x, x), _mm256_sign_epi8(y, x)),
-                           _mm256_set1_epi16(1));
+  return _mm256_madd_epi16(_mm256_maddubs_epi16(_mm256_sign_epi8(x, x), _mm256_sign_epi8(y, x)), _mm256_set1_epi16(1));
 }
 static inline __m256i mul_sum_i8(__m256i x, __m256i y) {
 #if defined(NIBBLE_HAVE_AVXVNNI)
@@ -125,8 +125,8 @@ static inline __m256 round_half_away_ps(__m256 v) {
 // that adds exp_ps results (a softmax sum) must build with -ffp-contract=off or g++ may fuse the two.
 static inline __m256 exp_ps(__m256 x) {
   x = _mm256_max_ps(_mm256_set1_ps(-104.0f), _mm256_min_ps(_mm256_set1_ps(89.0f), x));  // NaN in x passes through
-  const __m256 fn = _mm256_round_ps(_mm256_mul_ps(x, _mm256_set1_ps(1.44269504f)),
-                                    _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  const __m256 fn =
+      _mm256_round_ps(_mm256_mul_ps(x, _mm256_set1_ps(1.44269504f)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
   __m256 r = _mm256_fnmadd_ps(fn, _mm256_set1_ps(0.693359375f), x);  // fn * ln2_hi is exact
   r = _mm256_fnmadd_ps(fn, _mm256_set1_ps(-2.12194440e-4f), r);
   __m256 q = _mm256_set1_ps(1.0f / 5040);
@@ -143,8 +143,8 @@ static inline __m256 exp_ps(__m256 x) {
   const __m256i sub = _mm256_sllv_epi32(_mm256_set1_epi32(1), _mm256_add_epi32(nc, _mm256_set1_epi32(149)));
   const __m256 s = _mm256_castsi256_ps(_mm256_blendv_epi8(sub, norm, _mm256_cmpgt_epi32(nc, _mm256_set1_epi32(-127))));
   // n = 128: one more exact doubling, which overflows to inf only when e^x does.
-  const __m256 s2 = _mm256_castsi256_ps(
-      _mm256_slli_epi32(_mm256_add_epi32(_mm256_sub_epi32(n, nc), _mm256_set1_epi32(127)), 23));
+  const __m256 s2 =
+      _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_add_epi32(_mm256_sub_epi32(n, nc), _mm256_set1_epi32(127)), 23));
   return _mm256_mul_ps(_mm256_fmadd_ps(t, s, s), s2);
 }
 

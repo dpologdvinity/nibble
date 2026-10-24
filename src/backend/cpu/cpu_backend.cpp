@@ -25,16 +25,17 @@ void CpuBackend::reserve(const ReserveParams& rp) {
   uint64_t need, xq_need, xqk_need;
   if (rp.max_rows < 0 || rp.max_width < 0 ||
       __builtin_mul_overflow(static_cast<uint64_t>(rp.max_rows), static_cast<uint64_t>(rp.max_width) / kQK, &xq_need) ||
-      __builtin_mul_overflow(static_cast<uint64_t>(rp.max_rows), (static_cast<uint64_t>(rp.max_width) + kQK_K - 1) / kQK_K,
-                             &xqk_need) ||
+      __builtin_mul_overflow(static_cast<uint64_t>(rp.max_rows),
+                             (static_cast<uint64_t>(rp.max_width) + kQK_K - 1) / kQK_K, &xqk_need) ||
       xq_need > std::numeric_limits<size_t>::max() / sizeof(BlockQ8_1) ||
       xqk_need > std::numeric_limits<size_t>::max() / sizeof(BlockQ8_K))
     throw Error("reserve: activation scratch for max_rows=" + std::to_string(rp.max_rows) +
                 " max_width=" + std::to_string(rp.max_width) + " is too large");
-  if (n_ctx < 0 || n_heads < 0 || __builtin_mul_overflow(static_cast<uint64_t>(n_ctx), static_cast<uint64_t>(n_heads), &need) ||
+  if (n_ctx < 0 || n_heads < 0 ||
+      __builtin_mul_overflow(static_cast<uint64_t>(n_ctx), static_cast<uint64_t>(n_heads), &need) ||
       need > std::numeric_limits<size_t>::max() / sizeof(float))
-    throw Error("reserve: attention scratch for n_ctx=" + std::to_string(n_ctx) + " n_heads=" + std::to_string(n_heads) +
-                " is too large");
+    throw Error("reserve: attention scratch for n_ctx=" + std::to_string(n_ctx) +
+                " n_heads=" + std::to_string(n_heads) + " is too large");
   if (scratch_.size() < need) {
     try {
       scratch_.resize(static_cast<size_t>(need));
@@ -119,7 +120,9 @@ void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float*
   if (table.type == DType::F16) {
     const int64_t d = table.ne[0];
     for (size_t t = 0; t < ids.size(); ++t) {
-      if (ids[t] < 0 || ids[t] >= table.rows()) throw Error("embed: token id " + std::to_string(ids[t]) + " out of range (n_vocab " + std::to_string(table.rows()) + ")");
+      if (ids[t] < 0 || ids[t] >= table.rows())
+        throw Error("embed: token id " + std::to_string(ids[t]) + " out of range (n_vocab " +
+                    std::to_string(table.rows()) + ")");
       simd::embed_row_f16(static_cast<const uint16_t*>(table.data) + ids[t] * d, out + static_cast<int64_t>(t) * d, d);
     }
     return;
@@ -208,9 +211,12 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
       if (lo >= hi) continue;
       const bool is_float = w.type == DType::F32 || w.type == DType::F16;
 #ifdef NIBBLE_HAVE_AVX2
-      if (is_float) n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
-      else if (xp && (w.type == DType::Q4_0 || w.type == DType::Q8_0)) simd::gemm_q(w, xp, ys[i], n, lo, hi);
-      else simd::matmul_rows_q(w, acts, ys[i], n, lo, hi);
+      if (is_float)
+        n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
+      else if (xp && (w.type == DType::Q4_0 || w.type == DType::Q8_0))
+        simd::gemm_q(w, xp, ys[i], n, lo, hi);
+      else
+        simd::matmul_rows_q(w, acts, ys[i], n, lo, hi);
 #else
       cpu::matmul_rows(w, x, ys[i], n, lo, hi, is_float ? nullptr : &acts);
 #endif
@@ -230,8 +236,8 @@ void CpuBackend::rmsnorm(const float* x, const Tensor& weight, float* y, int64_t
 #endif
 }
 void CpuBackend::add(float* x, const float* y, int64_t count) {
-  NIBBLE_DCHECK(x && y && count > 0, "add: x=%p y=%p count=%lld", static_cast<void*>(x),
-                static_cast<const void*>(y), static_cast<long long>(count));
+  NIBBLE_DCHECK(x && y && count > 0, "add: x=%p y=%p count=%lld", static_cast<void*>(x), static_cast<const void*>(y),
+                static_cast<long long>(count));
 #ifdef NIBBLE_HAVE_AVX2
   simd::add(x, y, count);
 #else

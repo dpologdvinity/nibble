@@ -19,9 +19,7 @@ struct Golden {
   std::vector<int32_t> tokens;
   std::vector<float> logits;
 
-  std::span<const float> row(size_t i) const {
-    return {logits.data() + i * n_vocab, n_vocab};
-  }
+  std::span<const float> row(size_t i) const { return {logits.data() + i * n_vocab, n_vocab}; }
 
   static Golden load(const std::string& path) {
     std::ifstream f(path, std::ios::binary);

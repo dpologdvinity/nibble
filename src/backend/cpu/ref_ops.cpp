@@ -13,7 +13,9 @@ namespace nibble::cpu {
 
 namespace {
 // Error for a weight type this backend cannot run (message lists the supported types).
-[[noreturn]] void bad_type() { throw Error(std::string("cpu backend: unsupported weight dtype (only ") + kSupportedTypes + ")"); }
+[[noreturn]] void bad_type() {
+  throw Error(std::string("cpu backend: unsupported weight dtype (only ") + kSupportedTypes + ")");
+}
 
 // Typed views of a tensor's data pointer.
 inline const uint16_t* as_f16(const Tensor& t) { return static_cast<const uint16_t*>(t.data); }
@@ -22,11 +24,14 @@ inline const float* as_f32(const Tensor& t) { return static_cast<const float*>(t
 // True for the block-quantized weight types (everything but F32/F16).
 bool is_quant(DType t) {
   switch (t) {
-    case DType::Q4_0: case DType::Q5_0: case DType::Q5_1: case DType::Q8_0:
-    case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
-      return true;
-    default:
-      return false;
+    case DType::Q4_0:
+    case DType::Q5_0:
+    case DType::Q5_1:
+    case DType::Q8_0:
+    case DType::Q4_K:
+    case DType::Q5_K:
+    case DType::Q6_K: return true;
+    default: return false;
   }
 }
 
@@ -76,7 +81,9 @@ void embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
   const int64_t d = table.ne[0];
   for (size_t t = 0; t < ids.size(); ++t) {
     const int64_t id = ids[t];
-    if (id < 0 || id >= table.rows()) throw Error("embed: token id " + std::to_string(id) + " out of range (n_vocab " + std::to_string(table.rows()) + ")");
+    if (id < 0 || id >= table.rows())
+      throw Error("embed: token id " + std::to_string(id) + " out of range (n_vocab " + std::to_string(table.rows()) +
+                  ")");
     float* o = out + static_cast<int64_t>(t) * d;
     if (table.type == DType::F32) {
       std::copy_n(as_f32(table) + id * d, d, o);
@@ -163,7 +170,8 @@ void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, 
     for (int64_t h = 0; h < n_heads; ++h) {
       float* v = x + (t * n_heads + h) * head_dim;
       for (int64_t i = 0; i < half; ++i) {
-        double theta = pos * std::pow(static_cast<double>(p.freq_base), -2.0 * static_cast<double>(i) / static_cast<double>(head_dim));
+        double theta = pos * std::pow(static_cast<double>(p.freq_base),
+                                      -2.0 * static_cast<double>(i) / static_cast<double>(head_dim));
         if (p.freq_factors) theta /= p.freq_factors[i];
         const float c = static_cast<float>(std::cos(theta)), s = static_cast<float>(std::sin(theta));
         float& a = p.neox ? v[i] : v[2 * i];
@@ -178,8 +186,8 @@ void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, 
 
 // Straightforward scaled dot-product attention with a causal mask (only positions up to the query's own).
 void attention_heads(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
-                     int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin,
-                     int64_t head_end, float* scratch) {
+                     int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin, int64_t head_end,
+                     float* scratch) {
   const int64_t group = n_heads / n_kv_heads;
   const float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
   for (int64_t h = head_begin; h < head_end; ++h) {

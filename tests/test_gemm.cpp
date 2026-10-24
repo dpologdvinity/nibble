@@ -85,8 +85,9 @@ TEST_CASE("cpu backend prefill matmul matches scalar for all dtypes", "[gemm][cp
               }
               double mag = 0;
               for (int64_t k = 0; k < in; ++k)
-                mag += std::fabs(double(x[size_t(t * in + k)]) *
-                                 (type == DType::F16 ? fp16_to_fp32(w.f16[size_t(r * in + k)]) : w.f32[size_t(r * in + k)]));
+                mag += std::fabs(double(x[size_t(t * in + k)]) * (type == DType::F16
+                                                                      ? fp16_to_fp32(w.f16[size_t(r * in + k)])
+                                                                      : w.f32[size_t(r * in + k)]));
               if (!(std::fabs(double(got[i]) - want[i]) <= 1e-5 * mag) && mismatches++ == 0)
                 UNSCOPED_INFO("first mismatch t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i]
                                                   << " mag=" << mag);
@@ -140,8 +141,8 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
 // requires identical bits for every dtype and token count.
 TEST_CASE("gemm equals the row-at-a-time simd path bitwise", "[gemm][simd]") {
   for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {
-    const std::vector<int64_t> ins = quant(t) ? std::vector<int64_t>{32, 96, 896, 4864}
-                                              : std::vector<int64_t>{8, 13, 300, 896, 4864};
+    const std::vector<int64_t> ins =
+        quant(t) ? std::vector<int64_t>{32, 96, 896, 4864} : std::vector<int64_t>{8, 13, 300, 896, 4864};
     for (int64_t in : ins)
       for (int64_t rows : {1, 3, 4, 37, 64})
         for (int64_t n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 13, 17, 64}) {

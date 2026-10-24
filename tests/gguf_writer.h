@@ -28,9 +28,13 @@ class GgufWriter {
   void add_int(const std::string& key, ValueType t, int64_t v) {
     auto b = head(key, t);
     switch (t) {
-      case ValueType::U8: case ValueType::I8: case ValueType::Bool: put(b, static_cast<uint8_t>(v)); break;
-      case ValueType::U16: case ValueType::I16: put(b, static_cast<uint16_t>(v)); break;
-      case ValueType::U32: case ValueType::I32: put(b, static_cast<uint32_t>(v)); break;
+      case ValueType::U8:
+      case ValueType::I8:
+      case ValueType::Bool: put(b, static_cast<uint8_t>(v)); break;
+      case ValueType::U16:
+      case ValueType::I16: put(b, static_cast<uint16_t>(v)); break;
+      case ValueType::U32:
+      case ValueType::I32: put(b, static_cast<uint32_t>(v)); break;
       default: put(b, static_cast<uint64_t>(v)); break;
     }
     kvs_.push_back(std::move(b));

@@ -26,8 +26,8 @@ struct TmpModel {
     static std::atomic<int> n{0};
     path = std::filesystem::temp_directory_path() /
            ("nibble_api_" + std::to_string(::getpid()) + "_" + std::to_string(n++) + ".gguf");
-    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()),
-                                                static_cast<std::streamsize>(bytes.size()));
+    std::ofstream(path, std::ios::binary)
+        .write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
   }
   ~TmpModel() { std::filesystem::remove(path); }
 };
@@ -41,7 +41,8 @@ TEST_CASE("api: max tokens", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_threads = 2});
   Session s(m);
-  CHECK(s.generate(kPrompt, {.max_tokens = 3, .temperature = 0}, [](std::string_view) { return true; }) == StopReason::MaxTokens);
+  CHECK(s.generate(kPrompt, {.max_tokens = 3, .temperature = 0}, [](std::string_view) { return true; }) ==
+        StopReason::MaxTokens);
   CHECK(s.n_generated() == 3);
   CHECK(s.n_prompt_tokens() == 10);
   CHECK(m.architecture() == "qwen2");
@@ -53,7 +54,10 @@ TEST_CASE("api: cancel", "[api]") {
   Model m = Model::load(f.path.string(), {.n_threads = 2});
   Session s(m);
   int calls = 0;
-  auto r = s.generate(kPrompt, {.temperature = 0}, [&](std::string_view) { ++calls; return false; });
+  auto r = s.generate(kPrompt, {.temperature = 0}, [&](std::string_view) {
+    ++calls;
+    return false;
+  });
   CHECK(r == StopReason::Cancelled);
   CHECK(calls == 1);
 }
@@ -63,9 +67,10 @@ TEST_CASE("api: context full", "[api]") {
   TmpModel f(tiny_model_gguf(1));
   Model m = Model::load(f.path.string(), {.n_ctx = 8, .n_threads = 2});
   Session s(m);
-  CHECK(s.generate("abc", {.max_tokens = 100, .temperature = 0}, [](std::string_view) { return true; }) == StopReason::ContextFull);
+  CHECK(s.generate("abc", {.max_tokens = 100, .temperature = 0}, [](std::string_view) { return true; }) ==
+        StopReason::ContextFull);
   CHECK(s.n_prompt_tokens() + s.n_generated() == 8);  // ContextFull fires exactly at n_ctx
-  CHECK(s.n_past() == 8);                              // the last delivered token is cached too
+  CHECK(s.n_past() == 8);                             // the last delivered token is cached too
 }
 
 // A prompt that cannot fit, an empty prompt and a missing model file each throw Error.
@@ -85,7 +90,10 @@ TEST_CASE("api: eos", "[api]") {
   Model m = Model::load(f.path.string(), {.n_threads = 2});
   Session s(m);
   int calls = 0;
-  CHECK(s.generate(kPrompt, {.temperature = 0}, [&](std::string_view) { ++calls; return true; }) == StopReason::Eos);
+  CHECK(s.generate(kPrompt, {.temperature = 0}, [&](std::string_view) {
+    ++calls;
+    return true;
+  }) == StopReason::Eos);
   CHECK(calls == 0);
   CHECK(s.n_generated() == 0);
 }
@@ -160,7 +168,10 @@ auto keep_going = [](std::string_view) { return true; };
 // Runs a generate call, collects the delivered text and optionally the stop reason.
 std::string run_text(Session& s, std::span<const PromptPart> parts, const GenParams& gp, StopReason* r = nullptr) {
   std::string out;
-  StopReason got = s.generate(parts, gp, [&](std::string_view p) { out += p; return true; });
+  StopReason got = s.generate(parts, gp, [&](std::string_view p) {
+    out += p;
+    return true;
+  });
   if (r) *r = got;
   return out;
 }
@@ -299,7 +310,10 @@ TEST_CASE("api: turn longer than remaining context", "[api]") {
   run_text(s, abc, {.max_tokens = 1, .temperature = 0});
   REQUIRE(s.n_past() == 4);  // "abc" + the delivered token
   int calls = 0;
-  auto count = [&](std::string_view) { ++calls; return true; };
+  auto count = [&](std::string_view) {
+    ++calls;
+    return true;
+  };
   const PromptPart four[] = {{"abcd", true}};  // 4 + 4 >= 8
   CHECK(s.generate(four, {.temperature = 0, .append = true}, count) == StopReason::ContextFull);
   CHECK(s.n_past() == 4);  // append = true: unchanged
@@ -339,12 +353,18 @@ TEST_CASE("api: cancel does not flush", "[api]") {
   for (uint64_t seed = 0; seed < 400; ++seed) {
     GenParams gp{.max_tokens = 50, .temperature = 50.0f, .top_k = 0, .top_p = 1.0f, .seed = seed};
     int calls = 0;
-    const StopReason r = s.generate(p, gp, [&](std::string_view) { ++calls; return false; });
+    const StopReason r = s.generate(p, gp, [&](std::string_view) {
+      ++calls;
+      return false;
+    });
     if (r != StopReason::Cancelled) continue;
     CHECK(calls == 1);
     gp.max_tokens = static_cast<int>(s.n_generated());
     int calls2 = 0;
-    s.generate(p, gp, [&](std::string_view) { ++calls2; return true; });
+    s.generate(p, gp, [&](std::string_view) {
+      ++calls2;
+      return true;
+    });
     if (calls2 == 2) ++held;
   }
   CHECK(held > 0);
@@ -357,9 +377,14 @@ TEST_CASE("api: max_tokens 0 skips prefill", "[api]") {
   Session s(m);
   int calls = 0;
   const PromptPart p[] = {{kPrompt, true}};
-  CHECK(s.generate(p, {.max_tokens = 0}, [&](std::string_view) { ++calls; return true; }) == StopReason::MaxTokens);
-  CHECK(s.generate(kPrompt, {.max_tokens = -1}, [&](std::string_view) { ++calls; return true; }) ==
-        StopReason::MaxTokens);
+  CHECK(s.generate(p, {.max_tokens = 0}, [&](std::string_view) {
+    ++calls;
+    return true;
+  }) == StopReason::MaxTokens);
+  CHECK(s.generate(kPrompt, {.max_tokens = -1}, [&](std::string_view) {
+    ++calls;
+    return true;
+  }) == StopReason::MaxTokens);
   CHECK(s.n_past() == 0);
   CHECK(s.n_generated() == 0);
   CHECK(calls == 0);
@@ -489,8 +514,10 @@ TEST_CASE("api: delivered tokens are cached after MaxTokens and Cancelled", "[ap
   // Cancelled: the cancelled (delivered) token is cached as well.
   Session c(m);
   std::string seen;
-  CHECK(c.generate(abc, {.temperature = 0}, [&](std::string_view p) { seen += p; return false; }) ==
-        StopReason::Cancelled);
+  CHECK(c.generate(abc, {.temperature = 0}, [&](std::string_view p) {
+    seen += p;
+    return false;
+  }) == StopReason::Cancelled);
   CHECK(c.n_past() == c.n_prompt_tokens() + c.n_generated());
   const std::string got_c = run_text(c, de, next);
   Session ref_c(m);

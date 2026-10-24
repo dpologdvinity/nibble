@@ -217,7 +217,8 @@ TEST_CASE("matmul_multi with mixed weight types equals separate matmuls", "[cpu_
       for (size_t i = 0; i < c.types.size(); ++i) {
         if (c.types[i] == DType::F32) {
           const auto f = rnd(static_cast<size_t>(in * out), g);
-          bytes.emplace_back(reinterpret_cast<const uint8_t*>(f.data()), reinterpret_cast<const uint8_t*>(f.data() + f.size()));
+          bytes.emplace_back(reinterpret_cast<const uint8_t*>(f.data()),
+                             reinterpret_cast<const uint8_t*>(f.data() + f.size()));
         } else {
           bytes.push_back(test_weight_rows(c.types[i], 300 + i, out, in));
         }

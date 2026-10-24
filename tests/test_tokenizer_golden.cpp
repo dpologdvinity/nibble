@@ -71,7 +71,9 @@ TEST_CASE("tinyllama spm tokenizer matches llama.cpp golden", "[e2e][tokenizer]"
 // The set of end-of-generation token ids equals llama.cpp's for every model that has a recorded list
 // (including the quantized files, which share the vocabulary).
 TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
-  struct M { const char *file, *dir; };
+  struct M {
+    const char *file, *dir;
+  };
   const M models[] = {{"qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16"},
                       {"qwen2.5-0.5b-instruct-q8_0.gguf", "qwen2.5-0.5b-q8_0"},
                       {"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-q4_0"},
@@ -88,7 +90,8 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
     std::ifstream gf(gold);
     std::vector<int32_t> want, got;
     for (int32_t x; gf >> x;) want.push_back(x);
-    for (int32_t id = 0; id < tok->n_vocab(); ++id) if (tok->is_eog(id)) got.push_back(id);
+    for (int32_t id = 0; id < tok->n_vocab(); ++id)
+      if (tok->is_eog(id)) got.push_back(id);
     std::string msg;
     for (auto id : want) msg += " " + std::to_string(id) + "='" + tok->decode_token(id) + "'";
     std::string msg2;
@@ -108,7 +111,9 @@ TEST_CASE("is_eog matches llama.cpp eog golden", "[e2e][tokenizer][eog]") {
 // Special-token parsing (parse_special = true) on a small corpus of strings containing control tokens, per
 // model.
 TEST_CASE("special-parsed tokenize matches llama.cpp golden", "[e2e][tokenizer][special]") {
-  struct M { const char *file, *dir; };
+  struct M {
+    const char *file, *dir;
+  };
   const M models[] = {{"qwen2.5-0.5b-instruct-fp16.gguf", "qwen2.5-0.5b-f16"},
                       {"qwen2.5-0.5b-instruct-q8_0.gguf", "qwen2.5-0.5b-q8_0"},
                       {"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-q4_0"},

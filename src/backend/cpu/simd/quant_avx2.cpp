@@ -33,8 +33,8 @@ float load_h(const u8* p) { return _cvtsh_ss(load_d(p)); }
 // Four fp16 values at p, p + rb, p + 2 rb, p + 3 rb as floats.
 __m128 load_h4(const u8* p, size_t rb) {
   return _mm_cvtph_ps(_mm_setr_epi16(static_cast<short>(load_d(p)), static_cast<short>(load_d(p + rb)),
-                                     static_cast<short>(load_d(p + 2 * rb)), static_cast<short>(load_d(p + 3 * rb)),
-                                     0, 0, 0, 0));
+                                     static_cast<short>(load_d(p + 2 * rb)), static_cast<short>(load_d(p + 3 * rb)), 0,
+                                     0, 0, 0));
 }
 
 // Weight block layout and its integer dot with one activation block (8 int32 partial sums). kAct is the
@@ -74,9 +74,9 @@ struct Q5_0 {
   static __m256i high_bits(const u8* qh) {
     uint32_t v;
     std::memcpy(&v, qh, 4);
-    const __m256i bytes = _mm256_shuffle_epi8(
-        _mm256_set1_epi32(static_cast<int>(v)),
-        _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3));
+    const __m256i bytes = _mm256_shuffle_epi8(_mm256_set1_epi32(static_cast<int>(v)),
+                                              _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2,
+                                                               2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3));
     const __m256i bit = _mm256_set1_epi64x(static_cast<long long>(0x8040201008040201ull));
     return _mm256_and_si256(_mm256_cmpeq_epi8(_mm256_and_si256(bytes, bit), bit), _mm256_set1_epi8(0x10));
   }
@@ -221,8 +221,9 @@ void matmul_rows_q(const Tensor& w, const QuantActs& xq, float* y, int64_t n, in
     case DType::Q8_0: return matmul_t<Q8>(wd, nb, out, xq.q8_0, y, n, row_begin, row_end);
     case DType::Q5_0: return matmul_t<Q5_0>(wd, nb, out, xq.q8_0, y, n, row_begin, row_end);
     case DType::Q5_1: return matmul_t<Q5_1>(wd, nb, out, xq.q8_1, y, n, row_begin, row_end);
-    case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
-      return matmul_rows_k(w, xq.q8_K, y, n, row_begin, row_end);
+    case DType::Q4_K:
+    case DType::Q5_K:
+    case DType::Q6_K: return matmul_rows_k(w, xq.q8_K, y, n, row_begin, row_end);
     default: throw Error("simd::matmul_rows_q: not a quantized weight type");
   }
 }

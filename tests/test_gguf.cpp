@@ -21,9 +21,7 @@ using gguf::ValueType;
 
 namespace {
 // Requires that parsing the bytes throws nibble::Error.
-void expect_error(const std::vector<uint8_t>& b) {
-  REQUIRE_THROWS_AS(File::parse(b), nibble::Error);
-}
+void expect_error(const std::vector<uint8_t>& b) { REQUIRE_THROWS_AS(File::parse(b), nibble::Error); }
 // A GGUF containing one tensor "w" of the given type and shape whose data is n bytes of 0x01 (n defaults to
 // 384).
 std::vector<uint8_t> one_tensor(DType t, std::vector<int64_t> ne, size_t n = 384) {
@@ -85,9 +83,18 @@ TEST_CASE("gguf version 2 accepted", "[gguf]") {
 // A wrong magic number or unsupported version (1, 4) is rejected.
 TEST_CASE("gguf header rejects", "[gguf]") {
   auto b = GgufWriter::sample();
-  SECTION("bad magic") { b[0] = 'X'; expect_error(b); }
-  SECTION("version 1") { b[4] = 1; expect_error(b); }
-  SECTION("version 4") { b[4] = 4; expect_error(b); }
+  SECTION("bad magic") {
+    b[0] = 'X';
+    expect_error(b);
+  }
+  SECTION("version 1") {
+    b[4] = 1;
+    expect_error(b);
+  }
+  SECTION("version 4") {
+    b[4] = 4;
+    expect_error(b);
+  }
 }
 
 // Every proper prefix of a valid file is rejected: truncation anywhere is detected.
@@ -275,9 +282,12 @@ TEST_CASE("gguf tensor placement rejects", "[gguf]") {
 // its id, the tensor and the supported set.
 TEST_CASE("gguf unsupported tensor type names the type", "[gguf]") {
   auto b = one_tensor(DType(11), {256}, 110);
-  REQUIRE_THROWS_WITH(File::parse(b), ContainsSubstring("Q3_K") && ContainsSubstring("(11)") && ContainsSubstring("w") &&
-                                         ContainsSubstring(kSupportedTypes));
-  struct Case { uint32_t id; const char* name; };
+  REQUIRE_THROWS_WITH(File::parse(b), ContainsSubstring("Q3_K") && ContainsSubstring("(11)") &&
+                                          ContainsSubstring("w") && ContainsSubstring(kSupportedTypes));
+  struct Case {
+    uint32_t id;
+    const char* name;
+  };
   for (Case c : {Case{3, "Q4_1"}, Case{15, "Q8_K"}, Case{30, "BF16"}, Case{20, "unknown"}}) {
     CAPTURE(c.id);
     REQUIRE_THROWS_WITH(File::parse(one_tensor(DType(c.id), {256}, 1024)),
@@ -287,7 +297,10 @@ TEST_CASE("gguf unsupported tensor type names the type", "[gguf]") {
 
 // Q5_0, Q5_1, Q4_K, Q5_K and Q6_K tensors load with the right row and tensor byte sizes.
 TEST_CASE("gguf accepts the new types", "[gguf]") {
-  struct Case { DType t; int64_t bs, bb; };
+  struct Case {
+    DType t;
+    int64_t bs, bb;
+  };
   for (Case c : {Case{DType::Q5_0, 32, 22}, Case{DType::Q5_1, 32, 24}, Case{DType::Q4_K, 256, 144},
                  Case{DType::Q5_K, 256, 176}, Case{DType::Q6_K, 256, 210}}) {
     CAPTURE(dtype_info(c.t).name);
@@ -370,7 +383,9 @@ TEST_CASE("gguf bool alignment rejected", "[gguf]") {
 TEST_CASE("gguf huge kv count within remaining/12 bound is capped", "[gguf]") {
   constexpr uint64_t kN = 2'000'000;  // claims 2M kvs; file is just zero bytes
   std::vector<uint8_t> b = {'G', 'G', 'U', 'F', 3, 0, 0, 0};
-  auto put64 = [&](uint64_t v) { for (int i = 0; i < 8; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i))); };
+  auto put64 = [&](uint64_t v) {
+    for (int i = 0; i < 8; ++i) b.push_back(static_cast<uint8_t>(v >> (8 * i)));
+  };
   put64(0);
   put64(kN);
   b.resize(b.size() + kN * 12, 0);

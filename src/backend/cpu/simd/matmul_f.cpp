@@ -40,7 +40,10 @@ void matmul_t(const typename L::T* w, int64_t in, int64_t out, const float* x, f
         s2 += xt[k] * L::one(w2[k]);
         s3 += xt[k] * L::one(w3[k]);
       }
-      yt[r] = s0; yt[r + 1] = s1; yt[r + 2] = s2; yt[r + 3] = s3;
+      yt[r] = s0;
+      yt[r + 1] = s1;
+      yt[r + 2] = s2;
+      yt[r + 3] = s3;
     }
     for (; r < re; ++r) {
       const typename L::T* w0 = w + r * in;

@@ -39,7 +39,10 @@ class ReplyTimer {
  public:
   // Call from the token callback; records the time of the first piece.
   void on_piece() {
-    if (!seen_) { seen_ = true; first_ = clock::now(); }
+    if (!seen_) {
+      seen_ = true;
+      first_ = clock::now();
+    }
   }
   // Prints the statistics line for a finished reply, reading token counts from the Session.
   void print(StopReason r, const Session& s) const {

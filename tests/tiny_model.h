@@ -20,23 +20,27 @@ struct TinyTokOpts {
   std::string model = "gpt2", pre = "qwen2";
   std::vector<std::string> merges = {"h e", "he l", "\xC4\xA0 w"};
   std::vector<std::string> extra;  // extra Normal tokens after the 5 fixed ones (ids 261..)
-  bool drop_type = false;  // token_type one shorter than tokens
+  bool drop_type = false;          // token_type one shorter than tokens
   // Appends "<|im_start|>", "<|im_end|>" as Control tokens after `extra`. "<|im_end|>"
   // is EOG by name (Tokenizer::is_eog), as for Qwen; eos_token_id is unchanged.
   bool chatml = false;
   std::vector<std::string> control;  // extra Control tokens after chatml's (non-spm only)
-  int64_t bos = -1;      // >= 0: write tokenizer.ggml.bos_token_id (U32)
-  int add_bos = -1;      // 0/1: write tokenizer.ggml.add_bos_token (Bool); -1: absent
-  bool bos_as_string = false;  // write bos_token_id as a string (bad type)
+  int64_t bos = -1;                  // >= 0: write tokenizer.ggml.bos_token_id (U32)
+  int add_bos = -1;                  // 0/1: write tokenizer.ggml.add_bos_token (Bool); -1: absent
+  bool bos_as_string = false;        // write bos_token_id as a string (bad type)
   // SentencePiece ("llama") vocab; see tiny_spm_vocab. Ignores merges/extra/chatml/pre; bos 1, eos 2, unk 0.
   bool spm = false;
-  int add_space_prefix = -1;   // spm: 0/1 writes tokenizer.ggml.add_space_prefix; -1 absent (default true)
-  int bad_scores = 0;          // spm: 1 = one score too few, 2 = I32 instead of F32, 3 = NaN at id 5, 4 = +inf at id 6
-  int byte_0xC3 = 0;           // spm: 1 = <0xC3> becomes the 1-char string "\xC3", 2 = removed (falls back to unk)
+  int add_space_prefix = -1;  // spm: 0/1 writes tokenizer.ggml.add_space_prefix; -1 absent (default true)
+  int bad_scores = 0;         // spm: 1 = one score too few, 2 = I32 instead of F32, 3 = NaN at id 5, 4 = +inf at id 6
+  int byte_0xC3 = 0;          // spm: 1 = <0xC3> becomes the 1-char string "\xC3", 2 = removed (falls back to unk)
 };
 
 // One entry of the synthetic SentencePiece vocabulary: text, GGUF token type, score.
-struct TinySpmTok { const char* text; int type; float score; };
+struct TinySpmTok {
+  const char* text;
+  int type;
+  float score;
+};
 
 // ids: 0 <unk>, 1 <s>, 2 </s>, 3..258 <0x00>..<0xFF>, then the table below from 259.
 // The synthetic SentencePiece vocabulary: ids 0-2 are <unk>, <s>, </s>, 3-258 the 256 byte tokens
@@ -53,12 +57,10 @@ inline std::vector<TinySpmTok> tiny_spm_vocab() {
   for (const auto& s : bytes) v.push_back({s.c_str(), 6, 0});
 #define SP "\xE2\x96\x81"  // U+2581
   for (const TinySpmTok& t : std::vector<TinySpmTok>{
-           {SP, 1, -10}, {"h", 1, -10}, {"i", 1, -10}, {"t", 1, -10}, {"e", 1, -10}, {"r", 1, -10},
-           {"a", 1, -10}, {"b", 1, -10}, {"c", 1, -10},
-           {SP "h", 1, -6}, {"hi", 1, -7}, {SP "hi", 1, -3},
-           {SP "t", 1, -6}, {"he", 1, -4}, {"the", 1, -3}, {SP "the", 1, -2},
-           {"re", 1, -5}, {SP "there", 1, -1},
-           {SP "a", 1, -20}, {SP "b", 1, -20}, {"ab", 1, -1}, {"bc", 1, -2}, {"ca", 1, -1}})
+           {SP, 1, -10},     {"h", 1, -10},    {"i", 1, -10},  {"t", 1, -10},     {"e", 1, -10}, {"r", 1, -10},
+           {"a", 1, -10},    {"b", 1, -10},    {"c", 1, -10},  {SP "h", 1, -6},   {"hi", 1, -7}, {SP "hi", 1, -3},
+           {SP "t", 1, -6},  {"he", 1, -4},    {"the", 1, -3}, {SP "the", 1, -2}, {"re", 1, -5}, {SP "there", 1, -1},
+           {SP "a", 1, -20}, {SP "b", 1, -20}, {"ab", 1, -1},  {"bc", 1, -2},     {"ca", 1, -1}})
     v.push_back(t);
 #undef SP
   return v;
@@ -90,12 +92,15 @@ inline void add_tiny_spm_kvs(GgufWriter& w, const TinyTokOpts& o) {
   if (o.bad_scores == 1) scores.pop_back();
   if (o.bad_scores == 3) scores[5] = std::numeric_limits<float>::quiet_NaN();
   if (o.bad_scores == 4) scores[6] = std::numeric_limits<float>::infinity();
-  if (o.bad_scores == 2) w.add_i32_array("tokenizer.ggml.scores", std::vector<int32_t>(toks.size(), 0));
-  else w.add_f32_array("tokenizer.ggml.scores", scores);
+  if (o.bad_scores == 2)
+    w.add_i32_array("tokenizer.ggml.scores", std::vector<int32_t>(toks.size(), 0));
+  else
+    w.add_f32_array("tokenizer.ggml.scores", scores);
   w.add_int("tokenizer.ggml.bos_token_id", GgufWriter::ValueType::U32, 1);
   w.add_int("tokenizer.ggml.eos_token_id", GgufWriter::ValueType::U32, 2);
   w.add_int("tokenizer.ggml.unknown_token_id", GgufWriter::ValueType::U32, 0);
-  if (o.add_space_prefix >= 0) w.add_int("tokenizer.ggml.add_space_prefix", GgufWriter::ValueType::Bool, o.add_space_prefix);
+  if (o.add_space_prefix >= 0)
+    w.add_int("tokenizer.ggml.add_space_prefix", GgufWriter::ValueType::Bool, o.add_space_prefix);
   if (o.add_bos >= 0) w.add_int("tokenizer.ggml.add_bos_token", GgufWriter::ValueType::Bool, o.add_bos);
 }
 
@@ -129,8 +134,10 @@ inline void add_tiny_tokenizer_kvs(GgufWriter& w, const TinyTokOpts& o, int32_t 
   w.add_i32_array("tokenizer.ggml.token_type", types);
   w.add_string_array("tokenizer.ggml.merges", o.merges);
   w.add_int("tokenizer.ggml.eos_token_id", GgufWriter::ValueType::U32, eos_id);
-  if (o.bos_as_string) w.add_string("tokenizer.ggml.bos_token_id", "x");
-  else if (o.bos >= 0) w.add_int("tokenizer.ggml.bos_token_id", GgufWriter::ValueType::U32, o.bos);
+  if (o.bos_as_string)
+    w.add_string("tokenizer.ggml.bos_token_id", "x");
+  else if (o.bos >= 0)
+    w.add_int("tokenizer.ggml.bos_token_id", GgufWriter::ValueType::U32, o.bos);
   if (o.add_bos >= 0) w.add_int("tokenizer.ggml.add_bos_token", GgufWriter::ValueType::Bool, o.add_bos);
 }
 
@@ -147,27 +154,27 @@ inline std::vector<uint8_t> tiny_tokenizer_gguf(const TinyTokOpts& o = {}) {
 // dimension/type variants the quantized tests need.
 struct TinyModelOpts {
   std::string arch = "qwen2";
-  std::string drop_tensor;      // omit this tensor
-  std::string bad_shape;        // give this 2-D tensor a wrong ne[1]
-  int64_t vocab_delta = 0;      // token_embd rows = tokenizer vocab + delta (tokenizer unchanged)
-  bool explicit_output = false; // add output.weight (otherwise tied to token_embd)
-  bool quant_dims = false;      // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
-  bool kquant_dims = false;     // n_embd 256, n_ff 512 (head_dim 64) so every ne0 % 256 == 0; needed for K wtypes
+  std::string drop_tensor;       // omit this tensor
+  std::string bad_shape;         // give this 2-D tensor a wrong ne[1]
+  int64_t vocab_delta = 0;       // token_embd rows = tokenizer vocab + delta (tokenizer unchanged)
+  bool explicit_output = false;  // add output.weight (otherwise tied to token_embd)
+  bool quant_dims = false;       // n_embd 32, n_ff 64 (head_dim 8) so every ne0 % 32 == 0; needed for Q wtype
+  bool kquant_dims = false;      // n_embd 256, n_ff 512 (head_dim 64) so every ne0 % 256 == 0; needed for K wtypes
   // Per-tensor weight type overrides (by tensor name); the rest use the wtype argument.
   std::vector<std::pair<std::string, nibble::DType>> tensor_types;
-  std::string raw_type_tensor;  // store this tensor with unsupported ggml type 11 (Q3_K) and dummy bytes
+  std::string raw_type_tensor;            // store this tensor with unsupported ggml type 11 (Q3_K) and dummy bytes
   int64_t heads_kv = 0, kv_heads_kv = 0;  // if > 0, written as head_count / head_count_kv (tensors unchanged)
-  TinyTokOpts tok;              // tokenizer variant
-  std::string chat_template;    // non-empty: written as tokenizer.chat_template
-  uint32_t context_length = 64; // written as <arch>.context_length
-  bool llama_bias = false;      // llama only: also write attn_{q,k,v}.bias in every layer
-  bool rope_freqs = false;      // add rope_freqs.weight: F32 {HD/2}, values in [1, 8]
-  int bad_rope_freqs = 0;       // with rope_freqs: 1 = wrong ne ({HD/2 + 1}), 2 = F16 instead of F32
-  int64_t rope_dim = 0, key_length = 0;  // if > 0, written as <arch>.rope.dimension_count / attention.key_length
+  TinyTokOpts tok;                        // tokenizer variant
+  std::string chat_template;              // non-empty: written as tokenizer.chat_template
+  uint32_t context_length = 64;           // written as <arch>.context_length
+  bool llama_bias = false;                // llama only: also write attn_{q,k,v}.bias in every layer
+  bool rope_freqs = false;                // add rope_freqs.weight: F32 {HD/2}, values in [1, 8]
+  int bad_rope_freqs = 0;                 // with rope_freqs: 1 = wrong ne ({HD/2 + 1}), 2 = F16 instead of F32
+  int64_t rope_dim = 0, key_length = 0;   // if > 0, written as <arch>.rope.dimension_count / attention.key_length
 };
 
-// qwen2 (or llama, no biases): 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by default).
-// A complete GGUF for a 2-layer toy model (4 heads, 2 KV heads, n_embd 16 or 32/256 with the
+// qwen2 (or llama, no biases): 2 layers, n_embd 16, 4 heads, 2 kv heads, n_ff 32, vocab tiny_tok_vocab(mo.tok) (261 by
+// default). A complete GGUF for a 2-layer toy model (4 heads, 2 KV heads, n_embd 16 or 32/256 with the
 // quantization-friendly options) with random weights drawn from `seed`, tokenizer included. `wtype` is the
 // weight type of every matrix unless overridden per tensor; norms and biases are always F32. Deterministic in
 // its arguments.
@@ -177,8 +184,13 @@ inline std::vector<uint8_t> tiny_model_gguf(uint32_t seed, nibble::DType wtype =
   using nibble::DType;
   constexpr int64_t H = 4, KV = 2, L = 2;
   const int64_t V = tiny_tok_vocab(mo.tok);
-  const int64_t E = mo.kquant_dims ? 256 : mo.quant_dims ? 32 : 16, HD = E / H,
-                FF = mo.kquant_dims ? 512 : mo.quant_dims ? 64 : 32;
+  const int64_t E = mo.kquant_dims  ? 256
+                    : mo.quant_dims ? 32
+                                    : 16,
+                HD = E / H,
+                FF = mo.kquant_dims  ? 512
+                     : mo.quant_dims ? 64
+                                     : 32;
   GgufWriter w;
   w.add_string("general.architecture", mo.arch);
   const std::string a = mo.arch + ".";

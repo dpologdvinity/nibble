@@ -14,8 +14,7 @@ namespace {
 // True if c lies in one of the sorted, non-overlapping [first, last] ranges (binary search).
 template <size_t N>
 bool in_ranges(const std::pair<char32_t, char32_t> (&r)[N], char32_t c) {
-  auto it = std::upper_bound(std::begin(r), std::end(r), c,
-                             [](char32_t v, const auto& p) { return v < p.first; });
+  auto it = std::upper_bound(std::begin(r), std::end(r), c, [](char32_t v, const auto& p) { return v < p.first; });
   return it != std::begin(r) && c <= (it - 1)->second;
 }
 }  // namespace
@@ -33,9 +32,8 @@ bool is_number(char32_t c) {
 
 // The Unicode White_Space property, spelled out (it is a short, stable list).
 bool is_whitespace(char32_t c) {
-  return (c >= 0x9 && c <= 0xD) || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680 ||
-         (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 || c == 0x202F ||
-         c == 0x205F || c == 0x3000;
+  return (c >= 0x9 && c <= 0xD) || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200A) ||
+         c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000;
 }
 
 // A hand-rolled validator/decoder: lead byte selects the length and minimum value (to reject overlong
@@ -44,9 +42,7 @@ std::vector<char32_t> utf8_decode(std::string_view s) {
   std::vector<char32_t> out;
   out.reserve(s.size());
   size_t i = 0;
-  auto bad = [&](size_t at) {
-    return Error("invalid UTF-8 at byte " + std::to_string(at));
-  };
+  auto bad = [&](size_t at) { return Error("invalid UTF-8 at byte " + std::to_string(at)); };
   while (i < s.size()) {
     unsigned char b = static_cast<unsigned char>(s[i]);
     if (b < 0x80) {
@@ -56,10 +52,20 @@ std::vector<char32_t> utf8_decode(std::string_view s) {
     }
     int n;
     char32_t cp, min;
-    if (b >= 0xC2 && b <= 0xDF) { n = 1; cp = b & 0x1F; min = 0x80; }
-    else if (b >= 0xE0 && b <= 0xEF) { n = 2; cp = b & 0x0F; min = 0x800; }
-    else if (b >= 0xF0 && b <= 0xF4) { n = 3; cp = b & 0x07; min = 0x10000; }
-    else throw bad(i);
+    if (b >= 0xC2 && b <= 0xDF) {
+      n = 1;
+      cp = b & 0x1F;
+      min = 0x80;
+    } else if (b >= 0xE0 && b <= 0xEF) {
+      n = 2;
+      cp = b & 0x0F;
+      min = 0x800;
+    } else if (b >= 0xF0 && b <= 0xF4) {
+      n = 3;
+      cp = b & 0x07;
+      min = 0x10000;
+    } else
+      throw bad(i);
     if (i + n >= s.size()) throw bad(i);
     for (int k = 1; k <= n; ++k) {
       unsigned char cb = static_cast<unsigned char>(s[i + k]);
@@ -140,7 +146,8 @@ std::string Utf8Streamer::push(std::string_view bytes) {
     }
     size_t total;
     unsigned char lo = 0x80, hi = 0xBF;  // allowed range of the second byte
-    if (b >= 0xC2 && b <= 0xDF) total = 2;
+    if (b >= 0xC2 && b <= 0xDF)
+      total = 2;
     else if (b >= 0xE0 && b <= 0xEF) {
       total = 3;
       if (b == 0xE0) lo = 0xA0;

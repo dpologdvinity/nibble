@@ -31,27 +31,27 @@ void quantize_row_q8_0_ref(const float* x, void* y, int64_t k);
 void quantize_row_q4_0_ref(const float* x, void* y, int64_t k);
 void dequantize_row_q8_0(const void* x, float* y, int64_t k);
 void dequantize_row_q4_0(const void* x, float* y, int64_t k);
-void ggml_vec_dot_q8_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
-void ggml_vec_dot_q4_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
+void ggml_vec_dot_q8_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
+void ggml_vec_dot_q4_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
 void quantize_row_q8_1_ref(const float* x, void* y, int64_t k);
 void dequantize_row_q5_0(const void* x, float* y, int64_t k);
 void dequantize_row_q5_1(const void* x, float* y, int64_t k);
-void ggml_vec_dot_q5_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
-void ggml_vec_dot_q5_1_q8_1_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
+void ggml_vec_dot_q5_0_q8_0_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
+void ggml_vec_dot_q5_1_q8_1_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
 void quantize_row_q8_K_ref(const float* x, void* y, int64_t k);
 void dequantize_row_q4_K(const void* x, float* y, int64_t k);
 void dequantize_row_q5_K(const void* x, float* y, int64_t k);
 void dequantize_row_q6_K(const void* x, float* y, int64_t k);
-void ggml_vec_dot_q4_K_q8_K_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
-void ggml_vec_dot_q5_K_q8_K_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
-void ggml_vec_dot_q6_K_q8_K_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy,
-                                    size_t by, int nrc);
+void ggml_vec_dot_q4_K_q8_K_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
+void ggml_vec_dot_q5_K_q8_K_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
+void ggml_vec_dot_q6_K_q8_K_generic(int n, float* s, size_t bs, const void* vx, size_t bx, const void* vy, size_t by,
+                                    int nrc);
 }
 
 namespace {
@@ -66,9 +66,7 @@ uint32_t bits(float f) {
 }
 
 // Uniform in [lo, hi) from 24 random bits; exact in float.
-float uni(golden::Rng& r, float lo, float hi) {
-  return lo + (hi - lo) * static_cast<float>(r.next() >> 40) * 0x1p-24f;
-}
+float uni(golden::Rng& r, float lo, float hi) { return lo + (hi - lo) * static_cast<float>(r.next() >> 40) * 0x1p-24f; }
 
 // One quantizer test input: a name and 32 floats.
 struct QCase {
@@ -276,12 +274,13 @@ int main(int argc, char** argv) {
   }
   // Q8_K quantizer: crafted rows (id 0..kCraftedQ8K-1) then random rows. The output buffer is zeroed first, so a
   // zero block's bsums hash as 0 (ggml leaves them untouched; they cannot affect a dot because d = 0).
-  std::fprintf(f,
-               "\n// quantize_row_q8_K_ref. crafted >= 0: golden::crafted_q8k_row(crafted, x), n = 256; else\n"
-               "// golden::q8k_rows(Rng{seed}, x, n). d_hash = FNV-1a over the d floats' bytes, out_hash = FNV-1a over\n"
-               "// each block's qs then bsums bytes, in block order.\n"
-               "struct Q8KCase {\n  int crafted;\n  uint64_t seed;\n  int n;\n  uint64_t d_hash;\n  uint64_t out_hash;\n};\n\n"
-               "inline constexpr Q8KCase kQ8KCases[] = {\n");
+  std::fprintf(
+      f,
+      "\n// quantize_row_q8_K_ref. crafted >= 0: golden::crafted_q8k_row(crafted, x), n = 256; else\n"
+      "// golden::q8k_rows(Rng{seed}, x, n). d_hash = FNV-1a over the d floats' bytes, out_hash = FNV-1a over\n"
+      "// each block's qs then bsums bytes, in block order.\n"
+      "struct Q8KCase {\n  int crafted;\n  uint64_t seed;\n  int n;\n  uint64_t d_hash;\n  uint64_t out_hash;\n};\n\n"
+      "inline constexpr Q8KCase kQ8KCases[] = {\n");
   struct Q8KIn {
     int crafted, n;
     uint64_t seed;
@@ -306,17 +305,18 @@ int main(int argc, char** argv) {
       dh = golden::fnv1a(&y[b * golden::kQ8_KBytes], 4, dh);
       oh = golden::fnv1a(&y[b * golden::kQ8_KBytes + 4], 256 + 32, oh);
     }
-    std::fprintf(f, "    {%d, %" PRIu64 ", %d, 0x%016" PRIx64 "ull, 0x%016" PRIx64 "ull},\n", in.crafted, in.seed, in.n, dh,
-                 oh);
+    std::fprintf(f, "    {%d, %" PRIu64 ", %d, 0x%016" PRIx64 "ull, 0x%016" PRIx64 "ull},\n", in.crafted, in.seed, in.n,
+                 dh, oh);
   }
   std::fprintf(f, "};\n\n");
 
   // K dot cases: per (seed, n), w4, w5, w6 weights then a8 activations from golden::fill_* in that order.
-  std::fprintf(f,
-               "// Inputs: Rng{seed}; fill_q4_K(w4, nb); fill_q5_K(w5, nb); fill_q6_K(w6, nb); fill_q8_K(a8, nb), nb = n/256.\n"
-               "// input_hash = FNV-1a over w4|w5|w6|a8 bytes. qNk = vec_dot_qN_K_q8_K_generic(wN, a8).\n"
-               "struct KDotCase {\n  uint64_t seed;\n  int n;\n  uint64_t input_hash;\n  uint32_t q4k_bits;\n"
-               "  uint32_t q5k_bits;\n  uint32_t q6k_bits;\n};\n\ninline constexpr KDotCase kKDotCases[] = {\n");
+  std::fprintf(
+      f,
+      "// Inputs: Rng{seed}; fill_q4_K(w4, nb); fill_q5_K(w5, nb); fill_q6_K(w6, nb); fill_q8_K(a8, nb), nb = n/256.\n"
+      "// input_hash = FNV-1a over w4|w5|w6|a8 bytes. qNk = vec_dot_qN_K_q8_K_generic(wN, a8).\n"
+      "struct KDotCase {\n  uint64_t seed;\n  int n;\n  uint64_t input_hash;\n  uint32_t q4k_bits;\n"
+      "  uint32_t q5k_bits;\n  uint32_t q6k_bits;\n};\n\ninline constexpr KDotCase kKDotCases[] = {\n");
   for (int n : {256, 2048, 4864, 8192}) {
     for (uint64_t seed : {1ull, 2ull, 3ull}) {
       const int nbk = n / 256;
@@ -336,20 +336,22 @@ int main(int argc, char** argv) {
       ggml_vec_dot_q4_K_q8_K_generic(n, &s4, 0, w4.data(), 0, a8.data(), 0, 1);
       ggml_vec_dot_q5_K_q8_K_generic(n, &s5, 0, w5.data(), 0, a8.data(), 0, 1);
       ggml_vec_dot_q6_K_q8_K_generic(n, &s6, 0, w6.data(), 0, a8.data(), 0, 1);
-      std::fprintf(f, "    {%" PRIu64 ", %d, 0x%016" PRIx64 "ull, 0x%08" PRIx32 "u, 0x%08" PRIx32 "u, 0x%08" PRIx32 "u},\n",
-                   seed, n, h, bits(s4), bits(s5), bits(s6));
+      std::fprintf(
+          f, "    {%" PRIu64 ", %d, 0x%016" PRIx64 "ull, 0x%08" PRIx32 "u, 0x%08" PRIx32 "u, 0x%08" PRIx32 "u},\n",
+          seed, n, h, bits(s4), bits(s5), bits(s6));
     }
   }
   std::fprintf(f, "};\n\n");
 
   // K dequant: a fresh Rng{kDequantSeed} per type, kDequantKBlocks super-blocks; hash = FNV-1a over the output floats.
   constexpr int kKb = 2;
-  std::fprintf(f,
-               "// Inputs: Rng{kDequantSeed}; fill_qN_K(q, kDequantKBlocks), one fresh Rng per type. hash = FNV-1a over\n"
-               "// the output floats' bytes.\ninline constexpr int kDequantKBlocks = %d;\n"
-               "struct DequantKCase {\n  const char* name;\n  uint64_t hash;\n};\n\n"
-               "inline constexpr DequantKCase kDequantK[] = {\n",
-               kKb);
+  std::fprintf(
+      f,
+      "// Inputs: Rng{kDequantSeed}; fill_qN_K(q, kDequantKBlocks), one fresh Rng per type. hash = FNV-1a over\n"
+      "// the output floats' bytes.\ninline constexpr int kDequantKBlocks = %d;\n"
+      "struct DequantKCase {\n  const char* name;\n  uint64_t hash;\n};\n\n"
+      "inline constexpr DequantKCase kDequantK[] = {\n",
+      kKb);
   for (int t = 0; t < 3; ++t) {
     const int bytes = t == 0 ? golden::kQ4_KBytes : t == 1 ? golden::kQ5_KBytes : golden::kQ6_KBytes;
     std::vector<uint8_t> q(static_cast<size_t>(kKb) * bytes);
@@ -361,7 +363,10 @@ int main(int argc, char** argv) {
     if (t == 0) dequantize_row_q4_K(q.data(), out.data(), kKb * 256);
     if (t == 1) dequantize_row_q5_K(q.data(), out.data(), kKb * 256);
     if (t == 2) dequantize_row_q6_K(q.data(), out.data(), kKb * 256);
-    std::fprintf(f, "    {\"%s\", 0x%016" PRIx64 "ull},\n", t == 0 ? "Q4_K" : t == 1 ? "Q5_K" : "Q6_K",
+    std::fprintf(f, "    {\"%s\", 0x%016" PRIx64 "ull},\n",
+                 t == 0   ? "Q4_K"
+                 : t == 1 ? "Q5_K"
+                          : "Q6_K",
                  golden::fnv1a(reinterpret_cast<const uint8_t*>(out.data()), out.size() * sizeof(float)));
   }
   std::fprintf(f, "};\n");

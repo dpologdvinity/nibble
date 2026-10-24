@@ -22,10 +22,12 @@ class FunctionRef<R(Args...)> {
   // stay alive for as long as this reference is called. Deliberately implicit so a lambda can be passed
   // directly as an argument.
   template <class F>
-    requires(std::is_object_v<std::remove_reference_t<F>> && !std::is_same_v<std::remove_cvref_t<F>, FunctionRef> && std::is_invocable_r_v<R, F&, Args...>)
+    requires(std::is_object_v<std::remove_reference_t<F>> && !std::is_same_v<std::remove_cvref_t<F>, FunctionRef> &&
+             std::is_invocable_r_v<R, F&, Args...>)
   FunctionRef(F&& f) noexcept  // NOLINT: implicit by design, like std::function_ref
-      : obj_(const_cast<void*>(static_cast<const void*>(std::addressof(f)))),
-        call_([](void* o, Args... a) -> R { return (*static_cast<std::add_pointer_t<F>>(o))(std::forward<Args>(a)...); }) {}
+      : obj_(const_cast<void*>(static_cast<const void*>(std::addressof(f)))), call_([](void* o, Args... a) -> R {
+          return (*static_cast<std::add_pointer_t<F>>(o))(std::forward<Args>(a)...);
+        }) {}
 
   // Calls the referenced callable with the given arguments.
   R operator()(Args... args) const { return call_(obj_, std::forward<Args>(args)...); }

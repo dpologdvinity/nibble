@@ -65,32 +65,79 @@ TEST_CASE("specials", "[tokenizer]") {
 TEST_CASE("tokenizer errors", "[tokenizer]") {
   auto t = make();
   CHECK_THROWS_AS(t.encode("\xFF", false), nibble::Error);
-  { TinyTokOpts o; o.pre = "deepseek-llm"; CHECK_THROWS_WITH(make(o), ContainsSubstring("deepseek-llm")); }
-  { TinyTokOpts o; o.model = "bert"; CHECK_THROWS_WITH(make(o), ContainsSubstring("bert")); }
-  { TinyTokOpts o; o.drop_type = true; CHECK_THROWS_AS(make(o), nibble::Error); }
-  { TinyTokOpts o; o.merges = {"h zz"}; CHECK_THROWS_WITH(make(o), ContainsSubstring("zz")); }
-  { TinyTokOpts o; o.merges = {"nospace"}; CHECK_THROWS_AS(make(o), nibble::Error); }
+  {
+    TinyTokOpts o;
+    o.pre = "deepseek-llm";
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("deepseek-llm"));
+  }
+  {
+    TinyTokOpts o;
+    o.model = "bert";
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bert"));
+  }
+  {
+    TinyTokOpts o;
+    o.drop_type = true;
+    CHECK_THROWS_AS(make(o), nibble::Error);
+  }
+  {
+    TinyTokOpts o;
+    o.merges = {"h zz"};
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("zz"));
+  }
+  {
+    TinyTokOpts o;
+    o.merges = {"nospace"};
+    CHECK_THROWS_AS(make(o), nibble::Error);
+  }
 }
 
 // The llama3-family pre-tokenizer names are accepted and default to add_bos; the metadata can override it;
 // add_bos without a BOS id, or an out-of-range or mistyped BOS id, is rejected (llama.cpp would silently use
 // id 11).
 TEST_CASE("llama-bpe pre accepted, bos and add_bos", "[tokenizer]") {
-  { auto t = make(); CHECK(t.bos() == -1); CHECK_FALSE(t.add_bos()); }  // qwen2 default
+  {
+    auto t = make();
+    CHECK(t.bos() == -1);
+    CHECK_FALSE(t.add_bos());
+  }  // qwen2 default
   for (const char* pre : {"llama-bpe", "llama3", "llama-v3"}) {
-    TinyTokOpts o; o.pre = pre; o.bos = 260;
+    TinyTokOpts o;
+    o.pre = pre;
+    o.bos = 260;
     auto t = make(o);
     CHECK(t.bos() == 260);
     CHECK(t.add_bos());  // llama.cpp default for LLAMA3 pre
     o.add_bos = 0;
     CHECK_FALSE(make(o).add_bos());
   }
-  { TinyTokOpts o; o.add_bos = 1; o.bos = 260; CHECK(make(o).add_bos()); }
+  {
+    TinyTokOpts o;
+    o.add_bos = 1;
+    o.bos = 260;
+    CHECK(make(o).add_bos());
+  }
   // add_bos without a bos id: llama.cpp would use id 11; fail closed instead.
-  { TinyTokOpts o; o.add_bos = 1; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing")); }
-  { TinyTokOpts o; o.pre = "llama-bpe"; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing")); }
-  { TinyTokOpts o; o.bos = 9999; CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id")); }
-  { TinyTokOpts o; o.bos_as_string = true; CHECK_THROWS_AS(make(o), nibble::Error); }
+  {
+    TinyTokOpts o;
+    o.add_bos = 1;
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing"));
+  }
+  {
+    TinyTokOpts o;
+    o.pre = "llama-bpe";
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id is missing"));
+  }
+  {
+    TinyTokOpts o;
+    o.bos = 9999;
+    CHECK_THROWS_WITH(make(o), ContainsSubstring("bos_token_id"));
+  }
+  {
+    TinyTokOpts o;
+    o.bos_as_string = true;
+    CHECK_THROWS_AS(make(o), nibble::Error);
+  }
 }
 
 // Llama 3 groups digits by three and, with ignore_merges, a pre-token that is itself a vocabulary entry skips
@@ -101,7 +148,7 @@ TEST_CASE("llama3 digits split in 3 and whole-word vocab hit", "[tokenizer]") {
   o.bos = 260;
   o.extra = {"12", "123"};  // 261, 262
   auto t = make(o);
-  CHECK(t.encode("12345", false) == Ids{262, '4' , '5'});
+  CHECK(t.encode("12345", false) == Ids{262, '4', '5'});
   CHECK(t.encode("1234", false) == Ids{262, '4'});
 }
 
@@ -230,7 +277,8 @@ TEST_CASE("spm rejects non-finite scores", "[tokenizer][spm]") {
 // same tokens as encoding it whole, for both tokenizer families.
 TEST_CASE("encode_parts equals encode of the whole string", "[tokenizer]") {
   // Splits never land inside a special token's text.
-  const std::vector<std::string> bpe_corpus = {"hello world", "hel he", "a b  c", "he<tool>llo", "x\xC3\xA9y z", "hello"};
+  const std::vector<std::string> bpe_corpus = {"hello world", "hel he",       "a b  c",
+                                               "he<tool>llo", "x\xC3\xA9y z", "hello"};
   const std::vector<std::string> spm_corpus = {"hi there", "abc ab", "the re", "ab ab", "hi<unk>x", "\xC3\xA9 cab"};
   std::mt19937 rng(7);
   for (bool spm : {false, true}) {
@@ -252,7 +300,8 @@ TEST_CASE("encode_parts equals encode of the whole string", "[tokenizer]") {
           }
         if (bad) continue;
         std::vector<nibble::tok::Part> parts;
-        for (size_t k = 0; k + 1 < cuts.size(); ++k) parts.push_back({std::string_view(s).substr(cuts[k], cuts[k + 1] - cuts[k]), false});
+        for (size_t k = 0; k + 1 < cuts.size(); ++k)
+          parts.push_back({std::string_view(s).substr(cuts[k], cuts[k + 1] - cuts[k]), false});
         INFO((spm ? "spm '" : "bpe '") << s << "' with " << parts.size() << " parts");
         CHECK(t.encode_parts(parts, false) == want);
       }

@@ -40,7 +40,10 @@ int cmd_chat(int argc, char** argv) {
       return 2;
     }
     const char* v = argv[++i];
-    if (a == "--system") { system = v; continue; }
+    if (a == "--system") {
+      system = v;
+      continue;
+    }
     if (parse_common(a, v, ca) == FlagResult::BadValue) {
       std::fprintf(stderr, "error: bad value '%s' for %s\n", v, a.c_str());
       usage();
@@ -64,9 +67,9 @@ int cmd_chat(int argc, char** argv) {
       std::fputs("> ", stderr);
       std::fflush(stderr);
     }
-    if (!std::getline(std::cin, line)) break;  // EOF; a last line without '\n' is still returned
+    if (!std::getline(std::cin, line)) break;                   // EOF; a last line without '\n' is still returned
     if (!line.empty() && line.back() == '\r') line.pop_back();  // CRLF input
-    if (line.empty()) continue;                // a blank line is not a user message: skip it
+    if (line.empty()) continue;                                 // a blank line is not a user message: skip it
 
     ReplyTimer timer;
     const StopReason r = chat.send(line, ca.gp, [&](std::string_view piece) {

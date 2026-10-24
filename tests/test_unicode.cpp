@@ -24,8 +24,8 @@ TEST_CASE("unicode numbers", "[unicode]") {
 // The Unicode White_Space set, including NEL, NBSP and the space separators; control character 0x1C and ZWSP
 // are deliberately not whitespace.
 TEST_CASE("unicode whitespace", "[unicode]") {
-  for (char32_t c : {0x9, 0xA, 0xB, 0xC, 0xD, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2005, 0x200A,
-                     0x2028, 0x2029, 0x202F, 0x205F, 0x3000})
+  for (char32_t c : {0x9, 0xA, 0xB, 0xC, 0xD, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2005, 0x200A, 0x2028, 0x2029, 0x202F,
+                     0x205F, 0x3000})
     REQUIRE(is_whitespace(c));
   for (char32_t c : {0x1C, 0x200B, 0x61}) REQUIRE_FALSE(is_whitespace(c));
 }
@@ -35,8 +35,8 @@ TEST_CASE("unicode whitespace", "[unicode]") {
 TEST_CASE("utf8 decode", "[unicode]") {
   auto v = utf8_decode("h\xC3\xA9\xF0\x9F\x98\x80");
   REQUIRE(v == std::vector<char32_t>{U'h', 0xE9, 0x1F600});
-  for (const char* bad : {"\xC3", "\xC0\x80", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xFF", "\xE0\x80\x80",
-                          "\xF0\x80\x80\x80", "\x80"})
+  for (const char* bad :
+       {"\xC3", "\xC0\x80", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xFF", "\xE0\x80\x80", "\xF0\x80\x80\x80", "\x80"})
     REQUIRE_THROWS_AS(utf8_decode(bad), nibble::Error);
   try {
     utf8_decode("ab\xFF");
@@ -112,7 +112,10 @@ TEST_CASE("utf8 streamer invalid input", "[unicode]") {
 // text round-trips unchanged regardless of how it is chunked.
 TEST_CASE("utf8 streamer property", "[unicode]") {
   uint32_t st = 12345;
-  auto rnd = [&] { st = st * 1664525u + 1013904223u; return st >> 8; };
+  auto rnd = [&] {
+    st = st * 1664525u + 1013904223u;
+    return st >> 8;
+  };
   const char alpha[] = {'a', '\x80', '\xBF', '\xC2', '\xC3', '\xE0', '\xED', '\xF0', '\xF4', '\xFF', '\x9F', '\xA0'};
   for (int t = 0; t < 10000; ++t) {
     std::string in;

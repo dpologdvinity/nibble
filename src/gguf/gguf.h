@@ -28,8 +28,19 @@ namespace nibble::gguf {
 
 // GGUF metadata value type ids, as written in the file (also the element type of arrays).
 enum class ValueType : uint32_t {
-  U8 = 0, I8 = 1, U16 = 2, I16 = 3, U32 = 4, I32 = 5, F32 = 6, Bool = 7,
-  String = 8, Array = 9, U64 = 10, I64 = 11, F64 = 12
+  U8 = 0,
+  I8 = 1,
+  U16 = 2,
+  I16 = 3,
+  U32 = 4,
+  I32 = 5,
+  F32 = 6,
+  Bool = 7,
+  String = 8,
+  Array = 9,
+  U64 = 10,
+  I64 = 11,
+  F64 = 12
 };
 
 namespace detail {
@@ -59,8 +70,8 @@ class Array {
   friend struct detail::ArrayAccess;
   ValueType elem_type_ = ValueType::U8;
   size_t count_ = 0;
-  std::span<const uint8_t> data_;   // numeric: count * element size bytes
-  std::vector<uint64_t> str_off_;   // string: offset of each element's length prefix in data_
+  std::span<const uint8_t> data_;  // numeric: count * element size bytes
+  std::vector<uint64_t> str_off_;  // string: offset of each element's length prefix in data_
 };
 
 // A metadata value. Integer scalars of every width become int64_t (a U64 above INT64_MAX is rejected
@@ -82,11 +93,11 @@ class File {
   // Both throw Error on malformed input, including "out of memory ..." if an
   // allocation fails. Tensor data pointers and Array views point into the bytes;
   // moving a File keeps them valid (the mapping address does not change).
-  static File open(const std::string& path);           // mmap; owns mapping
-  static File parse(std::span<const uint8_t> bytes);   // non-owning; bytes must outlive File
+  static File open(const std::string& path);          // mmap; owns mapping
+  static File parse(std::span<const uint8_t> bytes);  // non-owning; bytes must outlive File
 
-  uint32_t version() const { return version_; }        // GGUF format version, 2 or 3
-  const Value* find(std::string_view key) const;       // nullptr if absent
+  uint32_t version() const { return version_; }   // GGUF format version, 2 or 3
+  const Value* find(std::string_view key) const;  // nullptr if absent
   // Typed lookups: throw Error naming the key if it is absent or has a different value type.
   std::string get_string(std::string_view key) const;
   int64_t get_int(std::string_view key) const;

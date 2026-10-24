@@ -29,8 +29,7 @@ class ThreadPool {
   // Splits [0, n) into chunks of `chunk` indices and runs fn(begin, end) on each, distributing chunks across
   // the pool dynamically (an atomic cursor). Returns when all chunks are done. Calls must not overlap or
   // nest (one parallel_for at a time per pool). n <= 0 does nothing; chunk < 1 is treated as 1.
-  void parallel_for(int64_t n, int64_t chunk,
-                    FunctionRef<void(int64_t begin, int64_t end)> fn);
+  void parallel_for(int64_t n, int64_t chunk, FunctionRef<void(int64_t begin, int64_t end)> fn);
   // Workers that passed the spin bound and entered the sleep path; some may not be in the futex yet
   // (test hook).
   int sleeping_workers() const { return sleeping_.load(); }
@@ -38,7 +37,7 @@ class ThreadPool {
  private:
   void worker_loop();  // body of each background thread: wait for a new generation, run chunks, ack
   void run_chunks();   // claim and run chunks until the cursor passes n (used by workers and the caller)
-  void publish();  // bump generation_ and wake sleepers
+  void publish();      // bump generation_ and wake sleepers
 
   int n_threads_;
   std::vector<std::thread> workers_;

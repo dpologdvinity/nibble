@@ -88,7 +88,8 @@ void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float ep
 // Vector body plus a zero-padded final vector so tail elements take the same path as the rest.
 void silu_mul(float* gate, const float* up, int64_t count) {
   int64_t i = 0;
-  for (; i + 8 <= count; i += 8) _mm256_storeu_ps(gate + i, silu_mul8(_mm256_loadu_ps(gate + i), _mm256_loadu_ps(up + i)));
+  for (; i + 8 <= count; i += 8)
+    _mm256_storeu_ps(gate + i, silu_mul8(_mm256_loadu_ps(gate + i), _mm256_loadu_ps(up + i)));
   if (i < count) {
     alignas(32) float g[8] = {}, u[8] = {};
     std::copy(gate + i, gate + count, g);
@@ -129,7 +130,8 @@ void attention_heads(const float* q, const float* k, const float* v, float* out,
         const float pj = scratch[j] * inv;
         const __m256 p = _mm256_set1_ps(pj);
         int64_t d = 0;
-        for (; d < vec; d += 8) _mm256_storeu_ps(o + d, _mm256_fmadd_ps(p, _mm256_loadu_ps(vj + d), _mm256_loadu_ps(o + d)));
+        for (; d < vec; d += 8)
+          _mm256_storeu_ps(o + d, _mm256_fmadd_ps(p, _mm256_loadu_ps(vj + d), _mm256_loadu_ps(o + d)));
         for (; d < head_dim; ++d) o[d] += pj * vj[d];
       }
     }

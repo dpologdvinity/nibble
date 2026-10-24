@@ -64,7 +64,8 @@ inline std::vector<double> rms(const std::vector<double>& x, const std::vector<d
 inline std::vector<float> naive_logits(const nibble::gguf::File& f, std::span<const int32_t> tokens) {
   const std::string arch = f.get_string("general.architecture"), a = arch + ".";
   const bool llama = arch == "llama";  // llama: normal-mode rope, no qkv bias
-  const size_t L = static_cast<size_t>(f.get_int(a + "block_count")), E = static_cast<size_t>(f.get_int(a + "embedding_length")),
+  const size_t L = static_cast<size_t>(f.get_int(a + "block_count")),
+               E = static_cast<size_t>(f.get_int(a + "embedding_length")),
                H = static_cast<size_t>(f.get_int(a + "attention.head_count")),
                KV = static_cast<size_t>(f.get_int(a + "attention.head_count_kv")), HD = E / H,
                FF = static_cast<size_t>(f.get_int(a + "feed_forward_length"));

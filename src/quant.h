@@ -31,32 +31,32 @@ namespace nibble {
 
 // Q4_0 weights, 32 elements: x[j] = (low nibble of qs[j] - 8) * d and x[j + 16] = (high nibble - 8) * d.
 struct BlockQ4_0 {
-  uint16_t d;       // scale (fp16)
-  uint8_t qs[16];   // 32 4-bit values, two per byte
+  uint16_t d;      // scale (fp16)
+  uint8_t qs[16];  // 32 4-bit values, two per byte
 };
 // Q8_0 weights or activations, 32 elements: x[j] = qs[j] * d. Activations quantized by quantize_row_q8_0
 // never contain -128 (qs is in [-127, 127]).
 struct BlockQ8_0 {
-  uint16_t d;       // scale (fp16)
-  int8_t qs[32];    // signed 8-bit values
+  uint16_t d;     // scale (fp16)
+  int8_t qs[32];  // signed 8-bit values
 };
 // Q5_0 weights, 32 elements: like Q4_0 with a fifth bit per element, x[e] = (q5 - 16) * d where q5 is the
 // element's nibble plus 16 if its bit in qh is set.
 struct BlockQ5_0 {
-  uint16_t d;       // scale (fp16)
-  uint8_t qh[4];    // bit e of this little-endian 32-bit word is the high bit of element e
-  uint8_t qs[16];   // low 4 bits of each value: element j in the low nibble of qs[j], element j + 16 in the high
+  uint16_t d;      // scale (fp16)
+  uint8_t qh[4];   // bit e of this little-endian 32-bit word is the high bit of element e
+  uint8_t qs[16];  // low 4 bits of each value: element j in the low nibble of qs[j], element j + 16 in the high
 };
 // Q5_1 weights, 32 elements: asymmetric, x[e] = q5 * d + m with q5 built as in Q5_0 (no -16 offset).
 struct BlockQ5_1 {
-  uint16_t d, m;    // scale and minimum (fp16)
-  uint8_t qh[4];    // high bits, as in BlockQ5_0
-  uint8_t qs[16];   // low nibbles, as in BlockQ5_0
+  uint16_t d, m;   // scale and minimum (fp16)
+  uint8_t qh[4];   // high bits, as in BlockQ5_0
+  uint8_t qs[16];  // low nibbles, as in BlockQ5_0
 };
 // Q8_1 activations, 32 elements: Q8_0 plus s, the block's value sum times d, which the Q5_1 dot needs for
 // its minimum term m * s.
 struct BlockQ8_1 {
-  uint16_t d, s;    // scale (fp16) and s = fp16(d * sum(qs)) computed from the scale *before* it was rounded to fp16
+  uint16_t d, s;  // scale (fp16) and s = fp16(d * sum(qs)) computed from the scale *before* it was rounded to fp16
   int8_t qs[32];
 };
 
@@ -69,34 +69,34 @@ inline constexpr int64_t kQK_K = 256;
 // the low nibble of byte k + 4 and the low 4 bits of m[k] its high nibble; their top 2 bits are bits 6-7 of
 // byte k - 4 (for sc[k]) and of byte k (for m[k]).
 struct BlockQ4_K {
-  uint16_t d, dmin;     // super-block scale for the scales, and for the minimums (fp16)
-  uint8_t scales[12];   // eight 6-bit scales and eight 6-bit mins, packed
-  uint8_t qs[128];      // 256 4-bit values: for each 64-element chunk c, 32 bytes whose low nibbles are
-                        // elements 64c..64c+31 (sub-block 2c) and high nibbles elements 64c+32..64c+63
+  uint16_t d, dmin;    // super-block scale for the scales, and for the minimums (fp16)
+  uint8_t scales[12];  // eight 6-bit scales and eight 6-bit mins, packed
+  uint8_t qs[128];     // 256 4-bit values: for each 64-element chunk c, 32 bytes whose low nibbles are
+                       // elements 64c..64c+31 (sub-block 2c) and high nibbles elements 64c+32..64c+63
 };
 // Q5_K weights: Q4_K plus a fifth bit per element; q = nibble + 16 if the element's bit in qh is set.
 struct BlockQ5_K {
   uint16_t d, dmin;
-  uint8_t scales[12];   // packed as in BlockQ4_K
-  uint8_t qh[32];       // bit k of qh[l] is the high bit of element 32k + l (sub-block k, position l)
-  uint8_t qs[128];      // low nibbles, laid out as in BlockQ4_K
+  uint8_t scales[12];  // packed as in BlockQ4_K
+  uint8_t qh[32];      // bit k of qh[l] is the high bit of element 32k + l (sub-block k, position l)
+  uint8_t qs[128];     // low nibbles, laid out as in BlockQ4_K
 };
 // Q6_K weights, 256 elements = 16 sub-blocks of 16: x = d * scales[k] * (q6 - 32), q6 in [0, 63]. There
 // is no minimum. The 6 bits are the low 4 bits from ql and the high 2 from qh, interleaved in ggml's
 // 128-element halves (see the unpacking in quant.cpp / the AVX2 kernel).
 struct BlockQ6_K {
-  uint8_t ql[128];      // low 4 bits of the 6-bit values
-  uint8_t qh[64];       // high 2 bits
-  int8_t scales[16];    // signed 8-bit scale per 16-element sub-block (full int8 range, -128 included)
-  uint16_t d;           // super-block scale (fp16); note: last in the struct, unlike Q4_K/Q5_K
+  uint8_t ql[128];    // low 4 bits of the 6-bit values
+  uint8_t qh[64];     // high 2 bits
+  int8_t scales[16];  // signed 8-bit scale per 16-element sub-block (full int8 range, -128 included)
+  uint16_t d;         // super-block scale (fp16); note: last in the struct, unlike Q4_K/Q5_K
 };
 // Q8_K activations, 256 elements, paired with all three k-quant weight types. The scale is a float (not
 // fp16) and `bsums` caches sums of each 16 values so the Q4_K/Q5_K minimum term costs no extra pass.
 // quantize_row_q8_K never produces -128 (qs is in [-127, 127]); the AVX2 Q6_K kernel depends on that.
 struct BlockQ8_K {
-  float d;              // scale
+  float d;  // scale
   int8_t qs[256];
-  int16_t bsums[16];    // bsums[g] = sum of qs[16 g .. 16 g + 15]
+  int16_t bsums[16];  // bsums[g] = sum of qs[16 g .. 16 g + 15]
 };
 static_assert(sizeof(BlockQ4_0) == 18);
 static_assert(sizeof(BlockQ8_0) == 34);

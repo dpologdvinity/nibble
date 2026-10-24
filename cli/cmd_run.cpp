@@ -48,8 +48,16 @@ int cmd_run(int argc, char** argv) {
       return 2;
     }
     const char* v = argv[++i];
-    if (a == "-p") { prompt = v; have_p = true; continue; }
-    if (a == "-f") { prompt_file = v; have_f = true; continue; }
+    if (a == "-p") {
+      prompt = v;
+      have_p = true;
+      continue;
+    }
+    if (a == "-f") {
+      prompt_file = v;
+      have_f = true;
+      continue;
+    }
     if (parse_common(a, v, ca) == FlagResult::BadValue) {
       std::fprintf(stderr, "error: bad value '%s' for %s\n", v, a.c_str());
       usage();

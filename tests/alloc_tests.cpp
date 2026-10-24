@@ -105,8 +105,8 @@ void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
 void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 
-using nibble::gguf::File;
 using Catch::Matchers::ContainsSubstring;
+using nibble::gguf::File;
 
 // Parsing a file with a 20 MB numeric array allocates only bookkeeping (< 64 KiB) because arrays are views
 // into the file bytes.
@@ -221,8 +221,10 @@ struct LoadedTiny {
   nibble::model::LlamaConfig cfg;
   nibble::model::Weights w;
   LoadedTiny(std::vector<uint8_t> b, const nibble::Backend& be)
-      : bytes(std::move(b)), file(nibble::gguf::File::parse(bytes)),
-        cfg(nibble::model::LlamaConfig::from_gguf(file)), w(nibble::model::Weights::bind(file, cfg, be)) {}
+      : bytes(std::move(b)),
+        file(nibble::gguf::File::parse(bytes)),
+        cfg(nibble::model::LlamaConfig::from_gguf(file)),
+        w(nibble::model::Weights::bind(file, cfg, be)) {}
 };
 }  // namespace
 
@@ -237,7 +239,8 @@ TEST_CASE("alloc: mixed k-quant model", "[model][alloc]") {
     DType override_type;
     bool kdims;
   };
-  for (const Mix& mix : {Mix{"Q4_K+Q6_K+Q5_0", DType::Q4_K, DType::Q6_K, true}, Mix{"Q5_1+Q8_0", DType::Q5_1, DType::Q8_0, false}}) {
+  for (const Mix& mix :
+       {Mix{"Q4_K+Q6_K+Q5_0", DType::Q4_K, DType::Q6_K, true}, Mix{"Q5_1+Q8_0", DType::Q5_1, DType::Q8_0, false}}) {
     DYNAMIC_SECTION(mix.name) {
       nibble::ThreadPool pool(4);
       nibble::cpu::CpuBackend be(pool);

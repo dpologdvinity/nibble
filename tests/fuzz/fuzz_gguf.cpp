@@ -24,9 +24,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       const auto* a = std::get_if<nibble::gguf::Array>(&kv.second);
       if (!a) continue;
       for (size_t i = 0; i < a->size(); ++i) {
-        if (a->is_string()) sink = sink + static_cast<uint8_t>(a->str_at(i).size());
-        else if (a->is_float()) sink = sink + static_cast<uint8_t>(a->float_at(i) != 0);
-        else sink = sink + static_cast<uint8_t>(a->int_at(i));
+        if (a->is_string())
+          sink = sink + static_cast<uint8_t>(a->str_at(i).size());
+        else if (a->is_float())
+          sink = sink + static_cast<uint8_t>(a->float_at(i) != 0);
+        else
+          sink = sink + static_cast<uint8_t>(a->int_at(i));
       }
     }
     (void)sink;

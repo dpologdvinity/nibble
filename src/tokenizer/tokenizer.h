@@ -51,9 +51,9 @@ class Tokenizer {
   // Control/Unknown/Unused tokens give "". Throws Error for an id outside the vocabulary.
   std::string decode_token(int32_t id) const;
   int32_t n_vocab() const { return static_cast<int32_t>(tokens_.size()); }  // vocabulary size
-  int32_t eos() const { return eos_; }  // end-of-sequence id from the metadata
-  int32_t bos() const { return bos_; }  // -1 if none
-  bool add_bos() const { return add_bos_; }  // whether the model wants BOS prepended to prompts
+  int32_t eos() const { return eos_; }                                      // end-of-sequence id from the metadata
+  int32_t bos() const { return bos_; }                                      // -1 if none
+  bool add_bos() const { return add_bos_; }                    // whether the model wants BOS prepended to prompts
   bool add_space_prefix() const { return add_space_prefix_; }  // SPM only
   // True for every end-of-generation token (EOS plus end-of-turn markers such as <|im_end|>, <|eot_id|>,
   // </s>), mirroring llama.cpp's special_eog_ids. Sampling one of these ends generation.
@@ -71,17 +71,17 @@ class Tokenizer {
   std::unordered_map<std::string, int32_t> ids_;
   std::unordered_map<std::string, int32_t> ranks_;  // "left right" -> rank
   std::vector<int32_t> specials_;                   // Control/UserDefined/Unknown ids, longest text first
-  std::vector<bool> eog_;  // llama.cpp special_eog_ids as a per-id flag
+  std::vector<bool> eog_;                           // llama.cpp special_eog_ids as a per-id flag
   int32_t eos_ = -1;
   int32_t bos_ = -1;
   bool add_bos_ = false;
-  int digit_run_ = 1;          // 1 qwen2, 3 llama3
-  bool spm_ = false;           // SentencePiece ("llama") model; no pre-tokenizer or merges
+  int digit_run_ = 1;  // 1 qwen2, 3 llama3
+  bool spm_ = false;   // SentencePiece ("llama") model; no pre-tokenizer or merges
   bool add_space_prefix_ = false;
   int32_t unk_ = -1;
-  std::vector<float> scores_;  // spm
+  std::vector<float> scores_;            // spm
   std::array<int32_t, 256> byte_ids_{};  // spm: id of <0xXX> per byte, -1 if absent
-  bool ignore_merges_ = false; // llama3: a pre-token that is a whole vocab entry skips BPE
+  bool ignore_merges_ = false;           // llama3: a pre-token that is a whole vocab entry skips BPE
 };
 
 }  // namespace nibble::tok

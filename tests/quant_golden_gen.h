@@ -1,8 +1,8 @@
 #pragma once
-// Deterministic integer-only generator for the raw Q4_0/Q8_0/Q5_0/Q5_1/Q8_1/Q4_K/Q5_K/Q6_K/Q8_K block bytes used by the golden-vector
-// tests. Shared by tests/test_quant.cpp and tools/quant_vectors (which runs llama.cpp's reference code
-// on the same bytes). Integer-only so the bytes are identical on every compiler and flag set; the
-// generated .inc also records an FNV-1a hash of the bytes so drift is caught.
+// Deterministic integer-only generator for the raw Q4_0/Q8_0/Q5_0/Q5_1/Q8_1/Q4_K/Q5_K/Q6_K/Q8_K block bytes used by the
+// golden-vector tests. Shared by tests/test_quant.cpp and tools/quant_vectors (which runs llama.cpp's reference code on
+// the same bytes). Integer-only so the bytes are identical on every compiler and flag set; the generated .inc also
+// records an FNV-1a hash of the bytes so drift is caught.
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -10,11 +10,11 @@
 
 namespace golden {
 
-inline constexpr int kQ4Bytes = 18;  // fp16 d + 16 nibble bytes
-inline constexpr int kQ8Bytes = 34;  // fp16 d + 32 int8
-inline constexpr int kQ5_0Bytes = 22;  // fp16 d + 4 qh + 16 nibble bytes
-inline constexpr int kQ5_1Bytes = 24;  // fp16 d, m + 4 qh + 16 nibble bytes
-inline constexpr int kQ8_1Bytes = 36;  // fp16 d, s + 32 int8
+inline constexpr int kQ4Bytes = 18;     // fp16 d + 16 nibble bytes
+inline constexpr int kQ8Bytes = 34;     // fp16 d + 32 int8
+inline constexpr int kQ5_0Bytes = 22;   // fp16 d + 4 qh + 16 nibble bytes
+inline constexpr int kQ5_1Bytes = 24;   // fp16 d, m + 4 qh + 16 nibble bytes
+inline constexpr int kQ8_1Bytes = 36;   // fp16 d, s + 32 int8
 inline constexpr int kQ4_KBytes = 144;  // fp16 d, dmin + 12 scales + 128 qs
 inline constexpr int kQ5_KBytes = 176;  // fp16 d, dmin + 12 scales + 32 qh + 128 qs
 inline constexpr int kQ6_KBytes = 210;  // 128 ql + 64 qh + 16 int8 scales + fp16 d
@@ -90,8 +90,8 @@ inline void fill_q5_1(Rng& r, uint8_t* out, int64_t nb) {
 inline uint16_t fp16_mul_int(int sum, uint16_t d) {
   const uint16_t sign = static_cast<uint16_t>((d & 0x8000u) ^ (sum < 0 ? 0x8000u : 0u));
   const int e = (d >> 10) & 31;
-  uint64_t p = static_cast<uint64_t>(sum < 0 ? -static_cast<int64_t>(sum) : sum) *
-               (e ? (0x400u | (d & 0x3FFu)) : (d & 0x3FFu));
+  uint64_t p =
+      static_cast<uint64_t>(sum < 0 ? -static_cast<int64_t>(sum) : sum) * (e ? (0x400u | (d & 0x3FFu)) : (d & 0x3FFu));
   int ex = e ? e : 1;  // value = p * 2^(ex - 25) for normal and subnormal d alike
   if (p == 0) return sign;
   while (p >= 2048) {
@@ -157,7 +157,8 @@ inline void fill_q8_K(Rng& r, uint8_t* out, int64_t nb) {
   for (int64_t b = 0; b < nb; ++b) {
     uint8_t* p = out + b * kQ8_KBytes;
     const uint64_t v = r.next();
-    const uint32_t bits = static_cast<uint32_t>(((v & 1u) << 31) | ((120u + ((v >> 1) & 15u)) << 23) | ((v >> 8) & 0x7FFFFFu));
+    const uint32_t bits =
+        static_cast<uint32_t>(((v & 1u) << 31) | ((120u + ((v >> 1) & 15u)) << 23) | ((v >> 8) & 0x7FFFFFu));
     float d;
     std::memcpy(&d, &bits, 4);
     put_f32(p, d);
@@ -204,8 +205,7 @@ inline void crafted_q8k_row(int id, float* x) {
       x[0] = 127.f;
       for (int j = 1; j < 256; ++j) x[j] = static_cast<float>((j % 5) - 2) * 3.f;
       break;
-    default:
-      break;
+    default: break;
   }
 }
 

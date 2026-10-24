@@ -26,9 +26,9 @@ namespace nibble {
 // Model::load throws Error for negative values (before opening the file) and for
 // n_ctx above the model's context_length.
 struct ModelParams {
-  int64_t n_ctx = 0;   // 0 = auto: min(4096, model context length)
-  int n_threads = 0;   // 0 = auto: the fastest CPUs if hybrid, else 2/3 of hardware_concurrency.
-                       // The hybrid count is of logical CPUs, so SMT siblings are included.
+  int64_t n_ctx = 0;  // 0 = auto: min(4096, model context length)
+  int n_threads = 0;  // 0 = auto: the fastest CPUs if hybrid, else 2/3 of hardware_concurrency.
+                      // The hybrid count is of logical CPUs, so SMT siblings are included.
 };
 
 // Sampling and stopping options for one generate/send call.
@@ -72,10 +72,10 @@ class Model {
   // message naming the problem (unreadable file, unsupported architecture or tensor type, missing tensor,
   // inconsistent shapes, out of memory).
   static Model load(const std::string& path, ModelParams = {});
-  Model(Model&&) noexcept;             // leaves the source in a moved-from state
+  Model(Model&&) noexcept;  // leaves the source in a moved-from state
   Model& operator=(Model&&) noexcept;
   ~Model();
-  Model(const Model&) = delete;        // a model owns a file mapping and thread pool: not copyable
+  Model(const Model&) = delete;  // a model owns a file mapping and thread pool: not copyable
   Model& operator=(const Model&) = delete;
 
   // Throw Error("use of moved-from Model") on a moved-from Model (as does Session(Model&)).
@@ -187,8 +187,7 @@ class Chat {
   // earlier reply tokens stay cached (the token whose delivery threw does not)
   // and the conversation continues.
   // Throws Error on a moved-from Chat.
-  StopReason send(std::string_view user, const GenParams&,
-                  const std::function<bool(std::string_view piece)>& on_token);
+  StopReason send(std::string_view user, const GenParams&, const std::function<bool(std::string_view piece)>& on_token);
 
  private:
   struct Impl;

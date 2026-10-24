@@ -35,8 +35,8 @@ class Transformer {
   void run_chunk(std::span<const int32_t> tokens, int64_t pos0);
 
   LlamaConfig c_;
-  const Weights& w_;   // borrowed; must outlive the Transformer
-  Backend& be_;        // borrowed
+  const Weights& w_;  // borrowed; must outlive the Transformer
+  Backend& be_;       // borrowed
   int64_t n_ctx_, max_batch_;
   std::vector<float*> owned_;  // every buffer allocated from be_
   std::vector<float*> k_, v_;  // per layer [n_ctx, n_kv, hd]

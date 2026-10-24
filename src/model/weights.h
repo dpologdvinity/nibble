@@ -19,7 +19,7 @@ struct LayerWeights {
 // Every parameter of the network. Tensors point into the mapped gguf::File, which must outlive the Weights.
 struct Weights {
   Tensor token_embd, output_norm, output;  // `output` is a copy of token_embd when the file ties them
-  std::optional<Tensor> rope_freqs;  // F32 [head_dim / 2] frequency factors (llama 3.x)
+  std::optional<Tensor> rope_freqs;        // F32 [head_dim / 2] frequency factors (llama 3.x)
   std::vector<LayerWeights> layers;
   // Looks up and validates every tensor the architecture needs. Throws Error naming the tensor when one is
   // missing, has the wrong shape, or has a type the backend cannot run (or a non-F32 type where F32 is

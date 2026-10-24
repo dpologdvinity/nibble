@@ -52,10 +52,8 @@ uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
 // Validates the parameters, seeds the four-word generator state with splitmix64, and sizes the work buffers.
 Sampler::Sampler(const SamplerParams& p, int64_t n_vocab) : params_(p), n_vocab_(n_vocab) {
   if (std::isnan(p.temperature) || p.temperature < 0.0f)
-    throw Error("sampler: invalid temperature " + fmt(p.temperature) +
-                " (must be >= 0)");
-  if (std::isnan(p.top_p) || p.top_p < 0.0f)
-    throw Error("sampler: invalid top_p " + fmt(p.top_p) + " (must be >= 0)");
+    throw Error("sampler: invalid temperature " + fmt(p.temperature) + " (must be >= 0)");
+  if (std::isnan(p.top_p) || p.top_p < 0.0f) throw Error("sampler: invalid top_p " + fmt(p.top_p) + " (must be >= 0)");
   if (n_vocab <= 0) throw Error("sampler: invalid n_vocab " + std::to_string(n_vocab));
   uint64_t x = p.seed;
   for (auto& s : state_) s = splitmix64(x);
@@ -81,8 +79,7 @@ uint64_t Sampler::next() {  // xoshiro256**
 // seeds give equal results on every platform.
 int32_t Sampler::sample(std::span<const float> logits) {
   if (static_cast<int64_t>(logits.size()) != n_vocab_)
-    throw Error("sampler: got " + std::to_string(logits.size()) + " logits, expected " +
-                std::to_string(n_vocab_));
+    throw Error("sampler: got " + std::to_string(logits.size()) + " logits, expected " + std::to_string(n_vocab_));
   const auto better = [&](int32_t a, int32_t b) {
     const float la = key(logits[static_cast<size_t>(a)]), lb = key(logits[static_cast<size_t>(b)]);
     return la > lb || (la == lb && a < b);

@@ -18,7 +18,17 @@ namespace nibble {
 //   Q5_1           32-weight blocks, fp16 scale and minimum, asymmetric 5-bit values
 //   Q8_0           32-weight blocks, one fp16 scale, 8-bit values
 //   Q4_K/Q5_K/Q6_K 256-weight "super-blocks" with per-sub-block scales (the llama.cpp k-quants)
-enum class DType : uint32_t { F32 = 0, F16 = 1, Q4_0 = 2, Q5_0 = 6, Q5_1 = 7, Q8_0 = 8, Q4_K = 12, Q5_K = 13, Q6_K = 14 };
+enum class DType : uint32_t {
+  F32 = 0,
+  F16 = 1,
+  Q4_0 = 2,
+  Q5_0 = 6,
+  Q5_1 = 7,
+  Q8_0 = 8,
+  Q4_K = 12,
+  Q5_K = 13,
+  Q6_K = 14
+};
 
 // Human-readable list of the DTypes above, quoted in error messages about unsupported tensor types.
 inline constexpr const char* kSupportedTypes = "F32/F16/Q4_0/Q5_0/Q5_1/Q8_0/Q4_K/Q5_K/Q6_K";
@@ -42,9 +52,9 @@ const char* ggml_type_name(uint32_t ggml_type);
 // elements (the "input" dimension is ne[0], so row r holds the weights of output unit r).
 struct Tensor {
   DType type = DType::F32;
-  int n_dims = 0;                          // number of used entries of ne (1 or 2 for the tensors nibble loads)
+  int n_dims = 0;                         // number of used entries of ne (1 or 2 for the tensors nibble loads)
   std::array<int64_t, 4> ne{1, 1, 1, 1};  // ne[0] is the contiguous dimension
-  const void* data = nullptr;              // first byte; for weights, inside the mapped file
+  const void* data = nullptr;             // first byte; for weights, inside the mapped file
 
   // Number of rows: the product of all dimensions above ne[0] (1 for a vector).
   int64_t rows() const { return ne[1] * ne[2] * ne[3]; }

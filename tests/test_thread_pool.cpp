@@ -59,9 +59,7 @@ TEST_CASE("1000 back-to-back calls complete") {
 }
 
 // Constructing a pool with zero threads is an Error.
-TEST_CASE("non-positive thread count throws") {
-  REQUIRE_THROWS_AS(nibble::ThreadPool(0), nibble::Error);
-}
+TEST_CASE("non-positive thread count throws") { REQUIRE_THROWS_AS(nibble::ThreadPool(0), nibble::Error); }
 
 // With 12 threads and 2 chunks the idle workers still acknowledge each call, and nothing runs twice.
 TEST_CASE("more threads than chunks") {
@@ -84,12 +82,14 @@ TEST_CASE("an exception from fn reaches the caller after every thread finishes")
     // Throw on one chunk (it may land on any thread), or on every chunk (all threads throw at once).
     const bool all = k % 2 == 1;
     std::atomic<int> running{0};
-    REQUIRE_THROWS_AS(pool.parallel_for(256, 1, [&](int64_t b, int64_t) {
-      running++;
-      std::this_thread::yield();
-      running--;
-      if (all || b == k) throw nibble::Error("chunk " + std::to_string(b));
-    }), nibble::Error);
+    REQUIRE_THROWS_AS(pool.parallel_for(256, 1,
+                                        [&](int64_t b, int64_t) {
+                                          running++;
+                                          std::this_thread::yield();
+                                          running--;
+                                          if (all || b == k) throw nibble::Error("chunk " + std::to_string(b));
+                                        }),
+                      nibble::Error);
     REQUIRE(running.load() == 0);
     std::atomic<int64_t> sum{0};  // the pool is still usable and the error does not leak into the next call
     pool.parallel_for(100, 7, [&](int64_t b, int64_t e) { sum += e - b; });

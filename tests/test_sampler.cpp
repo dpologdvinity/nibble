@@ -97,12 +97,10 @@ TEST_CASE("sampler: parameter edges", "[sampler]") {
     Sampler s({1.0f, 0, 0.0f, 9}, 3);
     for (int i = 0; i < 200; ++i) REQUIRE(s.sample(l) == 0);
   }
-  REQUIRE_THROWS_WITH(Sampler({-0.5f, 0, 1.0f, 1}, 3),
-                      Catch::Matchers::ContainsSubstring("-0.5"));
+  REQUIRE_THROWS_WITH(Sampler({-0.5f, 0, 1.0f, 1}, 3), Catch::Matchers::ContainsSubstring("-0.5"));
   REQUIRE_THROWS_AS(Sampler({std::nanf(""), 0, 1.0f, 1}, 3), Error);
   REQUIRE_THROWS_AS(Sampler({1.0f, 0, std::nanf(""), 1}, 3), Error);
-  REQUIRE_THROWS_WITH(Sampler({1.0f, 0, -0.25f, 1}, 3),
-                      Catch::Matchers::ContainsSubstring("-0.25"));
+  REQUIRE_THROWS_WITH(Sampler({1.0f, 0, -0.25f, 1}, 3), Catch::Matchers::ContainsSubstring("-0.25"));
 }
 
 // NaN logits are never chosen (they count as -inf), a +inf logit wins deterministically (lowest index), and

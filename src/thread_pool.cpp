@@ -111,8 +111,7 @@ void ThreadPool::worker_loop() {
 
 // With no workers the loop runs inline. Otherwise: publish the job fields, wake the workers, work alongside
 // them, spin until every worker has acknowledged, then rethrow any captured exception.
-void ThreadPool::parallel_for(int64_t n, int64_t chunk,
-                              FunctionRef<void(int64_t, int64_t)> fn) {
+void ThreadPool::parallel_for(int64_t n, int64_t chunk, FunctionRef<void(int64_t, int64_t)> fn) {
   if (n <= 0) return;
   if (chunk < 1) chunk = 1;
   if (workers_.empty()) {
@@ -128,7 +127,10 @@ void ThreadPool::parallel_for(int64_t n, int64_t chunk,
   run_chunks();
   // Every worker acks every generation, so none can still touch fn_ or the fields once this returns.
   for (unsigned i = 1; pending_.load(std::memory_order_acquire) != 0; ++i) {  // unsigned: wraps, no UB
-    if (i % 1024 == 0) std::this_thread::yield(); else cpu_relax();
+    if (i % 1024 == 0)
+      std::this_thread::yield();
+    else
+      cpu_relax();
   }
   // The acquire above orders every worker's error_ write before this read.
   if (error_) std::rethrow_exception(std::exchange(error_, nullptr));

@@ -48,8 +48,8 @@ struct BigramCmp {
 // NORMAL (:3169-3170). Not mirrored: the eot/eom name searches (:2828-2864), whose names are all
 // in the EOG list below; the CONTROL promotion of FIM pre/suf/mid name hits (:2866-2930); the
 // gpt-oss USER_DEFINED override (:3073-3083).
-std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>& tokens,
-                            std::vector<TokenType>& types, int32_t eos) {
+std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>& tokens, std::vector<TokenType>& types,
+                            int32_t eos) {
   const int32_t n = static_cast<int32_t>(tokens.size());
   std::unordered_map<std::string_view, int32_t> by_text;
   for (int32_t k = 0; k < n; ++k) by_text[tokens[static_cast<size_t>(k)]] = k;
@@ -79,18 +79,43 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
     return id;
   };
   std::set<int32_t> eog;
-  auto add = [&](int32_t id) { if (id >= 0) eog.insert(id); };
-  add(fim("tokenizer.ggml.fim_pad_token_id", {"<|fim_pad|>", "<fim-pad>", "<fim_pad>", "<PAD>", "[PAD]"}));  // :3015-3017
-  add(fim("tokenizer.ggml.fim_rep_token_id", {"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>"}));  // :3019-3021
+  auto add = [&](int32_t id) {
+    if (id >= 0) eog.insert(id);
+  };
+  add(fim("tokenizer.ggml.fim_pad_token_id",
+          {"<|fim_pad|>", "<fim-pad>", "<fim_pad>", "<PAD>", "[PAD]"}));  // :3015-3017
+  add(fim("tokenizer.ggml.fim_rep_token_id",
+          {"<|fim_repo|>", "<|repo_name|>", "<fim-repo>", "<REPO>", "<reponame>"}));          // :3019-3021
   add(fim("tokenizer.ggml.fim_sep_token_id", {"<|file_sep|>", "<|plamo:file_separator|>"}));  // :3023-3025
   // EOG names, :3029-3055 (every supported vocab's eot/eom name is in this list, so the
   // eot/eom name searches at :2828-2860 add nothing beyond it).
-  static const char* const names[] = {"<|eot_id|>", "<|eot|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
-                                      "<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>",
-                                      "<|eom_id|>", "<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>",
-                                      "<end_of_utterance>", "<eos>", "<turn|>", "<|tool_response>",
-                                      "<\xEF\xBD\x9C" "end\xE2\x96\x81" "of\xE2\x96\x81" "sentence\xEF\xBD\x9C>",
-                                      "[e~[", "<|ifm|im_end|>"};
+  static const char* const names[] = {"<|eot_id|>",
+                                      "<|eot|>",
+                                      "<|im_end|>",
+                                      "<|end|>",
+                                      "<|return|>",
+                                      "<|call|>",
+                                      "<|flush|>",
+                                      "<|calls|>",
+                                      "<end_of_turn>",
+                                      "<|endoftext|>",
+                                      "</s>",
+                                      "<|eom_id|>",
+                                      "<EOT>",
+                                      "_<EOT>",
+                                      "[EOT]",
+                                      "[EOS]",
+                                      "<|end_of_text|>",
+                                      "<end_of_utterance>",
+                                      "<eos>",
+                                      "<turn|>",
+                                      "<|tool_response>",
+                                      "<\xEF\xBD\x9C"
+                                      "end\xE2\x96\x81"
+                                      "of\xE2\x96\x81"
+                                      "sentence\xEF\xBD\x9C>",
+                                      "[e~[",
+                                      "<|ifm|im_end|>"};
   for (const char* nm : names) {
     auto it = by_text.find(nm);
     if (it != by_text.end()) eog.insert(it->second), promote.insert(it->second);
@@ -113,8 +138,8 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
     eog.erase(by_text.at("<|end|>"));
     types[static_cast<size_t>(by_text.at("<|end|>"))] = TokenType::UserDefined;
   }
-  if (in_eog("</s>") && (by_text.count("<rfl:parameter name=\"") || in_eog("<|tool_response>") ||
-                         in_eog("<|plamo:eos|>"))) {
+  if (in_eog("</s>") &&
+      (by_text.count("<rfl:parameter name=\"") || in_eog("<|tool_response>") || in_eog("<|plamo:eos|>"))) {
     eog.erase(by_text.at("</s>"));
     types[static_cast<size_t>(by_text.at("</s>"))] = TokenType::Normal;
   }
@@ -140,7 +165,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   // qwen2 at :2389 keeps defaults (add_bos false, no ignore_merges).
   const bool llama3 = pre == "llama3" || pre == "llama-v3" || pre == "llama-bpe";
   if (!spm && !llama3 && pre != "qwen2")
-    throw Error("unsupported tokenizer pre-tokenizer: '" + escape_control(pre) + "' (only 'qwen2', 'llama3', 'llama-v3', 'llama-bpe')");
+    throw Error("unsupported tokenizer pre-tokenizer: '" + escape_control(pre) +
+                "' (only 'qwen2', 'llama3', 'llama-v3', 'llama-bpe')");
 
   const auto& toks = f.get_array("tokenizer.ggml.tokens");
   const auto& types = f.get_array("tokenizer.ggml.token_type");
@@ -150,8 +176,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   if (!spm && !merges.is_string()) throw Error("tokenizer.ggml.merges is not a string array");
   if (!types.is_int()) throw Error("tokenizer.ggml.token_type is not an integer array");
   if (types.size() != toks.size())
-    throw Error("tokenizer.ggml.token_type length " + std::to_string(types.size()) +
-                " != tokens length " + std::to_string(toks.size()));
+    throw Error("tokenizer.ggml.token_type length " + std::to_string(types.size()) + " != tokens length " +
+                std::to_string(toks.size()));
   if (toks.empty() || toks.size() > INT32_MAX) throw Error("bad tokenizer vocab size " + std::to_string(toks.size()));
 
   Tokenizer t;
@@ -174,7 +200,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   for (size_t k = 0; k < t.tokens_.size(); ++k) {
     const bool fresh = t.ids_.emplace(t.tokens_[k], static_cast<int32_t>(k)).second;  // first wins
     // llama.cpp asserts token_to_id.size() == id_to_token.size() (llama-vocab.cpp:2679).
-    if (spm && !fresh) throw Error("duplicate token text at id " + std::to_string(k) + ": '" + escape_control(t.tokens_[k]) + "'");
+    if (spm && !fresh)
+      throw Error("duplicate token text at id " + std::to_string(k) + ": '" + escape_control(t.tokens_[k]) + "'");
   }
   if (spm) t.init_spm(f);
 
@@ -184,7 +211,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
     size_t sp = m.find(' ', 1);  // same as llama.cpp: first space after position 0
     if (sp == std::string::npos) throw Error("malformed merge (no space): '" + escape_control(m) + "'");
     for (const std::string& part : {m.substr(0, sp), m.substr(sp + 1)})
-      if (!t.ids_.count(part)) throw Error("merge '" + escape_control(m) + "' references token not in vocab: '" + escape_control(part) + "'");
+      if (!t.ids_.count(part))
+        throw Error("merge '" + escape_control(m) + "' references token not in vocab: '" + escape_control(part) + "'");
     t.ranks_.emplace(m, static_cast<int32_t>(k));
   }
 
@@ -218,9 +246,8 @@ Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
       if (!t.tokens_[k].empty()) t.specials_.push_back(static_cast<int32_t>(k));
   }
   // llama.cpp partitions per special token, longest text first
-  std::stable_sort(t.specials_.begin(), t.specials_.end(), [&](int32_t a, int32_t b) {
-    return t.tokens_[a].size() > t.tokens_[b].size();
-  });
+  std::stable_sort(t.specials_.begin(), t.specials_.end(),
+                   [&](int32_t a, int32_t b) { return t.tokens_[a].size() > t.tokens_[b].size(); });
   return t;
 }
 
@@ -232,7 +259,8 @@ void Tokenizer::init_spm(const gguf::File& f) {
     const gguf::Array* a = std::get_if<gguf::Array>(v);
     if (!a || a->elem_type() != gguf::ValueType::F32) throw Error("tokenizer.ggml.scores is not a float array");
     if (a->size() != n)
-      throw Error("tokenizer.ggml.scores length " + std::to_string(a->size()) + " != tokens length " + std::to_string(n));
+      throw Error("tokenizer.ggml.scores length " + std::to_string(a->size()) + " != tokens length " +
+                  std::to_string(n));
     for (size_t k = 0; k < n; ++k) {
       scores_[k] = static_cast<float>(a->float_at(k));
       if (!std::isfinite(scores_[k])) throw Error("tokenizer.ggml.scores[" + std::to_string(k) + "] is not finite");
@@ -285,14 +313,15 @@ std::string Tokenizer::decode_token(int32_t id) const {
   if (id < 0 || id >= n_vocab()) throw Error("token id out of range: " + std::to_string(id));
   if (spm_) {  // token_to_piece, llama-vocab.cpp:3823-3897 (special=false)
     switch (types_[id]) {
-      case TokenType::UserDefined:
-        return tokens_[id];
+      case TokenType::UserDefined: return tokens_[id];
       case TokenType::Normal: {  // llama_unescape_whitespace, :3540
         std::string out;
         const std::string& s = tokens_[id];
         for (size_t k = 0; k < s.size();) {
-          if (s.compare(k, 3, "\xE2\x96\x81") == 0) out.push_back(' '), k += 3;
-          else out.push_back(s[k++]);
+          if (s.compare(k, 3, "\xE2\x96\x81") == 0)
+            out.push_back(' '), k += 3;
+          else
+            out.push_back(s[k++]);
         }
         return out;
       }
@@ -305,18 +334,17 @@ std::string Tokenizer::decode_token(int32_t id) const {
   switch (types_[id]) {
     case TokenType::Control:
     case TokenType::Unknown:
-    case TokenType::Unused:
-      return "";
-    case TokenType::UserDefined:
-      return tokens_[id];
-    default:
-      break;
+    case TokenType::Unused: return "";
+    case TokenType::UserDefined: return tokens_[id];
+    default: break;
   }
   std::string out;
   for (char32_t c : utf8_decode(tokens_[id])) {
     int b = unicode_to_byte(c);
-    if (b < 0) utf8_append(out, c);
-    else out.push_back(static_cast<char>(b));
+    if (b < 0)
+      utf8_append(out, c);
+    else
+      out.push_back(static_cast<char>(b));
   }
   return out;
 }
@@ -341,9 +369,12 @@ void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out)
     for (size_t off = 0; off < w.size();) {
       size_t n = 1;
       unsigned char c = static_cast<unsigned char>(w[off]);
-      if (c >= 0xF0) n = 4;
-      else if (c >= 0xE0) n = 3;
-      else if (c >= 0xC0) n = 2;
+      if (c >= 0xF0)
+        n = 4;
+      else if (c >= 0xE0)
+        n = 3;
+      else if (c >= 0xC0)
+        n = 2;
       syms.push_back({off, n, static_cast<int>(syms.size()) - 1, -1});
       off += n;
     }
@@ -375,7 +406,8 @@ void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out)
     }
     for (int k = 0; k >= 0 && !syms.empty(); k = syms[k].next) {
       auto it = ids_.find(w.substr(syms[k].off, syms[k].len));
-      if (it == ids_.end()) throw Error("symbol not in vocab: '" + escape_control(w.substr(syms[k].off, syms[k].len)) + "'");
+      if (it == ids_.end())
+        throw Error("symbol not in vocab: '" + escape_control(w.substr(syms[k].off, syms[k].len)) + "'");
       out.push_back(it->second);
     }
   }
@@ -422,8 +454,10 @@ std::vector<int32_t> Tokenizer::encode_parts(std::span<const Part> parts, bool a
     }
     // Raw text on either side of a part boundary is one fragment in llama.cpp's single string.
     for (Frag& fr : frags) {
-      if (fr.special < 0 && !all.empty() && all.back().special < 0) all.back().text += fr.text;
-      else all.push_back(std::move(fr));
+      if (fr.special < 0 && !all.empty() && all.back().special < 0)
+        all.back().text += fr.text;
+      else
+        all.push_back(std::move(fr));
     }
   }
   std::vector<int32_t> out;
@@ -434,7 +468,7 @@ std::vector<int32_t> Tokenizer::encode_parts(std::span<const Part> parts, bool a
       out.push_back(fr.special);
       prev_special = true;
     } else if (spm_) {
-      if (fr.text.empty()) continue;  // llama.cpp never makes empty raw fragments
+      if (fr.text.empty()) continue;                                 // llama.cpp never makes empty raw fragments
       std::string s = add_space_prefix_ && prev_special ? " " : "";  // :3599-3601
       s += fr.text;
       std::string esc;  // llama_escape_whitespace, :3536

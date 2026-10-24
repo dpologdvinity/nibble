@@ -161,8 +161,10 @@ inline void block6(const u8* w, const u8* a, const __m256i (&ap)[8], RowAcc& r) 
 
 template <class W>
 inline void block(const u8* w, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
-  if constexpr (std::is_same_v<W, Q6K>) block6(w, a, ap, r);
-  else block45<W>(w, a, ap, r);
+  if constexpr (std::is_same_v<W, Q6K>)
+    block6(w, a, ap, r);
+  else
+    block45<W>(w, a, ap, r);
 }
 
 inline float finish(const RowAcc& r) {

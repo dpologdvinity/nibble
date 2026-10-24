@@ -117,7 +117,7 @@ int64_t Model::n_ctx() const {
 // Per-conversation state. The Session borrows the Model's Impl (hence "must not outlive its Model").
 struct Session::Impl {
   Model::Impl& m;
-  model::Transformer tf;  // owns the KV cache and activation buffers
+  model::Transformer tf;      // owns the KV cache and activation buffers
   std::vector<float> logits;  // preallocated; forward path must not allocate. Valid when n_past > 0.
   int64_t n_prompt = 0, n_gen = 0;
   int64_t n_past = 0;  // tokens in the KV cache

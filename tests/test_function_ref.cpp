@@ -30,7 +30,10 @@ TEST_CASE("FunctionRef calls lambdas and functors") {
 // Reference parameters stay references through the trampoline, and a void-returning callable works.
 TEST_CASE("FunctionRef forwards reference arguments and void returns") {
   int sum = 0;
-  auto f = [&](int& out, int v) { out += v; sum += v; };
+  auto f = [&](int& out, int v) {
+    out += v;
+    sum += v;
+  };
   nibble::FunctionRef<void(int&, int)> r(f);
   int o = 1;
   r(o, 3);

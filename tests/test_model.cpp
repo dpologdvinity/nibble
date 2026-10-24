@@ -65,7 +65,9 @@ struct Loaded {
   model::LlamaConfig cfg;
   model::Weights w;
   Loaded(std::vector<uint8_t> b, const Backend& be)
-      : bytes(std::move(b)), file(gguf::File::parse(bytes)), cfg(model::LlamaConfig::from_gguf(file)),
+      : bytes(std::move(b)),
+        file(gguf::File::parse(bytes)),
+        cfg(model::LlamaConfig::from_gguf(file)),
         w(model::Weights::bind(file, cfg, be)) {}
 };
 
@@ -75,7 +77,8 @@ std::vector<float> run(Loaded& m, Backend& be, std::vector<int32_t> toks, int64_
   model::Transformer t(m.cfg, m.w, be, 64, max_batch);
   std::vector<float> out(static_cast<size_t>(m.cfg.n_vocab));
   if (one_by_one) {
-    for (size_t i = 0; i < toks.size(); ++i) t.forward(std::span(toks).subspan(i, 1), static_cast<int64_t>(i), out.data());
+    for (size_t i = 0; i < toks.size(); ++i)
+      t.forward(std::span(toks).subspan(i, 1), static_cast<int64_t>(i), out.data());
   } else {
     t.forward(toks, 0, out.data());
   }
@@ -163,8 +166,8 @@ TEST_CASE("llama bad rope_freqs and head_dim throw", "[model][llama]") {
   o = {};
   o.arch = "llama";
   o.rope_dim = 8;  // head_dim is 4
-  CHECK_THROWS_WITH(load(o), ContainsSubstring("llama.rope.dimension_count") && ContainsSubstring("8") &&
-                                 ContainsSubstring("4"));
+  CHECK_THROWS_WITH(
+      load(o), ContainsSubstring("llama.rope.dimension_count") && ContainsSubstring("8") && ContainsSubstring("4"));
   o.rope_dim = 4;
   CHECK_NOTHROW(load(o));
   o.key_length = 6;
@@ -428,7 +431,6 @@ TEST_CASE("debug check failure aborts naming the op", "[model][dcheck]") {
   INFO("child stderr: " << err);
   REQUIRE(WIFSIGNALED(status));
   CHECK(WTERMSIG(status) == SIGABRT);
-  CHECK_THAT(err, ContainsSubstring("NIBBLE_DCHECK") && ContainsSubstring("rmsnorm") &&
-                      ContainsSubstring("need F32"));
+  CHECK_THAT(err, ContainsSubstring("NIBBLE_DCHECK") && ContainsSubstring("rmsnorm") && ContainsSubstring("need F32"));
 }
 #endif

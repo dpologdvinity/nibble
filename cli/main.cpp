@@ -9,7 +9,13 @@
 namespace {
 // Prints the top-level help text to stderr.
 void usage() {
-  std::fputs("usage: nibble <subcommand> [args]\n\nsubcommands:\n  info <model.gguf>   print GGUF metadata and tensors\n  run -m <model.gguf> (-p <prompt> | -f <file>) [-n N] [-t N] [-c N] [--temp F] [--top-k N] [--top-p F] [--seed N]   generate text\n  chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N] [sampling flags]   chat, one message per stdin line\n  bench -m <model.gguf> [-t list] [-p N] [-n N] [-r N] [--mem] [--out file.jsonl]   pp/tg throughput\n", stderr);
+  std::fputs(
+      "usage: nibble <subcommand> [args]\n\nsubcommands:\n  info <model.gguf>   print GGUF metadata and tensors\n  run "
+      "-m <model.gguf> (-p <prompt> | -f <file>) [-n N] [-t N] [-c N] [--temp F] [--top-k N] [--top-p F] [--seed N]   "
+      "generate text\n  chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N] [sampling flags]   chat, one "
+      "message per stdin line\n  bench -m <model.gguf> [-t list] [-p N] [-n N] [-r N] [--mem] [--out file.jsonl]   "
+      "pp/tg throughput\n",
+      stderr);
 }
 }  // namespace
 

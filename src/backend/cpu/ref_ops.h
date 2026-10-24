@@ -37,8 +37,8 @@ void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, 
 // [n, n_heads, head_dim], k and v are [n_ctx, n_kv_heads, head_dim].
 // scratch: caller-provided, at least pos0 + n floats (no allocation inside).
 void attention_heads(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
-                     int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin,
-                     int64_t head_end, float* scratch);
+                     int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin, int64_t head_end,
+                     float* scratch);
 // gate[i] = silu(gate[i]) * up[i], with silu(g) = g / (1 + e^-g): the SwiGLU activation.
 void silu_mul(float* gate, const float* up, int64_t count);
 

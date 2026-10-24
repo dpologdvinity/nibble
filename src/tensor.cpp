@@ -9,9 +9,9 @@ namespace nibble {
 
 // One function-local static per type keeps the returned references valid for the life of the program.
 const DTypeInfo& dtype_info(DType t) {
-  static const DTypeInfo f32{1, 4, "F32"}, f16{1, 2, "F16"}, q4_0{32, 18, "Q4_0"},
-      q5_0{32, 22, "Q5_0"}, q5_1{32, 24, "Q5_1"}, q8_0{32, 34, "Q8_0"}, q4_k{256, 144, "Q4_K"},
-      q5_k{256, 176, "Q5_K"}, q6_k{256, 210, "Q6_K"};
+  static const DTypeInfo f32{1, 4, "F32"}, f16{1, 2, "F16"}, q4_0{32, 18, "Q4_0"}, q5_0{32, 22, "Q5_0"},
+      q5_1{32, 24, "Q5_1"}, q8_0{32, 34, "Q8_0"}, q4_k{256, 144, "Q4_K"}, q5_k{256, 176, "Q5_K"},
+      q6_k{256, 210, "Q6_K"};
   switch (t) {
     case DType::F32: return f32;
     case DType::F16: return f16;
@@ -28,9 +28,8 @@ const DTypeInfo& dtype_info(DType t) {
 
 // ggml numbers its types 0..15 in the order below (ids 4 and 5 were the retired Q4_2/Q4_3); 30 is BF16.
 const char* ggml_type_name(uint32_t t) {
-  static const char* const names[] = {"F32",  "F16",  "Q4_0", "Q4_1", "Q4_2", "Q4_3",
-                                      "Q5_0", "Q5_1", "Q8_0", "Q8_1", "Q2_K", "Q3_K",
-                                      "Q4_K", "Q5_K", "Q6_K", "Q8_K"};
+  static const char* const names[] = {"F32",  "F16",  "Q4_0", "Q4_1", "Q4_2", "Q4_3", "Q5_0", "Q5_1",
+                                      "Q8_0", "Q8_1", "Q2_K", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K"};
   if (t < 16) return names[t];
   if (t == 30) return "BF16";
   return "unknown";

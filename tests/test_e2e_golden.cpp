@@ -95,13 +95,13 @@ double top_gap(std::span<const float> r) {
 // disappears with scalar float ops (-DNIBBLE_SIMD=OFF): sub-ulp differences in the SIMD float code flip one
 // activation-requantization rounding. Every other file keeps 0.995 at every position.
 struct Gate {
-  double min_cos;       // positions below this count as "low"
-  double floor_cos;     // no position may fall below this
-  int max_low;          // number of positions allowed between floor_cos and min_cos
+  double min_cos;          // positions below this count as "low"
+  double floor_cos;        // no position may fall below this
+  int max_low;             // number of positions allowed between floor_cos and min_cos
   double min_cos_prefill;  // last-row cosine after batch prefill
-  double min_agree;     // required fraction of positions whose argmax agrees (or near-tie)
-  bool strict_argmax;   // every non-tie position must agree
-  bool assert_greedy;   // greedy divergence must be a near-tie; else only WARN
+  double min_agree;        // required fraction of positions whose argmax agrees (or near-tie)
+  bool strict_argmax;      // every non-tie position must agree
+  bool assert_greedy;      // greedy divergence must be a near-tie; else only WARN
 };
 Gate gate_for(const std::string& model) {
   if (model.ends_with("f16")) return {0.999, 0.999, 0, 0.999, 1.0, true, true};
@@ -141,7 +141,8 @@ const E2EModel& model_by_id(const std::string& id) {
 }
 
 // Prompt file for `name`: the chat prompt differs per model family.
-void check_prompt_tokens(const tok::Tokenizer& t, const Golden& g, const std::string& name, const std::string& file = "") {
+void check_prompt_tokens(const tok::Tokenizer& t, const Golden& g, const std::string& name,
+                         const std::string& file = "") {
   const std::string root = NIBBLE_SOURCE_DIR;
   std::ifstream in(root + "/tests/e2e/prompts/" + (file.empty() ? name : file) + ".txt", std::ios::binary);
   REQUIRE(in);
@@ -183,15 +184,15 @@ void run_prompt(const std::string& model, const std::string& name) {
       min_cos = std::min(min_cos, c);
       size_t ga = argmax(g.row(i)), na = argmax(out);
       bool tie = top_gap(g.row(i)) < 1e-3 || top_gap(out) < 1e-3;
-      INFO(name << " pos " << i << " cos " << c << " golden argmax " << ga << " (" << g.row(i)[ga] << ") nibble argmax " << na
-                << " (" << out[na] << ")");
+      INFO(name << " pos " << i << " cos " << c << " golden argmax " << ga << " (" << g.row(i)[ga] << ") nibble argmax "
+                << na << " (" << out[na] << ")");
       REQUIRE(c >= gate.floor_cos);
       if (c < gate.min_cos) ++low;
       if (gate.strict_argmax && !tie) REQUIRE(ga == na);
       if (tie || ga == na) ++agree;
     }
-    WARN(name << " [" << model << "]: min cosine over " << total << " positions = " << min_cos << ", top-1 agreement " << agree << "/"
-                << total);
+    WARN(name << " [" << model << "]: min cosine over " << total << " positions = " << min_cos << ", top-1 agreement "
+              << agree << "/" << total);
     REQUIRE(low <= size_t(gate.max_low));
     REQUIRE(double(agree) >= gate.min_agree * double(total));
   }

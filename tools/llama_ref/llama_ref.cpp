@@ -41,8 +41,7 @@ static std::string read_file(const std::string& p) {
 }
 
 // Tokenizes with llama.cpp's own tokenizer (retrying with a larger buffer when the first guess is too small).
-static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, bool add_special,
-                                    bool parse_special) {
+static std::vector<llama_token> tok(const llama_vocab* v, const std::string& s, bool add_special, bool parse_special) {
   std::vector<llama_token> t(s.size() + 16);
   int n = llama_tokenize(v, s.data(), int32_t(s.size()), t.data(), int32_t(t.size()), add_special, parse_special);
   if (n < 0) {
@@ -68,7 +67,11 @@ static int cmd_tokenize(char** a, bool parse_special) {
   llama_model* m = load(a[0]);
   const llama_vocab* v = llama_model_get_vocab(m);
   std::vector<std::string> entries;
-  try { entries = read_corpus(a[1]); } catch (std::exception& e) { die(e.what()); }
+  try {
+    entries = read_corpus(a[1]);
+  } catch (std::exception& e) {
+    die(e.what());
+  }
   std::ofstream out(a[2], std::ios::binary);
   if (!out) die(std::string("cannot write ") + a[2]);
   for (auto& e : entries) {

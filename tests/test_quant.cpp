@@ -112,7 +112,8 @@ TEST_CASE("q8_0 roundtrip error", "[quant]") {
     float amax = 0;
     for (int i = 0; i < 32; ++i) amax = std::fmax(amax, std::fabs(x[b * 32 + i]));
     for (int i = 0; i < 32; ++i)
-      REQUIRE(std::fabs(r[b * 32 + i] - x[b * 32 + i]) <= amax / 254.f + amax * 0x1p-10f);  // d/2 + fp16 rounding of d (up to 127*d*2^-11)
+      REQUIRE(std::fabs(r[b * 32 + i] - x[b * 32 + i]) <=
+              amax / 254.f + amax * 0x1p-10f);  // d/2 + fp16 rounding of d (up to 127*d*2^-11)
   }
 }
 

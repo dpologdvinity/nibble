@@ -34,9 +34,7 @@ std::vector<PromptPart> chat_turn(ChatFormat f, std::string_view system, std::st
                 {"<|im_end|>\n<|im_start|>user\n", true},
                 {user, false},
                 {"<|im_end|>\n<|im_start|>assistant\n", true}};
-      return {{"<|im_end|>\n<|im_start|>user\n", true},
-              {user, false},
-              {"<|im_end|>\n<|im_start|>assistant\n", true}};
+      return {{"<|im_end|>\n<|im_start|>user\n", true}, {user, false}, {"<|im_end|>\n<|im_start|>assistant\n", true}};
     case ChatFormat::Llama3:
       if (first)
         return {{"<|start_header_id|>system<|end_header_id|>\n\n"

@@ -26,16 +26,22 @@ class CpuBackend final : public Backend {
   // F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K.
   bool supports(DType t) const override {
     switch (t) {
-      case DType::F32: case DType::F16: case DType::Q4_0: case DType::Q5_0: case DType::Q5_1: case DType::Q8_0:
-      case DType::Q4_K: case DType::Q5_K: case DType::Q6_K:
-        return true;
+      case DType::F32:
+      case DType::F16:
+      case DType::Q4_0:
+      case DType::Q5_0:
+      case DType::Q5_1:
+      case DType::Q8_0:
+      case DType::Q4_K:
+      case DType::Q5_K:
+      case DType::Q6_K: return true;
     }
     return false;
   }
   // Sizes the attention scratch and the quantized-activation scratch for the given limits. Throws Error if a
   // size overflows or cannot be allocated.
   void reserve(const ReserveParams&) override;
-  size_t scratch_capacity() const { return scratch_.size(); }  // test hook
+  size_t scratch_capacity() const { return scratch_.size(); }                               // test hook
   size_t quant_scratch_capacity() const { return xq_.size() + xq1_.size() + xqk_.size(); }  // test hook (blocks)
   // Test hook: activation-quantization passes so far, one per activation type per matmul/matmul_multi call.
   uint64_t quantize_calls() const { return quantize_calls_; }
@@ -55,8 +61,8 @@ class CpuBackend final : public Backend {
   void add_bias(float* x, const Tensor& bias, int64_t n) override;
   void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, const RopeParams& p) override;
   void copy(float* dst, const float* src, int64_t count) override;
-  void attention(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
-                 int64_t n_heads, int64_t n_kv_heads, int64_t head_dim) override;
+  void attention(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0, int64_t n_heads,
+                 int64_t n_kv_heads, int64_t head_dim) override;
   void silu_mul(float* gate, const float* up, int64_t count) override;
 
  private:

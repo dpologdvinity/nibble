@@ -60,8 +60,7 @@ void gemm_ft(const Tensor& wt, const float* x, float* y, int64_t n, int64_t rb, 
   const int64_t in = wt.ne[0], out = wt.rows();
   const int64_t re_full = rb + (re - rb) / kRf * kRf, n_full = n / kTf * kTf;
   for (int64_t t = 0; t < n_full; t += kTf)
-    for (int64_t r = rb; r < re_full; r += kRf)
-      tile_f<L, kRf, kTf>(w + r * in, in, x + t * in, y + t * out + r, out);
+    for (int64_t r = rb; r < re_full; r += kRf) tile_f<L, kRf, kTf>(w + r * in, in, x + t * in, y + t * out + r, out);
   if (n_full < n) matmul_rows_f(wt, x + n_full * in, y + n_full * out, n - n_full, rb, re_full);
   if (re_full < re) matmul_rows_f(wt, x, y, n, re_full, re);
 }
@@ -83,7 +82,9 @@ __m256i bcast_group(const u8* blk, int g) {  // weight quants 4g..4g+3 of a Q8_0
   return _mm256_set1_epi32(v);
 }
 // Group g (4 quants per token, 8 tokens) / the per-token quant sums of a packed activation block.
-__m256i load_group(const BlockQ8_0x8* a, int g) { return _mm256_load_si256(reinterpret_cast<const __m256i*>(a->qs[g])); }
+__m256i load_group(const BlockQ8_0x8* a, int g) {
+  return _mm256_load_si256(reinterpret_cast<const __m256i*>(a->qs[g]));
+}
 __m256i load_sum(const BlockQ8_0x8* a) { return _mm256_load_si256(reinterpret_cast<const __m256i*>(a->sum)); }
 
 // Q4_0 nibbles (0..15 = w + 8): qs[4g'..4g'+3] holds elements 4g'..4g'+3 (low nibbles) and 16+4g'.. (high),

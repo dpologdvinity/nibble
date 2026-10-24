@@ -81,7 +81,9 @@ std::string iso_now() {
 }
 
 // Median, minimum and maximum of the timed repetitions.
-struct Stats { double med, mn, mx; };
+struct Stats {
+  double med, mn, mx;
+};
 Stats stats(std::vector<double> v) {
   std::sort(v.begin(), v.end());
   const size_t n = v.size();
@@ -92,9 +94,15 @@ Stats stats(std::vector<double> v) {
 std::string json_escape(const std::string& s) {
   std::string o;
   for (const unsigned char ch : s) {
-    if (ch == '"' || ch == '\\') { o += '\\'; o += static_cast<char>(ch); }
-    else if (ch < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", ch); o += b; }
-    else o += static_cast<char>(ch);
+    if (ch == '"' || ch == '\\') {
+      o += '\\';
+      o += static_cast<char>(ch);
+    } else if (ch < 0x20) {
+      char b[8];
+      std::snprintf(b, sizeof b, "\\u%04x", ch);
+      o += b;
+    } else
+      o += static_cast<char>(ch);
   }
   return o;
 }
@@ -106,17 +114,19 @@ struct Sink {
   double load;
   std::ofstream out;
   void emit(const char* test, int threads, int reps, Stats s, const char* unit) {
-    std::printf("%-8s %7d %10.2f %10.2f %10.2f  %s%s\n", test, threads, s.med, s.mn, s.mx, unit, std::string(unit) == "GB/s" ? " (1e9 bytes/s)" : "");
+    std::printf("%-8s %7d %10.2f %10.2f %10.2f  %s%s\n", test, threads, s.med, s.mn, s.mx, unit,
+                std::string(unit) == "GB/s" ? " (1e9 bytes/s)" : "");
     std::fflush(stdout);
     if (!out.is_open()) return;
     char nums[256];
-    const int len = std::snprintf(nums, sizeof nums,
-                  "\",\"threads\":%d,\"reps\":%d,\"median\":%.4f,\"min\":%.4f,\"max\":%.4f,\"unit\":\"%s\","
-                  "\"load1\":%.2f,\"date\":\"%s\"}\n",
-                  threads, reps, s.med, s.mn, s.mx, unit, load, date.c_str());
+    const int len =
+        std::snprintf(nums, sizeof nums,
+                      "\",\"threads\":%d,\"reps\":%d,\"median\":%.4f,\"min\":%.4f,\"max\":%.4f,\"unit\":\"%s\","
+                      "\"load1\":%.2f,\"date\":\"%s\"}\n",
+                      threads, reps, s.med, s.mn, s.mx, unit, load, date.c_str());
     if (len < 0 || len >= static_cast<int>(sizeof nums)) throw Error("bench: JSON line too long");
-    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"kernels\":\"" << simd::kernel_set() << "\",\"model\":\"" << json_escape(model)
-        << "\",\"test\":\"" << test << nums;
+    out << "{\"tool\":\"nibble\",\"commit\":\"" << NIBBLE_GIT_SHA << "\",\"kernels\":\"" << simd::kernel_set()
+        << "\",\"model\":\"" << json_escape(model) << "\",\"test\":\"" << test << nums;
     out.flush();
   }
 };
@@ -142,7 +152,10 @@ int cmd_bench(int argc, char** argv) {
   bool mem = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
-    if (a == "--mem") { mem = true; continue; }
+    if (a == "--mem") {
+      mem = true;
+      continue;
+    }
     const bool known = a == "-m" || a == "-t" || a == "-p" || a == "-n" || a == "-r" || a == "--out";
     if (!known || i + 1 >= argc) {
       std::fprintf(stderr, known ? "error: flag '%s' needs a value\n" : "error: unknown argument '%s'\n", a.c_str());
@@ -151,12 +164,19 @@ int cmd_bench(int argc, char** argv) {
     }
     const char* v = argv[++i];
     bool ok = true;
-    if (a == "-m") model_path = v;
-    else if (a == "--out") out_path = v;
-    else if (a == "-t") { threads.clear(); ok = parse_threads(v, threads); }
-    else if (a == "-p") ok = parse_int(v, 1, p);
-    else if (a == "-n") ok = parse_int(v, 1, n);
-    else ok = parse_int(v, 1, r);
+    if (a == "-m")
+      model_path = v;
+    else if (a == "--out")
+      out_path = v;
+    else if (a == "-t") {
+      threads.clear();
+      ok = parse_threads(v, threads);
+    } else if (a == "-p")
+      ok = parse_int(v, 1, p);
+    else if (a == "-n")
+      ok = parse_int(v, 1, n);
+    else
+      ok = parse_int(v, 1, r);
     if (!ok) {
       std::fprintf(stderr, "error: bad value '%s' for %s\n", v, a.c_str());
       usage();
@@ -225,7 +245,8 @@ int cmd_bench(int argc, char** argv) {
   if (mem) {
     const int t = *std::max_element(threads.begin(), threads.end());
     ThreadPool pool(t);
-    sink.emit("membw", t, static_cast<int>(r), stats(bench::measure_membw(pool, bench::membw_default_bytes(), static_cast<int>(r))), "GB/s");
+    sink.emit("membw", t, static_cast<int>(r),
+              stats(bench::measure_membw(pool, bench::membw_default_bytes(), static_cast<int>(r))), "GB/s");
   }
   return 0;
 }

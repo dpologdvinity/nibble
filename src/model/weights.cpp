@@ -33,8 +33,8 @@ Tensor get(const gguf::File& f, const Backend& be, const std::string& name, std:
   int i = 0;
   for (int64_t d : ne) ok = ok && t->ne[static_cast<size_t>(i++)] == d;
   if (!ok)
-    throw Error("tensor " + escape_control(name) + ": expected " + shape_str(std::data(ne), static_cast<int>(ne.size())) + ", got " +
-                shape_str(t->ne.data(), t->n_dims));
+    throw Error("tensor " + escape_control(name) + ": expected " +
+                shape_str(std::data(ne), static_cast<int>(ne.size())) + ", got " + shape_str(t->ne.data(), t->n_dims));
   const std::string tn = dtype_info(t->type).name;
   if (f32_only ? t->type != DType::F32 : !be.supports(t->type))
     throw Error("unsupported tensor type " + tn + " for " + escape_control(name) +

@@ -32,10 +32,11 @@ LlamaConfig LlamaConfig::from_gguf(const gguf::File& f) {
     throw Error("invalid model: " + a + "embedding_length " + std::to_string(c.n_embd) + " is not divisible by " + a +
                 "attention.head_count " + std::to_string(c.n_heads));
   if (c.n_heads % c.n_kv_heads != 0)
-    throw Error("invalid model: " + a + "attention.head_count " + std::to_string(c.n_heads) +
-                " is not divisible by " + a + "attention.head_count_kv " + std::to_string(c.n_kv_heads));
+    throw Error("invalid model: " + a + "attention.head_count " + std::to_string(c.n_heads) + " is not divisible by " +
+                a + "attention.head_count_kv " + std::to_string(c.n_kv_heads));
   c.head_dim = c.n_embd / c.n_heads;
-  if (c.head_dim % 2 != 0) throw Error("invalid model: head_dim " + std::to_string(c.head_dim) + " must be even for rope");
+  if (c.head_dim % 2 != 0)
+    throw Error("invalid model: head_dim " + std::to_string(c.head_dim) + " must be even for rope");
   for (const char* k : {"rope.dimension_count", "attention.key_length"})
     if (f.find(a + k) && f.get_int(a + k) != c.head_dim)
       throw Error("invalid model: " + a + k + " = " + std::to_string(f.get_int(a + k)) +

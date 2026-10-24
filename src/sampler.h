@@ -33,7 +33,6 @@ class Sampler {
   // usable (all NaN / all -inf). Never allocates.
   int32_t sample(std::span<const float> logits);
 
-
  private:
   uint64_t next();  // xoshiro256** step: the next 64 random bits
 
