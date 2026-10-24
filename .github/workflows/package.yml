@@ -19,12 +19,14 @@ jobs:
   binaries:
     name: binary (${{ matrix.suffix }})
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     timeout-minutes: 30
     strategy:
       fail-fast: true
       matrix:
         include:
-          # AVX2 + FMA + F16C kernels: x86-64 CPUs from about 2013 on.
+          # AVX2 + FMA + F16C kernels: x86-64-v3 CPUs (Intel Haswell / AMD Excavator or newer; older parts die with SIGILL).
           - suffix: linux-x86_64-avx2
             march: x86-64-v3
           # Scalar kernels only: runs anywhere, much slower.
@@ -42,8 +44,10 @@ jobs:
         run: build/nibble --version && build/nibble --help > /dev/null
       - name: Package
         id: pkg
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          version="${{ inputs.version }}"
+          version="$INPUT_VERSION"
           [ -n "$version" ] || version="$(git rev-parse --short HEAD)"
           name="nibble-${version}-${{ matrix.suffix }}"
           mkdir -p "dist/$name"
@@ -75,6 +79,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+          flavor: latest=false  # never move a floating tag from an automated run; the owner tags releases deliberately
       - name: Build and smoke-test
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
