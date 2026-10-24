@@ -13,6 +13,7 @@
 namespace nibble::cli {
 namespace {
 
+// Prints the `chat` usage line to stderr.
 void usage() {
   std::fputs(
       "usage: nibble chat -m <model.gguf> [--system <text>] [-n <max_tokens per reply=512>] "
@@ -23,6 +24,9 @@ void usage() {
 
 }  // namespace
 
+// Reads one user message per stdin line (CRLF tolerated, blank lines skipped), sends it through Chat and
+// streams the reply. The "> " prompt is printed to stderr only when stdin is a terminal, so piped input
+// produces clean output. Ends at EOF or when the context fills up.
 int cmd_chat(int argc, char** argv) {
   std::string system;
   CommonArgs ca;

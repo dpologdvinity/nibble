@@ -1,3 +1,6 @@
+// `nibble info <model.gguf>`: dumps the GGUF header, every metadata key/value (long arrays abbreviated) and
+// the tensor table (name, ggml type, shape, offset). Useful to see which quantization mix a file really
+// contains. All text from the file is passed through escape_control before printing.
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -16,6 +19,7 @@ namespace {
 
 using gguf::ValueType;
 
+// Lower-case GGUF type name used in array summaries, e.g. "string".
 const char* value_type_name(ValueType t) {
   switch (t) {
     case ValueType::U8: return "u8";
@@ -35,12 +39,14 @@ const char* value_type_name(ValueType t) {
   return "unknown";
 }
 
+// Shortest %g rendering of a double.
 std::string fmt_double(double d) {
   char buf[64];
   std::snprintf(buf, sizeof buf, "%g", d);
   return buf;
 }
 
+// "[string x 151936] \"!\", ...": element type, count and the first three elements.
 std::string fmt_array(const gguf::Array& a) {
   constexpr size_t kShow = 3;
   std::string out;
@@ -53,6 +59,7 @@ std::string fmt_array(const gguf::Array& a) {
   return std::string("[") + value_type_name(a.elem_type()) + " x " + std::to_string(a.size()) + "] " + out + "...";
 }
 
+// One-line rendering of any metadata value.
 std::string fmt_value(const gguf::Value& v) {
   return std::visit(
       [](const auto& x) -> std::string {
@@ -68,6 +75,7 @@ std::string fmt_value(const gguf::Value& v) {
 
 }  // namespace
 
+// Exactly one argument (the file) is required; anything else throws a usage Error.
 int cmd_info(int argc, char** argv) {
   if (argc != 2) throw Error("usage: nibble info <model.gguf>");
   const gguf::File f = gguf::File::open(argv[1]);

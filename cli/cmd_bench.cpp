@@ -30,6 +30,7 @@
 namespace nibble::cli {
 namespace {
 
+// Prints the `bench` usage line to stderr.
 void usage() {
   std::fputs(
       "usage: nibble bench -m <model.gguf> [-t <list=1, e.g. 1,2,4,8>] [-p <prompt tokens=512>] "
@@ -37,6 +38,7 @@ void usage() {
       stderr);
 }
 
+// Strict decimal parse of an integer in [lo, 1000000].
 bool parse_int(const char* s, long lo, long& out) {
   char* end = nullptr;
   errno = 0;
@@ -46,6 +48,7 @@ bool parse_int(const char* s, long lo, long& out) {
   return true;
 }
 
+// Parses a comma-separated thread-count list such as "1,2,4,8".
 bool parse_threads(const std::string& s, std::vector<int>& out) {
   size_t i = 0;
   while (true) {
@@ -58,6 +61,7 @@ bool parse_threads(const std::string& s, std::vector<int>& out) {
   }
 }
 
+// 1-minute load average (path overridable through NIBBLE_LOADAVG_PATH for tests).
 double load1() {
   const char* p = std::getenv("NIBBLE_LOADAVG_PATH");
   std::ifstream f(p ? p : "/proc/loadavg");
@@ -66,6 +70,7 @@ double load1() {
   return v;
 }
 
+// Current UTC time, ISO 8601.
 std::string iso_now() {
   const std::time_t t = std::time(nullptr);
   char b[32];
@@ -75,6 +80,7 @@ std::string iso_now() {
   return b;
 }
 
+// Median, minimum and maximum of the timed repetitions.
 struct Stats { double med, mn, mx; };
 Stats stats(std::vector<double> v) {
   std::sort(v.begin(), v.end());
@@ -82,6 +88,7 @@ Stats stats(std::vector<double> v) {
   return {n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2, v.front(), v.back()};
 }
 
+// Escapes a string for embedding in a JSON string literal.
 std::string json_escape(const std::string& s) {
   std::string o;
   for (const unsigned char ch : s) {
@@ -92,6 +99,8 @@ std::string json_escape(const std::string& s) {
   return o;
 }
 
+// Output sink: prints one table row and, when --out is given, appends a JSON line with the same numbers
+// plus provenance (commit, kernel set, model file name, load average, date).
 struct Sink {
   std::string model, date;
   double load;
@@ -113,10 +122,15 @@ struct Sink {
 };
 
 using clock_ = std::chrono::steady_clock;
+// Seconds elapsed since a.
 double secs(clock_::time_point a) { return std::chrono::duration<double>(clock_::now() - a).count(); }
 
 }  // namespace
 
+// Measures prompt processing (ppN: one N-token forward from position 0) and token generation (tgN: N greedy
+// single-token steps after a 1-token prompt) for each thread count, `-r` timed repetitions after one
+// untimed warm-up, and optionally a memory-bandwidth probe. It drives the Transformer directly so tokenizer
+// and sampler costs are excluded. `--version` prints the build's git SHA (used by tests and bench_final.sh).
 int cmd_bench(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--version") {
     std::puts(NIBBLE_GIT_SHA);

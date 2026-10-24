@@ -1,3 +1,5 @@
+// Entry point of the `nibble` command-line tool: dispatches to the subcommands (info, run, chat, bench) and
+// turns exceptions into "error: <message>" on stderr with exit status 1 (2 for usage errors).
 #include <cstdio>
 #include <cstring>
 
@@ -5,11 +7,13 @@
 #include "nibble/error.h"
 
 namespace {
+// Prints the top-level help text to stderr.
 void usage() {
   std::fputs("usage: nibble <subcommand> [args]\n\nsubcommands:\n  info <model.gguf>   print GGUF metadata and tensors\n  run -m <model.gguf> (-p <prompt> | -f <file>) [-n N] [-t N] [-c N] [--temp F] [--top-k N] [--top-p F] [--seed N]   generate text\n  chat -m <model.gguf> [--system <text>] [-n N] [-t N] [-c N] [sampling flags]   chat, one message per stdin line\n  bench -m <model.gguf> [-t list] [-p N] [-n N] [-r N] [--mem] [--out file.jsonl]   pp/tg throughput\n", stderr);
 }
 }  // namespace
 
+// Exit codes: 0 success, 1 runtime error (bad model file, I/O), 2 usage error (unknown subcommand or flag).
 int main(int argc, char** argv) {
   if (argc < 2) {
     usage();
