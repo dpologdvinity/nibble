@@ -1,8 +1,8 @@
 # Release workflow: pushing a tag like v0.7.0 builds the artifacts, pushes the container image to ghcr.io and
 # creates a DRAFT GitHub release with the tarballs attached. The draft is published by hand after a final check.
 #
-# The workflow only needs the built-in GITHUB_TOKEN; see docs/agents/STEPS-FOR-OWNER.md for the one-time
-# repository settings (workflow permissions, package visibility).
+# The workflow only needs the built-in GITHUB_TOKEN; the one-time repository settings (workflow permissions,
+# package visibility) are listed in the owner checklist kept outside the repository history.
 name: release
 
 on:

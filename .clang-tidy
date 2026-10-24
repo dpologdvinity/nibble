@@ -1,0 +1,21 @@
+# Static analysis for the library and CLI (run: run-clang-tidy -p build 'src/|cli/'). Checks are chosen to be
+# high-signal: real bug patterns and clear performance mistakes. Style checks are left to clang-format.
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-exception-escape,
+  -bugprone-signed-bitwise,
+  clang-analyzer-*,
+  performance-*,
+  -performance-no-int-to-ptr,
+  -performance-enum-size,
+  concurrency-*,
+  misc-redundant-expression,
+  misc-unused-using-decls,
+  misc-misplaced-const,
+  readability-misleading-indentation,
+  readability-container-size-empty
+WarningsAsErrors: '*'
+HeaderFilterRegex: '(src|cli|include)/.*'
