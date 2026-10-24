@@ -306,17 +306,21 @@ TEST_CASE("simd q4_0/q8_0 dots equal scalar bitwise", "[simd][quant]") {
 // A NaN in a block makes the AVX2 quantizer's scale NaN, like the scalar quantizer (so every dot against the block
 // is NaN rather than silently dropping the NaN element).
 TEST_CASE("simd quantize_row_q8_0 propagates NaN into the block scale", "[simd][quant]") {
-  float x[64];
-  for (int j = 0; j < 64; ++j) x[j] = static_cast<float>(j % 32 - 16);
-  x[40] = NAN;  // second block only
-  BlockQ8_0 y[2], ref[2];
-  simd::quantize_row_q8_0(x, y, 64);
-  nibble::quantize_row_q8_0(x, ref, 64);
   const auto is_nan16 = [](uint16_t h) { return (h & 0x7C00) == 0x7C00 && (h & 0x3FF) != 0; };
-  CHECK_FALSE(is_nan16(y[0].d));
-  CHECK(is_nan16(y[1].d));
-  CHECK(y[0].d == ref[0].d);
-  CHECK(is_nan16(ref[1].d));
+  for (int pos = 0; pos < 32; ++pos) {  // every lane of every 8-wide vector in the block
+    float x[64];
+    for (int j = 0; j < 64; ++j) x[j] = static_cast<float>(j % 32 - 16);
+    x[32 + pos] = NAN;  // second block only
+    BlockQ8_0 y[2], ref[2];
+    simd::quantize_row_q8_0(x, y, 64);
+    nibble::quantize_row_q8_0(x, ref, 64);
+    CAPTURE(pos);
+    CHECK_FALSE(is_nan16(y[0].d));
+    CHECK(is_nan16(y[1].d));
+    CHECK(is_nan16(ref[1].d));
+    CHECK(std::memcmp(&y[0], &ref[0], sizeof(BlockQ8_0)) == 0);
+    CHECK(std::memcmp(y[1].qs, ref[1].qs, 32) == 0);  // zero quants, as in the scalar quantizer
+  }
 }
 
 // Rows with tiny magnitudes have an fp16 scale of 0; their dots must be exactly 0 in both implementations.
