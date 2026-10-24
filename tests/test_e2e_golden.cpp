@@ -84,17 +84,24 @@ double top_gap(std::span<const float> r) {
 // Llama-3.2 k-quant files (user decision 2026-10-23): llama.cpp's own generic and native builds differ by
 // more than 0.995 cosine at the same positions where nibble does (llama32-q6_k chat: 22 positions), so the
 // per-position floor is 0.97 (nibble's measured worst is 0.9765); the prefill last row stays at 0.995.
+// Other k-quant files (user go-ahead 2026-10-23): a single position may fall below 0.995 as long as none falls
+// below 0.99. Two cases (tinyllama-q4_k_m chat, qwen q4_k_m code) have exactly one such position, which
+// disappears with scalar float ops (-DNIBBLE_SIMD=OFF): sub-ulp differences in the SIMD float code flip one
+// activation-requantization rounding. Every other file keeps 0.995 at every position.
 struct Gate {
-  double min_cos;
+  double min_cos;       // positions below this count as "low"
+  double floor_cos;     // no position may fall below this
+  int max_low;          // number of positions allowed between floor_cos and min_cos
   double min_cos_prefill;  // last-row cosine after batch prefill
   double min_agree;     // required fraction of positions whose argmax agrees (or near-tie)
   bool strict_argmax;   // every non-tie position must agree
   bool assert_greedy;   // greedy divergence must be a near-tie; else only WARN
 };
 Gate gate_for(const std::string& model) {
-  if (model.ends_with("f16")) return {0.999, 0.999, 1.0, true, true};
-  if (model.starts_with("llama32-") && model != "llama32-f16") return {0.97, 0.995, 0.90, false, false};
-  return {0.995, 0.995, 0.90, false, false};
+  if (model.ends_with("f16")) return {0.999, 0.999, 0, 0.999, 1.0, true, true};
+  if (model.starts_with("llama32-") && model != "llama32-f16") return {0.97, 0.97, 0, 0.995, 0.90, false, false};
+  if (model.find("_k") != std::string::npos) return {0.995, 0.99, 1, 0.995, 0.90, false, false};
+  return {0.995, 0.995, 0, 0.995, 0.90, false, false};
 }
 
 // One row per model file under test: id used in the case names, gguf and golden names, and the chat prompt.
@@ -163,7 +170,7 @@ void run_prompt(const std::string& model, const std::string& name) {
   {
     model::Transformer t(e.cfg, e.w, e.be, 256);
     double min_cos = 2;
-    size_t agree = 0;
+    size_t agree = 0, low = 0;
     for (size_t i = 0; i < total; ++i) {
       t.forward(std::span(g.tokens).subspan(i, 1), int64_t(i), out.data());
       double c = cosine(g.row(i), out.data());
@@ -172,12 +179,14 @@ void run_prompt(const std::string& model, const std::string& name) {
       bool tie = top_gap(g.row(i)) < 1e-3 || top_gap(out) < 1e-3;
       INFO(name << " pos " << i << " cos " << c << " golden argmax " << ga << " (" << g.row(i)[ga] << ") nibble argmax " << na
                 << " (" << out[na] << ")");
-      REQUIRE(c >= gate.min_cos);
+      REQUIRE(c >= gate.floor_cos);
+      if (c < gate.min_cos) ++low;
       if (gate.strict_argmax && !tie) REQUIRE(ga == na);
       if (tie || ga == na) ++agree;
     }
     WARN(name << " [" << model << "]: min cosine over " << total << " positions = " << min_cos << ", top-1 agreement " << agree << "/"
                 << total);
+    REQUIRE(low <= size_t(gate.max_low));
     REQUIRE(double(agree) >= gate.min_agree * double(total));
   }
 
