@@ -158,6 +158,10 @@ nibble_cli_test(cli_info_escapes_control 0 ARGS info ${NIBBLE_DATA}/escape.gguf
 nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*nonexistent")
 nibble_cli_test(cli_info_q6k 0 ARGS info ${NIBBLE_DATA}/q6k.gguf REGEX "w +Q6_K +\\[256\\]")
 nibble_cli_test(cli_usage 2 ARGS frobnicate REGEX "unknown subcommand")
+# --help / help print the usage to stdout and succeed; --version prints the build's git SHA.
+nibble_cli_test(cli_help_flag 0 ARGS --help REGEX "usage: nibble <subcommand>")
+nibble_cli_test(cli_help_word 0 ARGS help REGEX "usage: nibble <subcommand>")
+nibble_cli_test(cli_version 0 ARGS --version REGEX "^nibble (unknown|[0-9a-f]+)(-dirty)?\n")
 
 # `nibble run` tests: success, usage errors for every kind of bad flag, deterministic output with temperature
 # 0 or a fixed seed.
