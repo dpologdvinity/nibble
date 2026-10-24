@@ -6,20 +6,47 @@ tokenizer and transformer forward pass, and is checked against llama.cpp as a
 reference. It has no runtime dependencies beyond the C++ standard library and
 pthreads.
 
+nibble targets one job: run quantized open-weight chat models on a CPU, correctly. "Correctly" means it is checked
+against llama.cpp at every step: the same token ids from the tokenizer, and logits that agree with llama.cpp's to
+within the rounding noise two correct implementations have (see [Correctness](#correctness)). It is a small,
+readable code base (about 6,000 lines of library code, comments included) rather than a framework: see
+[ARCHITECTURE.md](ARCHITECTURE.md) for how it is put together.
+
 ## Status
 
-Milestones M0–M6 are done: Qwen2.5 (F16, Q8_0, Q4_0), Llama 3.2 1B and TinyLlama
-1.1B (F16) run on the CPU with AVX2/AVX-VNNI kernels (scalar twins kept as the
-reference) on a thread pool, with a sampler and a multi-turn `nibble chat`. See
-[Performance](#performance) for numbers against llama.cpp.
+Milestones M0–M7 are done. Qwen2.5-0.5B, Llama 3.2 1B and TinyLlama 1.1B run on the CPU in F16, Q8_0, Q4_0,
+Q5_0, Q5_1 and the k-quants Q4_K, Q5_K and Q6_K (the files llama.cpp's `llama-quantize` makes as `Q4_K_M`,
+`Q5_K_M` and `Q6_K`), with AVX2/AVX-VNNI kernels (scalar twins kept as the reference) on a thread pool, a
+sampler, and a multi-turn `nibble chat`. See [Performance](#performance) for numbers against llama.cpp.
+
+## Quickstart
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+tools/download_models.sh                                   # Qwen2.5-0.5B-Instruct F16 (about 1.3 GB)
+build/nibble chat -m models/qwen2.5-0.5b-instruct-fp16.gguf
+```
+
+Type a message and press Enter; the reply streams to the terminal. `nibble --help` lists the other subcommands
+(`run`, `info`, `bench`); [Usage](#usage) has the details. To run a smaller, faster quantized file, build it with
+`tools/make_quants.sh` (needs the llama.cpp tools; see [Getting a model](#getting-a-model)).
+
+A container image is also available: `docker build -t nibble .`, then
+`docker run --rm -it -v "$PWD/models:/models:ro" nibble chat -m /models/<file>.gguf`.
 
 ## Supported models
 
 | model | types | how to get it |
 |-------|-------|---------------|
-| Qwen2.5-0.5B-Instruct | F16, Q8_0, Q4_0 | `tools/download_models.sh` (F16), then `tools/make_quants.sh` (Q8_0, Q4_0) |
-| Llama-3.2-1B-Instruct | F16 | `tools/convert_hf.sh llama32-1b` |
-| TinyLlama-1.1B-Chat-v1.0 | F16 | `tools/convert_hf.sh tinyllama-1.1b` |
+| Qwen2.5-0.5B-Instruct | F16, Q8_0, Q4_0, Q4_K_M, Q5_K_M, Q6_K | `tools/download_models.sh` (F16), then `tools/make_quants.sh` (the rest) |
+| Llama-3.2-1B-Instruct | F16, Q4_K_M, Q5_K_M, Q6_K | `tools/convert_hf.sh llama32-1b` (F16), then `tools/make_quants.sh` |
+| TinyLlama-1.1B-Chat-v1.0 | F16, Q4_K_M, Q5_K_M, Q6_K | `tools/convert_hf.sh tinyllama-1.1b` (F16), then `tools/make_quants.sh` |
+
+**Tensor types the loader accepts:** F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K. The files above are the
+ones tested. `Q4_K_M` and `Q5_K_M` are *mixes*: `llama-quantize` stores most matrices as Q4_K / Q5_K but uses Q6_K for
+some, Q5_0 / Q5_1 or Q8_0 where a row length is not a multiple of 256 (Qwen2.5-0.5B), and F32 for norms. Other
+k-quant mixes should load if they use only the types above, but are not claimed. Files with other types (Q2_K, Q3_K,
+Q4_1, IQ*, BF16, ...) are rejected at load with an error naming the type.
 
 `convert_hf.sh` downloads the Hugging Face weights at a pinned commit, checks
 every file against the hashes the Hugging Face API lists for that commit, and
@@ -48,16 +75,22 @@ The SIMD kernels are chosen at compile time: they need AVX2, FMA and F16C, and t
 VNNI dot products also need AVX-VNNI. `NIBBLE_NATIVE` defaults to ON
 (`-march=native`), so the binary may not run on an older CPU than the build host.
 `-DNIBBLE_NATIVE=OFF` builds a portable binary that runs only the scalar kernels and
-is much slower. `-DNIBBLE_SIMD=OFF` forces the scalar kernels even on a native
-build. `nibble info <model.gguf>` prints the active set, e.g.
+is much slower (add `-DCMAKE_CXX_FLAGS=-march=x86-64-v3` for a redistributable AVX2 binary).
+`-DNIBBLE_SIMD=OFF` forces the scalar kernels even on a native build. `-DNIBBLE_BUILD_TESTS=OFF`
+skips the tests (and the Catch2 download). `nibble info <model.gguf>` prints the active set, e.g.
 `kernels: avx2+fma+f16c+avxvnni` or `kernels: scalar`.
 
 ## Getting a model
 
 ```sh
-tools/download_models.sh   # downloads qwen2.5-0.5b-instruct-fp16.gguf into models/
-tools/make_quants.sh       # makes the Q8_0 and Q4_0 models from it (needs the llama.cpp build)
+tools/download_models.sh                      # qwen2.5-0.5b-instruct-fp16.gguf into models/
+tools/convert_hf.sh llama32-1b                # Llama-3.2-1B-Instruct F16 (downloads and converts, hash-verified)
+tools/convert_hf.sh tinyllama-1.1b            # TinyLlama-1.1B-Chat F16
+tools/build_llama_cpp.sh                      # builds the pinned llama.cpp (llama-quantize, llama_ref, llama-bench)
+tools/make_quants.sh                          # Q8_0 and Q4_0 of Qwen, and Q4_K_M / Q5_K_M / Q6_K of all three
 ```
+
+`models/` is git-ignored. Each script skips files that already exist.
 
 ## Usage
 
@@ -67,7 +100,8 @@ build/nibble run -m models/qwen2.5-0.5b-instruct-fp16.gguf -p "The capital of Fr
 build/nibble chat -m models/qwen2.5-0.5b-instruct-q4_0.gguf
 ```
 
-`nibble info <model.gguf>` prints the GGUF metadata and tensor table.
+`nibble --help` prints the subcommands and `nibble --version` the build's git SHA. `nibble info <model.gguf>`
+prints the GGUF metadata and tensor table (a quick way to see which quantization types a file really contains).
 
 `nibble run` flags:
 
@@ -111,54 +145,82 @@ tracked files differ from HEAD). `tools/bench_llamacpp.sh <model> <threads>
 ## Tests
 
 ```sh
-ctest --test-dir build -LE e2e
+ctest --test-dir build -LE e2e    # unit, integration, allocation and CLI tests (about 290 cases, a few minutes)
 ```
 
-End-to-end tests compare against llama.cpp. They need the model, a pinned
-llama.cpp build, and golden files:
+These need no model files and run in CI on every push (see [CONTRIBUTING.md](CONTRIBUTING.md) for the sanitizer,
+scalar-kernel and fuzzing variants). The **end-to-end tests** (`-L e2e`) compare against llama.cpp on the real models
+and need the model files, a pinned llama.cpp build and golden files, so they run locally:
 
 ```sh
-tools/build_llama_cpp.sh && tools/build_llama_cpp.sh --generic && tools/make_quants.sh \
-  && for m in f16 q8_0 q4_0; do tools/make_golden.sh qwen2.5-0.5b-$m; done \
-  && ctest --test-dir build -L e2e
+tools/build_llama_cpp.sh && tools/build_llama_cpp.sh --generic && tools/make_quants.sh
+for m in qwen2.5-0.5b-f16 qwen2.5-0.5b-q8_0 qwen2.5-0.5b-q4_0 qwen2.5-0.5b-q4_k_m qwen2.5-0.5b-q5_k_m qwen2.5-0.5b-q6_k \
+         llama32-1b-f16 llama32-1b-q4_k_m llama32-1b-q5_k_m llama32-1b-q6_k \
+         tinyllama-1.1b-f16 tinyllama-1.1b-q4_k_m tinyllama-1.1b-q5_k_m tinyllama-1.1b-q6_k; do
+  tools/make_golden.sh $m
+done
+ctest --test-dir build -L e2e     # 42 model x prompt cases plus tokenizer and file-mix checks
 ```
+
+Cases skip themselves when a model or golden is missing. The goldens (about 40-50 MB each) are not committed.
 
 ## Correctness
 
-Against llama.cpp on Qwen2.5-0.5B-Instruct F16:
+Everything below compares nibble with the pinned llama.cpp release (b11715) on the same model file and the same
+tokens: at every position of a 64-token greedy generation (three prompts per model) the logits must agree.
 
-- Tokenizer: 37/37 corpus cases tokenize exactly as llama.cpp does, and so do
-  5/5 special-parsing cases on all five models.
-- Logits: minimum cosine similarity 0.99996 over all positions.
-- Greedy decoding: 64/64, 64/64 and 46/64 tokens match on the three e2e prompts.
-  The third diverges at a near-tie, where an fp64 reference implementation agrees
-  with nibble.
+**Tokenizer.** 37/37 corpus cases tokenize exactly as llama.cpp does for each of the three tokenizers (Qwen2 BPE,
+Llama 3 BPE, TinyLlama SentencePiece), and 5/5 special-token cases and the end-of-generation token sets match too.
 
-Q8_0 and Q4_0 (made with `llama-quantize --pure`) are compared against a
-generic-path llama.cpp build (no SIMD, llamafile or weight repack) with an F32 KV
-cache. The gate is looser than for F16: cosine >= 0.995 at every position and on
-the prefill last row, and top-1 agreement on >= 90% of positions per prompt
-(near-ties count as agreement). Greedy decoding is reported but not asserted.
-Activation requantization amplifies rounding-level differences: nibble, generic
-llama.cpp and an fp64 oracle with Q8_0 requantization disagree pairwise at about
-0.9966 cosine, so a tighter gate was not attained by any of the three
-implementations compared. Minimum cosine (capital / code / chat):
+**F16 models** are held to a strict gate: logit cosine ≥ 0.999 at every position, identical argmax except at
+near-ties (top-2 gap < 1e-3), and greedy decoding may diverge only at a near-tie. Minimum cosine is 0.99996 or better
+on all three models, and greedy matches 64/64 on all but one Qwen prompt, which diverges at a near-tie where an fp64
+reference agrees with nibble.
 
-- Q8_0: 0.999425 / 0.998160 / 0.998035
-- Q4_0: 0.999297 / 0.998525 / 0.997295
+**Quantized models** compare against llama.cpp's *generic* (non-SIMD, no weight repacking) build with an F32 KV cache
+and flash attention off, because that is the algorithm nibble reproduces; the quantization itself (block formats,
+quantizers, dequantizers, block dot products) is bit-identical to ggml's generic code, pinned by golden vectors. The
+gate is looser because quantizing the activations at every matmul amplifies rounding-level differences: independent
+correct implementations (nibble, generic llama.cpp, an fp64 oracle) agree only to about 0.997 cosine at the worst
+positions. The gate is cosine ≥ 0.995 at every position and on the prefill last row, and top-1 agreement on ≥ 90% of
+positions (near-ties count as agreement); greedy decoding is reported but not asserted. Two exceptions, both recorded
+in the test source with the evidence:
 
-These move with rounding-level changes and were re-recorded in M6: when the
-scalar oracle stopped contracting FMAs (`-ffp-contract=off`), and again when
-RMSNorm, SiLU and attention got SIMD kernels.
+* **Llama-3.2 k-quant files** use a per-position floor of 0.97: on them llama.cpp's own generic and native builds
+  disagree by more than 0.995 at the same positions where nibble does (the lowest nibble value is 0.9765).
+* **Other k-quant files** may have one position between 0.99 and 0.995. Two files have exactly one (Qwen Q4_K_M "code",
+  TinyLlama Q4_K_M "chat"); it disappears when nibble is built with `-DNIBBLE_SIMD=OFF`, so it comes from sub-ulp
+  differences in the SIMD float kernels flipping one requantization rounding, not from the quantized kernels.
 
-Llama-3.2-1B-Instruct and TinyLlama-1.1B-Chat F16 (same strict gate as Qwen F16:
-cosine >= 0.999 at every position, argmax agreement except near-ties, greedy
-divergence only at a near-tie). Minimum cosine (capital / code / chat):
+Minimum logit cosine over the positions of each prompt, and the lowest top-1 agreement over the three prompts:
 
-- Llama 3.2 1B: 0.999996 / 0.999981 / 0.999990; top-1 agreement 100%; greedy 64/64 on all three
-- TinyLlama 1.1B: 0.999999 / 0.999999 / 0.999997; top-1 agreement 100%; greedy 64/64 on all three
+| model | capital | code | chat | min top-1 agreement |
+|---|---|---|---|---|
+| Qwen2.5-0.5B F16 | 1.0000 | 1.0000 | 1.0000 | 100% |
+| Qwen2.5-0.5B Q8_0 | 0.9993 | 0.9989 | 0.9973 | 99% |
+| Qwen2.5-0.5B Q4_0 | 0.9992 | 0.9990 | 0.9979 | 100% |
+| Qwen2.5-0.5B Q4_K_M | 0.9989 | 0.9941 | 0.9969 | 97% |
+| Qwen2.5-0.5B Q5_K_M | 0.9985 | 0.9979 | 0.9954 | 97% |
+| Qwen2.5-0.5B Q6_K | 0.9992 | 0.9973 | 0.9965 | 99% |
+| Llama-3.2-1B F16 | 1.0000 | 1.0000 | 1.0000 | 100% |
+| Llama-3.2-1B Q4_K_M | 0.9987 | 0.9907 | 0.9836 | 91% |
+| Llama-3.2-1B Q5_K_M | 0.9965 | 0.9939 | 0.9765 | 98% |
+| Llama-3.2-1B Q6_K | 0.9937 | 0.9959 | 0.9828 | 94% |
+| TinyLlama-1.1B F16 | 1.0000 | 1.0000 | 1.0000 | 100% |
+| TinyLlama-1.1B Q4_K_M | 0.9990 | 0.9990 | 0.9934 | 99% |
+| TinyLlama-1.1B Q5_K_M | 0.9992 | 0.9989 | 0.9960 | 99% |
+| TinyLlama-1.1B Q6_K | 0.9992 | 0.9986 | 0.9958 | 96% |
+
+(The numbers move with rounding-level changes; they are re-recorded when kernels change. The k-quant rows were recorded
+at the end of M7.)
 
 ## Performance
+
+> The Q5_0 and k-quant files (M7) have not been benchmarked yet: the protocol below needs a machine with a
+> 1-minute load average under 2. The numbers in this section are the M6 results for Qwen2.5-0.5B Q4_0 / Q8_0 / F16, Llama-3.2-1B F16 and
+> TinyLlama-1.1B F16. Q5_0 and the k-quants use AVX2 row kernels that are bit-identical to the scalar code; they do
+> not have the tiled prefill GEMM that Q4_0 and Q8_0 have, so expect their prompt processing (`pp512`) to lag
+> Q4_0/Q8_0 more than their decode.
 
 All numbers come from `bench/results/*.jsonl`; the charts and the tables below are
 generated from them by `bench/plot.py` (`bench/plot.py` writes `docs/bench/*.svg`,
@@ -278,7 +340,14 @@ been measured on native Linux. `nibble bench -t` still defaults to 1.
 ## Roadmap
 
 Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama · M6 SIMD
-kernels, threading and benchmarks. Next: Phase 2: CUDA backend.
+kernels, threading and benchmarks · M7 Q5_0/Q5_1 and the k-quants (Q4_K, Q5_K, Q6_K) with AVX2 kernels.
+Next: benchmark the k-quant files and decide on a tiled prefill GEMM for them; then Phase 2: CUDA backend.
+
+## Documentation and contributing
+
+* [ARCHITECTURE.md](ARCHITECTURE.md): components, data flow, the numerical-fidelity design, testing strategy.
+* [CONTRIBUTING.md](CONTRIBUTING.md): build variants, checks (format, lint, types, tests), commit and PR conventions.
+* [SECURITY.md](SECURITY.md): reporting vulnerabilities (nibble parses untrusted model files).
 
 ## License
 
