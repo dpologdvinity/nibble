@@ -1,0 +1,12 @@
+# Keep the build context small: models, build trees, third-party sources and local tooling never go in the image.
+.git
+build*/
+models/
+third_party/
+docs/
+bench/
+tests/
+.claude/
+.codex/
+.superpowers/
+*.gguf
