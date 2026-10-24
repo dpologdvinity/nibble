@@ -19,10 +19,12 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+  workflow_call:  # release.yml runs the whole suite on the tagged commit before publishing anything
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request pushes are cancelled; every commit on master/main (and tag) gets a full run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
