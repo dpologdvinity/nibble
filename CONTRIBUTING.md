@@ -12,12 +12,11 @@ explain several things below that might otherwise look fussy.
   A convenient way to get them without touching system Python:
 
   ```sh
-  uv venv .venv && uv pip install --python .venv/bin/python clang-format==23.1.3 clang-tidy==23.1.3 \
-      shellcheck-py ruff mypy gcovr
+  uv venv .venv && uv pip install --python .venv/bin/python -r requirements-ci.txt
   . .venv/bin/activate
   ```
 
-  (`pip install` into a virtual environment works equally well; the pinned versions match CI.)
+  (`requirements-ci.txt` holds the exact versions CI uses.)
 
 ## Build and test
 
@@ -68,7 +67,7 @@ git ls-files '*.cpp' '*.h' | grep -v '^third_party' | xargs clang-format --dry-r
 git ls-files '*.cpp' '*.h' | grep -v '^third_party' | xargs clang-format -i
 
 # C++ static analysis on the library and CLI (needs a configured build directory):
-cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && run-clang-tidy.py -p build 'src/|cli/'
+cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF && run-clang-tidy.py -p build 'src/|cli/'
 
 # Shell scripts, Python scripts
 shellcheck tools/*.sh
