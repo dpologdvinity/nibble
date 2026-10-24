@@ -9,6 +9,7 @@
 
 #ifdef NIBBLE_HAVE_AVX2
 #include <cstring>
+#include <limits>
 
 #include "fp16.h"
 #include "quant.h"
@@ -165,7 +166,8 @@ void matmul_t(const u8* w, int64_t nb, int64_t out, const A* xq, float* y, int64
 }  // namespace
 
 // Vectorized: per 32-element block, find max|x| with vector max, then scale, round half away from zero
-// (round_half_away_ps) and pack to int8 with saturating packs.
+// (round_half_away_ps) and pack to int8 with saturating packs. A block containing a NaN gets a NaN scale and
+// all-zero quants, as in the scalar quantizer.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
   if (n < 0 || n % kQK != 0) throw Error("quant: length must be a multiple of 32");
   const __m256 sign = _mm256_set1_ps(-0.0f);
@@ -179,6 +181,17 @@ void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
     __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(m), _mm256_extractf128_ps(m, 1));
     m4 = _mm_max_ps(m4, _mm_movehl_ps(m4, m4));
     m4 = _mm_max_ss(m4, _mm_movehdup_ps(m4));
+    // A NaN anywhere in the block makes the scale NaN (like the scalar quantizer) and the quants 0, so every dot
+    // against the block is NaN. The max above cannot be relied on for this: its NaN handling depends on operand order.
+    const __m256 unord =
+        _mm256_or_ps(_mm256_or_ps(_mm256_cmp_ps(v0, v0, _CMP_UNORD_Q), _mm256_cmp_ps(v1, v1, _CMP_UNORD_Q)),
+                     _mm256_or_ps(_mm256_cmp_ps(v2, v2, _CMP_UNORD_Q), _mm256_cmp_ps(v3, v3, _CMP_UNORD_Q)));
+    if (_mm256_movemask_ps(unord) != 0) {
+      const uint16_t nan_h = fp32_to_fp16(std::numeric_limits<float>::quiet_NaN());
+      std::memcpy(out, &nan_h, 2);
+      _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + 2), _mm256_setzero_si256());
+      continue;
+    }
     const float amax = _mm_cvtss_f32(m4);
     const float d = amax / 127.f;
     const float id = d ? 1.0f / d : 0.0f;  // scalar formula (llama.cpp's AVX2 path uses 127/amax)

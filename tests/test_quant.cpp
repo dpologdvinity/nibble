@@ -334,37 +334,35 @@ TEST_CASE("quantize q8_0/q8_1 non-finite and tiny blocks are defined", "[quant]"
   // qs all 0 and (Q8_1) s = fp16(0 * Inf) = NaN.
   x[3] = INFINITY;
   x[9] = -INFINITY;
-  // Block 1: NaN. fmax skips it (amax = 16), its NaN*id maps to 0: the block equals one with 0 there.
+  // Block 1: one NaN. The block's scale becomes NaN (so every dot against it is NaN) and the quants are all 0.
   x[32 + 5] = NAN;
-  // Block 2: NaN, +Inf, -Inf together: same as block 0.
+  // Block 2: NaN, +Inf, -Inf together: the NaN wins, same as block 1.
   x[64 + 0] = NAN;
   x[64 + 1] = INFINITY;
   x[64 + 2] = -INFINITY;
   // Block 3: amax 1e-38. d = amax/127 is subnormal so id = 1/d = Inf: nonzero x*id = +-Inf saturates to +-127,
   // 0*Inf = NaN -> 0, and fp16(d) = 0.
   for (int j = 0; j < 32; ++j) x[96 + j] = static_cast<float>(j - 16) * 0x1p-130f;
-  float ref1[32];
-  std::memcpy(ref1, x + 32, sizeof ref1);
-  ref1[5] = 0.f;
 
-  BlockQ8_0 y8[4], r8;
-  BlockQ8_1 y1[4], r1;
+  BlockQ8_0 y8[4];
+  BlockQ8_1 y1[4];
   quantize_row_q8_0(x, y8, 4 * 32);
   quantize_row_q8_1(x, y1, 4 * 32);
-  quantize_row_q8_0(ref1, &r8, 32);
-  quantize_row_q8_1(ref1, &r1, 32);
-  for (int b : {0, 2}) {
+  for (int b : {0, 1, 2}) {
     CAPTURE(b);
-    REQUIRE(y8[b].d == 0x7C00);
-    REQUIRE(y1[b].d == 0x7C00);
+    if (b == 0) {
+      REQUIRE(y8[b].d == 0x7C00);  // Inf scale
+      REQUIRE(y1[b].d == 0x7C00);
+    } else {
+      REQUIRE(is_nan16(y8[b].d));
+      REQUIRE(is_nan16(y1[b].d));
+    }
     REQUIRE(is_nan16(y1[b].s));
     for (int j = 0; j < 32; ++j) {
       REQUIRE(y8[b].qs[j] == 0);
       REQUIRE(y1[b].qs[j] == 0);
     }
   }
-  REQUIRE(std::memcmp(&y8[1], &r8, sizeof r8) == 0);
-  REQUIRE(std::memcmp(&y1[1], &r1, sizeof r1) == 0);
   REQUIRE(y8[3].d == 0);
   REQUIRE(y1[3].d == 0);
   REQUIRE(y1[3].s == 0x8000);  // fp16(-127 * d) = -0
@@ -544,13 +542,60 @@ TEST_CASE("quantize q8_k non-finite and tiny blocks are defined", "[quant]") {
       REQUIRE(y[g].bsums[k] == sum);
     }
   }
-  // Block 1: the max scan skips NaN (max = -128), and the NaN element quantizes to 0.
+  // Block 1: the max scan skips NaN (max = -128) and the NaN element quantizes to 0; the scale is NaN.
   REQUIRE(y[1].qs[5] == 0);
+  REQUIRE(std::isnan(y[1].d));
   // Block 3: max = -2^-123, so iscale = +Inf and d = 0: nonzero elements saturate to +-127 with their own sign.
   REQUIRE(y[3].d == 0.f);
   REQUIRE(int{y[3].qs[0]} == -127);
   REQUIRE(int{y[3].qs[255]} == 127);
   REQUIRE(int{y[3].qs[128]} == 0);
+}
+
+// A NaN anywhere in an activation block must not be silently dropped: the block's scale becomes NaN, so every dot
+// product that reads the block is NaN. (Otherwise a NaN residual stream from a corrupt weight would quantize to
+// plausible-looking values and produce wrong logits with no sign of trouble.)
+TEST_CASE("quantizers propagate NaN into the block scale", "[quant]") {
+  const auto is_nan16 = [](uint16_t h) { return (h & 0x7C00) == 0x7C00 && (h & 0x3FF) != 0; };
+  golden::Rng r{5};
+  BlockQ4_0 w40;
+  BlockQ5_0 w50;
+  BlockQ5_1 w51;
+  BlockQ8_0 w80;
+  golden::fill_q4_0(r, reinterpret_cast<uint8_t*>(&w40), 1);
+  golden::fill_q5_0(r, reinterpret_cast<uint8_t*>(&w50), 1);
+  golden::fill_q5_1(r, reinterpret_cast<uint8_t*>(&w51), 1);
+  golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(&w80), 1);
+
+  float x[32];
+  for (int j = 0; j < 32; ++j) x[j] = static_cast<float>(j - 16);
+  x[7] = NAN;
+  BlockQ8_0 a0;
+  BlockQ8_1 a1;
+  quantize_row_q8_0(x, &a0, 32);
+  quantize_row_q8_1(x, &a1, 32);
+  REQUIRE(is_nan16(a0.d));
+  REQUIRE(is_nan16(a1.d));
+  REQUIRE(std::isnan(dot_q4_0_q8_0(&w40, &a0, 1)));
+  REQUIRE(std::isnan(dot_q8_0_q8_0(&w80, &a0, 1)));
+  REQUIRE(std::isnan(dot_q5_0_q8_0(&w50, &a0, 1)));
+  REQUIRE(std::isnan(dot_q5_1_q8_1(&w51, &a1, 1)));
+
+  float xk[256];
+  for (int j = 0; j < 256; ++j) xk[j] = static_cast<float>(j - 128);
+  xk[200] = NAN;
+  BlockQ8_K ak;
+  quantize_row_q8_K(xk, &ak, 256);
+  REQUIRE(std::isnan(ak.d));
+  BlockQ4_K w4k;
+  BlockQ5_K w5k;
+  BlockQ6_K w6k;
+  golden::fill_q4_K(r, reinterpret_cast<uint8_t*>(&w4k), 1);
+  golden::fill_q5_K(r, reinterpret_cast<uint8_t*>(&w5k), 1);
+  golden::fill_q6_K(r, reinterpret_cast<uint8_t*>(&w6k), 1);
+  REQUIRE(std::isnan(dot_q4_K_q8_K(&w4k, &ak, 1)));
+  REQUIRE(std::isnan(dot_q5_K_q8_K(&w5k, &ak, 1)));
+  REQUIRE(std::isnan(dot_q6_K_q8_K(&w6k, &ak, 1)));
 }
 
 // Fills the packed scales of a Q4_K/Q5_K test block: sub-blocks 0 and 4 get 6-bit scales/mins that exercise

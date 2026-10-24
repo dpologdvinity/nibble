@@ -303,6 +303,22 @@ TEST_CASE("simd q4_0/q8_0 dots equal scalar bitwise", "[simd][quant]") {
     }
 }
 
+// A NaN in a block makes the AVX2 quantizer's scale NaN, like the scalar quantizer (so every dot against the block
+// is NaN rather than silently dropping the NaN element).
+TEST_CASE("simd quantize_row_q8_0 propagates NaN into the block scale", "[simd][quant]") {
+  float x[64];
+  for (int j = 0; j < 64; ++j) x[j] = static_cast<float>(j % 32 - 16);
+  x[40] = NAN;  // second block only
+  BlockQ8_0 y[2], ref[2];
+  simd::quantize_row_q8_0(x, y, 64);
+  nibble::quantize_row_q8_0(x, ref, 64);
+  const auto is_nan16 = [](uint16_t h) { return (h & 0x7C00) == 0x7C00 && (h & 0x3FF) != 0; };
+  CHECK_FALSE(is_nan16(y[0].d));
+  CHECK(is_nan16(y[1].d));
+  CHECK(y[0].d == ref[0].d);
+  CHECK(is_nan16(ref[1].d));
+}
+
 // Rows with tiny magnitudes have an fp16 scale of 0; their dots must be exactly 0 in both implementations.
 TEST_CASE("activation blocks with fp16 scale 0 contribute exactly 0 to scalar and simd dots", "[simd][quant]") {
   // Blocks from rows with tiny amax have fp16(d) == 0; in-contract qs (no -128) must still dot to exactly 0.

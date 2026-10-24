@@ -118,8 +118,9 @@ inline constexpr int64_t kQK = 32;
 // n must be a multiple of the type's block size (32; 256 for the k-quants). Throws Error on a bad dtype or n.
 void dequantize_row(DType t, const void* src, float* dst, int64_t n);
 // Quantizes n floats to Q8_0 blocks (ggml quantize_row_q8_0_ref): per block, d = max|x| / 127 and
-// qs = round(x / d), rounding half away from zero. Defined for NaN/Inf input too (NaN quantizes to 0 and
-// values saturate to +-127), though only finite normal blocks match ggml exactly.
+// qs = round(x / d), rounding half away from zero. Defined for NaN/Inf input too, though only finite normal
+// blocks match ggml exactly: values saturate to +-127, and a block containing a NaN gets a NaN scale (and zero
+// quants), so every dot product that reads it is NaN instead of a plausible wrong number.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n);
 // As quantize_row_q8_0, plus the block sum s that Q5_1's dot needs.
 void quantize_row_q8_1(const float* x, BlockQ8_1* y, int64_t n);

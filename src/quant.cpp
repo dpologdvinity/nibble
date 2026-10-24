@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include "fp16.h"
@@ -31,11 +32,16 @@ void check_n(int64_t n, int64_t block = kQK) {
 // roundf rounds half away from zero (Q8_K's nearest_int is half to even, not this). NaN maps to 0 and results
 // saturate to [-127, 127], so the int8 cast is never UB; only non-finite rows or blocks with id = Inf
 // (amax < ~3.7e-37) reach either case, and finite normal blocks stay bit-exact.
+// A NaN anywhere in the block makes d NaN (ggml's result for NaN input depends on element order and is not
+// meaningful), so every dot against the block is NaN instead of a plausible-looking wrong number.
 float quantize_block_q8(const float* x, int8_t* qs) {
   float amax = 0.f;
-  // Differs from ggml's MAX(amax, fabsf(v)) only on NaN: fmax skips it, MAX yields it until a later element.
-  for (int j = 0; j < kQK; ++j) amax = std::fmax(amax, std::fabs(x[j]));
-  const float d = amax / 127.f;
+  bool has_nan = false;
+  for (int j = 0; j < kQK; ++j) {
+    amax = std::fmax(amax, std::fabs(x[j]));  // fmax skips NaN; has_nan accounts for it below
+    has_nan |= x[j] != x[j];
+  }
+  const float d = has_nan ? std::numeric_limits<float>::quiet_NaN() : amax / 127.f;
   const float id = d ? 1.0f / d : 0.0f;
   for (int j = 0; j < kQK; ++j) {
     const float r = std::roundf(x[j] * id);
@@ -270,12 +276,14 @@ void quantize_row_q8_K(const float* x, BlockQ8_K* y, int64_t n) {
   for (int64_t b = 0; b < n / kQK_K; ++b, x += kQK_K) {
     BlockQ8_K blk{};
     float max = 0, amax = 0;
+    bool has_nan = false;
     for (int j = 0; j < kQK_K; ++j) {
       const float ax = std::fabs(x[j]);
       if (ax > amax) {
         amax = ax;
         max = x[j];
       }
+      has_nan |= x[j] != x[j];
     }
     if (amax) {
       const float iscale = -127.f / max;
@@ -290,6 +298,7 @@ void quantize_row_q8_K(const float* x, BlockQ8_K* y, int64_t n) {
       }
       blk.d = 1 / iscale;
     }
+    if (has_nan) blk.d = std::numeric_limits<float>::quiet_NaN();  // see quantize_block_q8
     std::memcpy(reinterpret_cast<unsigned char*>(y) + b * sizeof blk, &blk, sizeof blk);
   }
 }

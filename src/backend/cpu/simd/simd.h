@@ -151,7 +151,8 @@ static inline __m256 exp_ps(__m256 x) {
 // Bit-identical to nibble::quantize_row_q8_0 for finite x whose block d = amax/127 is a normal float
 // (amax >~ 1.5e-36). Below that, rounding of tiny d and id can differ from scalar, and below ~3.7e-37 id
 // overflows (scalar saturates qs to +-127; this may emit -128). Such blocks contribute 0 to dots: their fp16
-// scale is 0. Finite input only: NaN/Inf give unspecified qs here (scalar defines them). Throws on bad n.
+// scale is 0. Inf input gives unspecified qs here (scalar defines them); a block with a NaN gets a NaN scale and
+// zero quants, like the scalar. Throws on bad n.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n);
 // Bit-identical to the scalar dots in quant.cpp: exact integer block sums, then the scalar's per-block
 // float products accumulated in the scalar's order. Blocks may be unaligned. For Q8_0, a must not contain
