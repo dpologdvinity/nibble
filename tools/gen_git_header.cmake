@@ -4,7 +4,10 @@
 # the content is unchanged.
 execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${SRC}
   OUTPUT_VARIABLE sha OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE rc)
-if(NOT rc EQUAL 0 OR NOT sha)
+if(DEFINED ENV{NIBBLE_GIT_SHA} AND NOT "$ENV{NIBBLE_GIT_SHA}" STREQUAL "")
+  # Builds without a .git directory (container image) pass the revision in explicitly.
+  set(sha "$ENV{NIBBLE_GIT_SHA}")
+elseif(NOT rc EQUAL 0 OR NOT sha)
   set(sha unknown)
 else()
   execute_process(COMMAND git diff --quiet HEAD WORKING_DIRECTORY ${SRC} RESULT_VARIABLE drc ERROR_QUIET)

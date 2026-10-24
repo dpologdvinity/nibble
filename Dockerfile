@@ -10,6 +10,9 @@ ARG UBUNTU=ubuntu:24.04
 
 FROM ${UBUNTU} AS build
 ARG MARCH=x86-64-v3
+# Revision reported by `nibble --version` (.git is not in the build context): --build-arg GIT_SHA=$(git rev-parse --short HEAD)
+ARG GIT_SHA=unknown
+ENV NIBBLE_GIT_SHA=${GIT_SHA}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends g++ cmake make git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
