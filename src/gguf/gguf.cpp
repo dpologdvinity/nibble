@@ -110,8 +110,8 @@ void read_scalar(Reader& r, ValueType t, const std::string& key, int64_t& i, dou
   switch (t) {
     case ValueType::U8: i = r.read<uint8_t>("u8"); break;
     case ValueType::I8:
-      i = r.read<int8_t>("i8");
-      break;  // NOLINT(bugprone-signed-char-misuse): sign extension intended
+      i = r.read<int8_t>("i8");  // NOLINT(bugprone-signed-char-misuse): sign extension intended
+      break;
     case ValueType::U16: i = r.read<uint16_t>("u16"); break;
     case ValueType::I16: i = r.read<int16_t>("i16"); break;
     case ValueType::U32: i = r.read<uint32_t>("u32"); break;
