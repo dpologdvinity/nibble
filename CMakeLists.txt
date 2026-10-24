@@ -30,6 +30,11 @@ add_library(nibble_flags INTERFACE)
 target_compile_options(nibble_flags INTERFACE -Wall -Wextra -Wpedantic -Werror)
 if(NIBBLE_NATIVE)
   target_compile_options(nibble_flags INTERFACE -march=native)
+  # Some CPUs (e.g. recent cloud runners) make clang's -march=native detection report "+avx10.1-256 ... will be
+  # promoted to avx10.1-512", which -Werror would turn into a build failure. It describes the host CPU, not our code.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(nibble_flags INTERFACE -Wno-invalid-feature-combination)
+  endif()
 endif()
 if(NIBBLE_SIMD)
   target_compile_definitions(nibble_flags INTERFACE NIBBLE_SIMD_ENABLED=1)
