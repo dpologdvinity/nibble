@@ -164,12 +164,17 @@ jobs:
           key: deps-${{ hashFiles('CMakeLists.txt') }}
       - name: Install ccache
         run: sudo apt-get install -y --no-install-recommends ccache
+      # -march=native objects are only valid on the CPU that built them, but ccache hashes the literal flag, so the
+      # cache key must carry the CPU model or a different runner CPU executes illegal instructions.
+      - name: CPU model (ccache key)
+        id: cpu
+        run: echo "id=$(grep -m1 'model name' /proc/cpuinfo | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
       - name: Restore ccache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ matrix.name }}-${{ github.sha }}
-          restore-keys: ccache-${{ matrix.name }}-
+          key: ccache-${{ matrix.name }}-${{ steps.cpu.outputs.id }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.name }}-${{ steps.cpu.outputs.id }}-
       - name: Let the sanitizers map memory (lower ASLR entropy)
         if: matrix.sanitizer
         run: sudo sysctl -w vm.mmap_rnd_bits=28
@@ -219,11 +224,14 @@ jobs:
         run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
       - name: Coverage report
         run: |
+          # no_working_dir_found/source_not_found only come from CMake's compiler-id probes and Catch2, which the
+          # --filter flags exclude from the report anyway.
           set -o pipefail  # a gcovr failure (or the threshold) must fail the step, not be masked by tee
           mkdir -p coverage
           gcovr --root . --object-directory build --filter 'src/' --filter 'cli/' --exclude-throw-branches \
                 --exclude-directories '.*\.deps-cache' \
                 --gcov-ignore-parse-errors=negative_hits.warn \
+                --gcov-ignore-errors=no_working_dir_found --gcov-ignore-errors=source_not_found \
                 --print-summary --xml-pretty --xml coverage/coverage.xml --html-details coverage/index.html \
                 --fail-under-line "${MIN_LINE_COVERAGE}" | tee coverage/summary.txt
           { echo '### Coverage (src/ and cli/)'; echo '```'; cat coverage/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
