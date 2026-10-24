@@ -9,6 +9,7 @@ import unicodedata
 
 
 def ranges(cats):
+    """Return the code point ranges [first, last] (inclusive, sorted) whose Unicode general category is in cats."""
     out = []
     for cp in range(0x110000):
         if unicodedata.category(chr(cp)) in cats:
@@ -20,6 +21,7 @@ def ranges(cats):
 
 
 def emit(f, name, rs):
+    """Write the C++ definition of a constexpr array `name` holding the ranges rs, wrapped at 100 columns."""
     f.write(f"constexpr std::pair<char32_t, char32_t> {name}[] = {{\n")
     line = " "
     for a, b in rs:
@@ -32,6 +34,7 @@ def emit(f, name, rs):
 
 
 def main():
+    """Generate the table file (letters: Lu Ll Lt Lm Lo; numbers: Nd Nl No) and print a summary."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         root, "src", "tokenizer", "unicode_tables.inc")
