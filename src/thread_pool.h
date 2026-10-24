@@ -1,4 +1,6 @@
 #pragma once
+// A small fork-join thread pool for data-parallel loops (the matmul kernels split rows across it). The
+// caller participates as a worker, so a pool of N threads owns N-1 background threads.
 #include <atomic>
 #include <cstdint>
 #include <exception>
@@ -11,18 +13,22 @@
 
 namespace nibble {
 
-// n_threads counts the calling thread. If fn throws, parallel_for waits for every thread to finish,
+// Fixed-size pool; n_threads counts the calling thread. If fn throws, parallel_for waits for every thread to finish,
 // skips the chunks not yet started, and rethrows the first exception on the caller.
 // Workers spin briefly on a generation counter after each call, then sleep (futex via atomic::wait),
 // so back-to-back calls skip the kernel and an idle pool burns no CPU.
 class ThreadPool {
  public:
+  // Starts n_threads - 1 workers. Throws Error if n_threads <= 0 or a thread cannot be created.
   explicit ThreadPool(int n_threads);
-  ~ThreadPool();
+  ~ThreadPool();  // stops and joins the workers
   ThreadPool(const ThreadPool&) = delete;
   ThreadPool& operator=(const ThreadPool&) = delete;
 
-  int size() const { return n_threads_; }
+  int size() const { return n_threads_; }  // total threads, caller included
+  // Splits [0, n) into chunks of `chunk` indices and runs fn(begin, end) on each, distributing chunks across
+  // the pool dynamically (an atomic cursor). Returns when all chunks are done. Calls must not overlap or
+  // nest (one parallel_for at a time per pool). n <= 0 does nothing; chunk < 1 is treated as 1.
   void parallel_for(int64_t n, int64_t chunk,
                     FunctionRef<void(int64_t begin, int64_t end)> fn);
   // Workers that passed the spin bound and entered the sleep path; some may not be in the futex yet
@@ -30,8 +36,8 @@ class ThreadPool {
   int sleeping_workers() const { return sleeping_.load(); }
 
  private:
-  void worker_loop();
-  void run_chunks();
+  void worker_loop();  // body of each background thread: wait for a new generation, run chunks, ack
+  void run_chunks();   // claim and run chunks until the cursor passes n (used by workers and the caller)
   void publish();  // bump generation_ and wake sleepers
 
   int n_threads_;

@@ -1,3 +1,4 @@
+// Resolves the transformer's tensors by their GGUF names (token_embd.weight, blk.N.attn_q.weight, ...).
 #include "model/weights.h"
 
 #include <initializer_list>
@@ -9,17 +10,21 @@
 namespace nibble::model {
 namespace {
 
+// "[a, b, c]" for error messages.
 std::string shape_str(const int64_t* ne, int n) {
   std::string s = "[";
   for (int i = 0; i < n; ++i) s += (i ? ", " : "") + std::to_string(ne[i]);
   return s + "]";
 }
 
+// The named tensor, or nullptr.
 const Tensor* find(const gguf::File& f, const std::string& name) {
   const auto* ti = f.find_tensor(name);
   return ti ? &ti->tensor : nullptr;
 }
 
+// The named tensor, checked: it must exist, have exactly the dimensions `ne`, and either be F32 (f32_only) or
+// a type the backend supports. Error messages name the tensor and, for types, the supported set.
 Tensor get(const gguf::File& f, const Backend& be, const std::string& name, std::initializer_list<int64_t> ne,
            bool f32_only) {
   const Tensor* t = find(f, name);
@@ -40,6 +45,8 @@ Tensor get(const gguf::File& f, const Backend& be, const std::string& name, std:
 
 }  // namespace
 
+// Binds in file order of use: embedding, output norm, (optional) separate output matrix and rope factors,
+// then each layer. A missing output.weight means tied embeddings (the embedding doubles as output matrix).
 Weights Weights::bind(const gguf::File& f, const LlamaConfig& c, const Backend& be) {
   const int64_t E = c.n_embd, Q = c.n_heads * c.head_dim, KV = c.n_kv_heads * c.head_dim;
   Weights w;

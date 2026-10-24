@@ -1,3 +1,4 @@
+// Implementation of the DType tables declared in tensor.h.
 #include "tensor.h"
 
 #include <string>
@@ -6,6 +7,7 @@
 
 namespace nibble {
 
+// One function-local static per type keeps the returned references valid for the life of the program.
 const DTypeInfo& dtype_info(DType t) {
   static const DTypeInfo f32{1, 4, "F32"}, f16{1, 2, "F16"}, q4_0{32, 18, "Q4_0"},
       q5_0{32, 22, "Q5_0"}, q5_1{32, 24, "Q5_1"}, q8_0{32, 34, "Q8_0"}, q4_k{256, 144, "Q4_K"},
@@ -24,6 +26,7 @@ const DTypeInfo& dtype_info(DType t) {
   throw Error("unsupported dtype " + std::to_string(static_cast<uint32_t>(t)));
 }
 
+// ggml numbers its types 0..15 in the order below (ids 4 and 5 were the retired Q4_2/Q4_3); 30 is BF16.
 const char* ggml_type_name(uint32_t t) {
   static const char* const names[] = {"F32",  "F16",  "Q4_0", "Q4_1", "Q4_2", "Q4_3",
                                       "Q5_0", "Q5_1", "Q8_0", "Q8_1", "Q2_K", "Q3_K",
@@ -33,6 +36,8 @@ const char* ggml_type_name(uint32_t t) {
   return "unknown";
 }
 
+// Checked multiply: ne[0] comes from the file, so an absurd value must not wrap to a small size that later
+// bounds checks would accept.
 int64_t Tensor::row_bytes() const {
   const DTypeInfo& i = dtype_info(type);
   int64_t out;

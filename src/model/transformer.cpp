@@ -1,3 +1,7 @@
+// Transformer forward pass. Per layer: RMSNorm -> fused Q/K/V projection (K and V written straight into the
+// KV cache) -> optional bias -> rotary embeddings -> attention -> output projection + residual -> RMSNorm ->
+// fused gate/up projection -> SwiGLU -> down projection + residual. After the last layer only the final
+// token's row is normalized and projected to logits.
 #include "model/transformer.h"
 
 #include <algorithm>
@@ -13,6 +17,7 @@ namespace {
 // Debug-only shape/dtype agreement checks at op call sites (spec 6.4). Activation
 // pointers carry no shape, so the expected widths passed here are the widths the
 // Transformer sized each activation buffer with. Compiled out under NDEBUG.
+// Debug check that weight `w` matches the activation widths in/out and is runnable on the backend.
 void dcheck_matmul(const Backend& be, const Tensor& w, int64_t in, int64_t out, [[maybe_unused]] const char* op) {
   NIBBLE_DCHECK(w.n_dims == 2 && w.ne[0] == in && w.ne[1] == out && be.supports(w.type),
                 "matmul %s: weight [%lld, %lld] (n_dims %d, dtype %u) vs activation in=%lld out=%lld", op,
@@ -20,6 +25,7 @@ void dcheck_matmul(const Backend& be, const Tensor& w, int64_t in, int64_t out, 
                 static_cast<unsigned>(w.type), static_cast<long long>(in), static_cast<long long>(out));
 }
 
+// Debug check that `t` is an F32 vector of the given width (norm weights, biases).
 void dcheck_vec(const Tensor& t, int64_t width, [[maybe_unused]] const char* op) {
   NIBBLE_DCHECK(t.n_dims == 1 && t.ne[0] == width && t.type == DType::F32,
                 "%s: tensor [%lld] (n_dims %d, dtype %u) vs activation width %lld (need F32)", op,
@@ -49,6 +55,8 @@ void dcheck_count(int64_t count, int64_t rows, int64_t width, [[maybe_unused]] c
 
 }  // namespace
 
+// Order matters: reserve() first (attention scratch, quantized-activation scratch), then the KV cache (with
+// overflow-checked sizing), then the activation buffers. Any failure releases what was allocated.
 Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, int64_t n_ctx, int64_t max_batch)
     : c_(c), w_(w), be_(be), n_ctx_(n_ctx), max_batch_(max_batch) {
   if (n_ctx <= 0 || max_batch <= 0) throw Error("n_ctx and max_batch must be positive");
@@ -95,6 +103,7 @@ Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, in
   }
 }
 
+// Allocates from the backend and records the pointer so release() can free it even if a later grab throws.
 float* Transformer::grab(int64_t n_floats) {
   float* p = be_.alloc(n_floats);
   try {
@@ -106,6 +115,7 @@ float* Transformer::grab(int64_t n_floats) {
   return p;
 }
 
+// Frees every buffer in owned_ (KV cache and activations).
 void Transformer::release() noexcept {
   for (float* p : owned_) be_.free(p);
   owned_.clear();
@@ -113,6 +123,8 @@ void Transformer::release() noexcept {
 
 Transformer::~Transformer() { release(); }
 
+// Splits the tokens into chunks of at most max_batch, runs each through the layers, then projects only the
+// last token's hidden state to logits (earlier positions' logits are never needed).
 void Transformer::forward(std::span<const int32_t> tokens, int64_t pos0, float* logits_out) {
   const int64_t n = static_cast<int64_t>(tokens.size());
   if (n == 0) throw Error("forward: no tokens");
@@ -130,6 +142,8 @@ void Transformer::forward(std::span<const int32_t> tokens, int64_t pos0, float* 
   be_.read(logits_out, logits_, c_.n_vocab);
 }
 
+// One chunk through all layers (see the file comment for the per-layer sequence). The NIBBLE_DCHECKs verify
+// buffer widths against weight shapes in debug builds only.
 void Transformer::run_chunk(std::span<const int32_t> tokens, int64_t pos0) {
   const int64_t n = static_cast<int64_t>(tokens.size()), hd = c_.head_dim, E = c_.n_embd;
   const int64_t kvw = c_.n_kv_heads * hd;

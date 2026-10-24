@@ -1,9 +1,17 @@
 #pragma once
+// IEEE 754 binary16 ("half") <-> binary32 conversion, in plain C++ with no hardware dependence.
+//
+// Quantized blocks store their scales as raw 16-bit patterns (uint16_t), and the scalar reference code
+// converts them with these functions. The AVX2 kernels use the F16C instructions instead
+// (_cvtsh_ss / _mm_cvtph_ps), which give the same float for every finite value, so scalar and SIMD results
+// agree. Both functions are exact where the format allows (fp16 -> fp32 is always exact).
 #include <cstdint>
 #include <cstring>
 
 namespace nibble {
 
+// Widens the half-precision bit pattern h to a float. Handles zeros, subnormals (normalized into float
+// normals), infinities and NaNs (payload bits preserved, shifted up).
 inline float fp16_to_fp32(uint16_t h) {
   uint32_t sign = (static_cast<uint32_t>(h) & 0x8000u) << 16;
   uint32_t exp = (h >> 10) & 0x1Fu;
@@ -30,6 +38,8 @@ inline float fp16_to_fp32(uint16_t h) {
   return f;
 }
 
+// Narrows f to the nearest half, rounding ties to even (the IEEE default). Overflow gives +-infinity,
+// values below half's smallest subnormal give signed zero, NaN stays NaN (quiet bit set).
 inline uint16_t fp32_to_fp16(float f) {
   uint32_t x;
   std::memcpy(&x, &f, sizeof x);

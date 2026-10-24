@@ -1,4 +1,5 @@
-// AVX2 Q8_0 activation quantizer and Q4_0/Q8_0 x Q8_0 dots. Scalar oracle: quant.cpp.
+// AVX2 Q8_0 activation quantizer and the legacy-quant (Q4_0, Q5_0, Q5_1, Q8_0) row dots. Scalar oracle:
+// quant.cpp. The k-quant dots live in kquant_avx2.cpp.
 // Integer technique after llama.cpp's ggml-cpu/arch/x86/quants.c (MIT): nibble unpack as in
 // bytes_from_nibbles_32, sign trick as in mul_sum_i8_pairs_float. Unlike llama.cpp, results are
 // bit-identical to the scalar code: the block integer sums are exact, the per-block float products use the
@@ -19,12 +20,14 @@ namespace {
 
 using u8 = unsigned char;
 
+// Raw fp16 scale at the start of a block (unaligned-safe).
 uint16_t load_d(const u8* blk) {
   uint16_t d;
   std::memcpy(&d, blk, 2);
   return d;
 }
 
+// The fp16 value at p as a float (F16C).
 float load_h(const u8* p) { return _cvtsh_ss(load_d(p)); }
 
 // Four fp16 values at p, p + rb, p + 2 rb, p + 3 rb as floats.
@@ -106,11 +109,14 @@ struct Q5_1 {
   }
 };
 
+// The 32 activation quants of a Q8_0/Q8_1 block, as one vector.
 template <class W>
 __m256i load_act(const u8* a) {
   return _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + W::kQs));
 }
 
+// One weight row against one activation row: per block an exact integer sum, then the scalar's float term,
+// accumulated in block order.
 template <class W>
 float dot1(const u8* w, const u8* a, int64_t nb) {
   float sum = 0.f;
@@ -143,6 +149,7 @@ void dot4(const u8* w, size_t rb, const u8* a, int64_t nb, float* out) {
   out[3] = s3;
 }
 
+// y[t * out + r] for rows [rb, re) and n activation rows, four rows at a time with a one-row remainder.
 template <class W, class A>
 void matmul_t(const u8* w, int64_t nb, int64_t out, const A* xq, float* y, int64_t n, int64_t rb, int64_t re) {
   const size_t row = static_cast<size_t>(nb) * W::kBytes;
@@ -157,6 +164,8 @@ void matmul_t(const u8* w, int64_t nb, int64_t out, const A* xq, float* y, int64
 
 }  // namespace
 
+// Vectorized: per 32-element block, find max|x| with vector max, then scale, round half away from zero
+// (round_half_away_ps) and pack to int8 with saturating packs.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
   if (n < 0 || n % kQK != 0) throw Error("quant: length must be a multiple of 32");
   const __m256 sign = _mm256_set1_ps(-0.0f);
@@ -203,6 +212,7 @@ float dot_q5_1_q8_1(const BlockQ5_1* w, const BlockQ8_1* a, int64_t n_blocks) {
   return dot1<Q5_1>(reinterpret_cast<const u8*>(w), reinterpret_cast<const u8*>(a), n_blocks);
 }
 
+// Dispatch on the weight type to the right row kernel; the k-quants live in kquant_avx2.cpp.
 void matmul_rows_q(const Tensor& w, const QuantActs& xq, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
   const auto* wd = static_cast<const u8*>(w.data);
   const int64_t out = w.rows(), nb = w.ne[0] / dtype_info(w.type).block_size;

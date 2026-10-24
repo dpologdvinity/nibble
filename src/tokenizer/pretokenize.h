@@ -1,4 +1,7 @@
 #pragma once
+// The regex-style pre-tokenizer of byte-level BPE models: splits text into "words" (letters with an optional
+// leading character, digit runs, punctuation runs, whitespace) before BPE merges are applied. Implemented by
+// hand (no regex engine) following the Qwen2 / Llama 3 patterns used by llama.cpp.
 #include <string_view>
 #include <vector>
 

@@ -1,3 +1,8 @@
+// Tokenizer implementation: construction from GGUF metadata, byte-level BPE encoding, special-token
+// partitioning and decoding.
+//
+// Behavioural parity with llama.cpp is the goal, so comments cite llama-vocab.cpp line numbers (of the
+// pinned release, b11715) where a quirk is copied on purpose. Deviations are called out as such.
 #include "tokenizer/tokenizer.h"
 
 #include <algorithm>
@@ -16,15 +21,19 @@ namespace nibble::tok {
 
 namespace {
 
+// One symbol of the word being merged: a byte range in the word and doubly linked neighbours (indices into
+// the symbol array, -1 at the ends). Merging absorbs the right symbol into the left (len becomes 0).
 struct Sym {
   size_t off, len;
   int prev, next;
 };
+// A candidate merge of two adjacent symbols, queued by merge rank.
 struct Bigram {
   int left, right;
   int rank;
   size_t size;  // combined byte length; detects stale entries
 };
+// Priority-queue order: lowest rank first (it is applied first), ties to the leftmost pair.
 struct BigramCmp {
   bool operator()(const Bigram& a, const Bigram& b) const {
     return a.rank > b.rank || (a.rank == b.rank && a.left > b.left);
@@ -116,6 +125,9 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
 
 }  // namespace
 
+// Validates the metadata (lengths agree, ids in range, merges reference real tokens) and builds the lookup
+// tables: text -> id, merge pair -> rank, the list of special tokens (longest text first, as llama.cpp
+// partitions), and the end-of-generation set.
 Tokenizer Tokenizer::from_gguf(const gguf::File& f) {
   const std::string model = f.get_string("tokenizer.ggml.model");
   const bool spm = model == "llama";
@@ -258,13 +270,17 @@ void Tokenizer::init_spm(const gguf::File& f) {
   }
 }
 
+// Plain hash lookup; the temporary std::string is needed because ids_ is keyed by std::string.
 int32_t Tokenizer::find(std::string_view s) const {
   auto it = ids_.find(std::string(s));
   return it == ids_.end() ? -1 : it->second;
 }
 
+// Out-of-range ids are simply not EOG.
 bool Tokenizer::is_eog(int32_t id) const { return id >= 0 && id < n_vocab() && eog_[static_cast<size_t>(id)]; }
 
+// BPE models store tokens in the GPT-2 byte-to-unicode alphabet, so decoding maps each character back to its
+// byte; SentencePiece models unescape U+2581 to a space and decode <0xXX> tokens to one byte.
 std::string Tokenizer::decode_token(int32_t id) const {
   if (id < 0 || id >= n_vocab()) throw Error("token id out of range: " + std::to_string(id));
   if (spm_) {  // token_to_piece, llama-vocab.cpp:3823-3897 (special=false)
@@ -305,6 +321,9 @@ std::string Tokenizer::decode_token(int32_t id) const {
   return out;
 }
 
+// Classic BPE: split into pre-tokens, map each pre-token's bytes to the GPT-2 alphabet, start from one
+// symbol per character and repeatedly merge the adjacent pair with the lowest merge rank (a priority queue
+// with stale-entry detection). Mirrors llm_tokenizer_bpe_session in llama.cpp.
 void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out) const {
   utf8_decode(text);  // validate; throws with byte offset
   const auto& map = byte_to_unicode();
@@ -362,11 +381,15 @@ void Tokenizer::encode_segment(std::string_view text, std::vector<int32_t>& out)
   }
 }
 
+// Convenience wrapper: one part, no BOS.
 std::vector<int32_t> Tokenizer::encode(std::string_view text, bool parse_special) const {
   const Part p{text, parse_special};
   return encode_parts(std::span(&p, 1), false);
 }
 
+// Step 1 partitions every part around special-token text (one pass per special token, longest first, like
+// llama.cpp's tokenizer_st_partition); step 2 encodes the remaining raw fragments (BPE or SentencePiece);
+// step 3 prepends BOS if requested and the model wants it.
 std::vector<int32_t> Tokenizer::encode_parts(std::span<const Part> parts, bool add_bos) const {
   struct Frag {
     std::string text;  // raw text when special < 0

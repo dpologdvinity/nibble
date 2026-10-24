@@ -1,4 +1,12 @@
 #pragma once
+// Declarations of the AVX2 (+FMA, +F16C, optionally AVX-VNNI) kernels and the small intrinsics helpers they
+// share. Everything real is guarded by NIBBLE_HAVE_AVX2, so with SIMD off (or on a CPU target without these
+// extensions) this header declares nothing and the scalar paths in ref_ops.cpp are used.
+//
+// Contract for every kernel: it matches the scalar twin named in its comment, either bit for bit (the
+// quantized dots and the tiled GEMM) or within the stated float tolerance (anything whose summation order
+// differs). The translation units that must reproduce scalar rounding are compiled with -ffp-contract=off so
+// the compiler cannot fuse multiply-adds behind our back (see CMakeLists.txt).
 #include <cstdint>
 
 // NIBBLE_SIMD=OFF (cmake) leaves NIBBLE_SIMD_ENABLED undefined: scalar paths only.
@@ -36,6 +44,7 @@ struct alignas(32) BlockQ8_0x8 {
   int32_t sum[8];
 };
 
+// Name of the instruction set the build compiled in, shown by `nibble info` and recorded in bench rows.
 inline const char* kernel_set() {
 #if defined(NIBBLE_HAVE_AVXVNNI)
   return "avx2+fma+f16c+avxvnni";
@@ -47,6 +56,7 @@ inline const char* kernel_set() {
 }
 
 #ifdef NIBBLE_HAVE_AVX2
+// Horizontal sum of the 8 float lanes (fixed pairing order, so results are reproducible).
 static inline float hsum_ps(__m256 v) {
   __m128 s = _mm_add_ps(_mm256_castps256_ps128(v), _mm256_extractf128_ps(v, 1));
   s = _mm_add_ps(s, _mm_movehl_ps(s, s));
@@ -54,6 +64,7 @@ static inline float hsum_ps(__m256 v) {
   return _mm_cvtss_f32(s);
 }
 
+// Horizontal sum of the 8 int32 lanes (exact).
 static inline int32_t hsum_epi32(__m256i v) {
   __m128i s = _mm_add_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256(v, 1));
   s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0x4E));
@@ -61,6 +72,7 @@ static inline int32_t hsum_epi32(__m256i v) {
   return _mm_cvtsi128_si32(s);
 }
 
+// 8 consecutive half-precision values widened to 8 floats (unaligned load).
 static inline __m256 load_f16x8(const uint16_t* p) {
   return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p)));
 }

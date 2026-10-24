@@ -1,3 +1,4 @@
+// Chat-template selection, per-turn prompt construction and Chat::send (the conversation state machine).
 #include "chat.h"
 
 #include "util/escape.h"
@@ -22,6 +23,8 @@ std::string_view trim(std::string_view s) {
 }
 }  // namespace
 
+// Layouts reproduce the models' official Jinja templates. Llama 3 hard-codes the template's default date
+// lines ("Today Date: 26 Jul 2024") because the official template does when no date is passed.
 std::vector<PromptPart> chat_turn(ChatFormat f, std::string_view system, std::string_view user, bool first) {
   switch (f) {
     case ChatFormat::ChatML:
@@ -66,6 +69,8 @@ std::string default_system(ChatFormat f) {
 }
 }  // namespace
 
+// Chooses the format (throws if the model has no known chat template) and substitutes the model's default
+// system prompt when none is given.
 Chat::Chat(Session& s, std::string system_prompt) {
   const ChatFormat fmt = chat_format_for(s.architecture(), s.chat_template());
   if (system_prompt.empty()) system_prompt = default_system(fmt);
@@ -75,6 +80,9 @@ Chat::Chat(Chat&&) noexcept = default;
 Chat& Chat::operator=(Chat&&) noexcept = default;
 Chat::~Chat() = default;
 
+// Sends one turn. The first turn starts the Session fresh (append = false); later turns append, so only the
+// new tokens are prefilled. `sync` records the Session state after every call, thrown or not, so the
+// next call can tell whether the cache still matches the conversation.
 StopReason Chat::send(std::string_view user, const GenParams& gp,
                       const std::function<bool(std::string_view)>& on_token) {
   if (!impl_) throw Error("use of moved-from Chat");

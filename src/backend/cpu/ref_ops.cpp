@@ -1,3 +1,6 @@
+// Reference kernels (see ref_ops.h). Written for clarity and exactness, not speed: float accumulation in a
+// fixed left-to-right order for the float matmul, double precision where the SIMD twins need a stable target
+// (RMSNorm, rope angles, softmax sums).
 #include "backend/cpu/ref_ops.h"
 
 #include <algorithm>
@@ -9,11 +12,14 @@
 namespace nibble::cpu {
 
 namespace {
+// Error for a weight type this backend cannot run (message lists the supported types).
 [[noreturn]] void bad_type() { throw Error(std::string("cpu backend: unsupported weight dtype (only ") + kSupportedTypes + ")"); }
 
+// Typed views of a tensor's data pointer.
 inline const uint16_t* as_f16(const Tensor& t) { return static_cast<const uint16_t*>(t.data); }
 inline const float* as_f32(const Tensor& t) { return static_cast<const float*>(t.data); }
 
+// True for the block-quantized weight types (everything but F32/F16).
 bool is_quant(DType t) {
   switch (t) {
     case DType::Q4_0: case DType::Q5_0: case DType::Q5_1: case DType::Q8_0:
@@ -24,7 +30,8 @@ bool is_quant(DType t) {
   }
 }
 
-// One weight row against activation row `ar` (nb blocks of the weight's act_type).
+// Dot product of one weight row (nb blocks, starting at wr) against activation row `ar` (nb blocks of the
+// weight's activation type): selects the dot function by weight type. (nb blocks of the weight's act_type).
 float dot_row(DType t, const uint8_t* wr, const QuantActs& a, int64_t ar, int64_t nb) {
   switch (t) {
     case DType::Q4_0: return dot_q4_0_q8_0(reinterpret_cast<const BlockQ4_0*>(wr), a.q8_0 + ar * nb, nb);
@@ -38,6 +45,7 @@ float dot_row(DType t, const uint8_t* wr, const QuantActs& a, int64_t ar, int64_
   }
 }
 
+// Whether the QuantActs carries the activation array that weights of type t need.
 bool has_acts(DType t, const QuantActs& a) {
   switch (act_type(t)) {
     case ActType::Q8_0: return a.q8_0;
@@ -49,6 +57,7 @@ bool has_acts(DType t, const QuantActs& a) {
 }
 }  // namespace
 
+// max-subtract for stability, exp, then normalize by the double-precision sum.
 void softmax_inplace(float* x, int64_t n) {
   if (n <= 0) return;
   float m = x[0];
@@ -62,6 +71,7 @@ void softmax_inplace(float* x, int64_t n) {
   for (int64_t i = 0; i < n; ++i) x[i] *= inv;
 }
 
+// Row copy for F32, widening for F16, dequantize_row for the quantized types.
 void embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
   const int64_t d = table.ne[0];
   for (size_t t = 0; t < ids.size(); ++t) {
@@ -81,11 +91,14 @@ void embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
   }
 }
 
+// Row-wise Q8_0 quantization of an n x width activation matrix (the scalar quantizer used when SIMD is off).
 void quantize_rows_q8_0(const float* x, BlockQ8_0* y, int64_t n, int64_t width) {
   const int64_t nb = width / kQK;
   for (int64_t t = 0; t < n; ++t) quantize_row_q8_0(x + t * width, y + t * nb, width);
 }
 
+// y[t * out + r] = dot(w row r, x row t) for output rows [row_begin, row_end). Quantized weights use the
+// block dot with the pre-quantized activations in xq; float weights accumulate left to right in float.
 void matmul_rows(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end,
                  const QuantActs* xq) {
   const int64_t in = w.ne[0], out = w.rows();
@@ -127,10 +140,12 @@ void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float ep
   }
 }
 
+// Element-wise accumulate.
 void add(float* x, const float* y, int64_t count) {
   for (int64_t i = 0; i < count; ++i) x[i] += y[i];
 }
 
+// Broadcast-add of a bias vector to every row.
 void add_bias(float* x, const Tensor& bias, int64_t n) {
   const int64_t d = bias.ne[0];
   const float* b = as_f32(bias);
@@ -138,6 +153,9 @@ void add_bias(float* x, const Tensor& bias, int64_t n) {
     for (int64_t i = 0; i < d; ++i) x[t * d + i] += b[i];
 }
 
+// For each position and head, rotates the (a, b) element pairs by angle pos * freq_base^(-2i/head_dim)
+// (divided by the optional per-pair frequency factor). neox pairs element i with i + head_dim/2; the other
+// layout pairs 2i with 2i + 1. Angles are computed in double.
 void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, const RopeParams& p) {
   const int64_t half = head_dim / 2;
   for (int64_t t = 0; t < n; ++t) {
@@ -158,6 +176,7 @@ void rope(float* x, int64_t n, int64_t n_heads, int64_t head_dim, int64_t pos0, 
   }
 }
 
+// Straightforward scaled dot-product attention with a causal mask (only positions up to the query's own).
 void attention_heads(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
                      int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin,
                      int64_t head_end, float* scratch) {
@@ -186,6 +205,7 @@ void attention_heads(const float* q, const float* k, const float* v, float* out,
   }
 }
 
+// SwiGLU gating.
 void silu_mul(float* gate, const float* up, int64_t count) {
   for (int64_t i = 0; i < count; ++i) {
     const float g = gate[i];

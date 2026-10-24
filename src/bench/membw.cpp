@@ -1,3 +1,4 @@
+// Implementation of the streaming-read bandwidth probe (see membw.h).
 #include "bench/membw.h"
 
 #include <unistd.h>
@@ -10,6 +11,7 @@
 
 namespace nibble::bench {
 
+// Larger than any cache so the reads come from DRAM.
 size_t membw_default_bytes() {
 #ifdef _SC_LEVEL3_CACHE_SIZE
   const long l3 = sysconf(_SC_LEVEL3_CACHE_SIZE);
@@ -19,6 +21,8 @@ size_t membw_default_bytes() {
   return std::max<size_t>(size_t{1} << 30, l3 > 0 ? 4 * static_cast<size_t>(l3) : 0);
 }
 
+// Four independent accumulators per chunk keep the loads pipelined; the sum is stored to an atomic so the
+// compiler cannot drop the reads.
 std::vector<double> measure_membw(ThreadPool& pool, size_t bytes, int reps) {
   const int64_t n = static_cast<int64_t>(bytes / sizeof(uint64_t));
   std::unique_ptr<uint64_t[]> buf(new uint64_t[static_cast<size_t>(n)]);

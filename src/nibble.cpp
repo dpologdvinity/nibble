@@ -1,3 +1,9 @@
+// Implementation of the public API (include/nibble/nibble.h): Model owns everything loaded from the file,
+// Session owns the KV cache and runs the prefill/decode/sample loop.
+//
+// Layering: this file is the only place where the GGUF reader, tokenizer, transformer, sampler, thread pool
+// and CPU backend are wired together. Everything below it is internal (src/), everything above it is the
+// CLI (cli/) or an embedding application.
 #include "nibble/nibble.h"
 
 #include <algorithm>
@@ -47,8 +53,9 @@ model::LlamaConfig load_config(const gguf::File& f, const ModelParams& p) {
 
 }  // namespace
 
-// Members are in dependency order; destruction runs in reverse
-// (Weights before File, backend before pool).
+// Everything a loaded model consists of. Members are in dependency order (each is constructed from the
+// ones above it); destruction runs in reverse (Weights before File, backend before pool), so nothing
+// outlives what it points into: Weights are views into the mapped File, and the backend runs on the pool.
 struct Model::Impl {
   gguf::File file;
   model::LlamaConfig cfg;
@@ -56,8 +63,10 @@ struct Model::Impl {
   ThreadPool pool;
   cpu::CpuBackend backend;
   model::Weights weights;
-  int64_t n_ctx;
+  int64_t n_ctx;  // context window in tokens: the requested value, or min(4096, trained length)
 
+  // Opens the file and builds each component in order. Any Error thrown here (bad file, missing tensor,
+  // vocabulary/embedding mismatch, bad n_ctx) aborts the load.
   Impl(const std::string& path, const ModelParams& p)
       : file(gguf::File::open(path)),
         cfg(load_config(file, p)),
@@ -71,11 +80,14 @@ struct Model::Impl {
   }
 };
 
+// Special members are defaulted here, where Impl is a complete type (the header only forward-declares it).
 Model::Model() = default;
 Model::Model(Model&&) noexcept = default;
 Model& Model::operator=(Model&&) noexcept = default;
 Model::~Model() = default;
 
+// Validates the numeric parameters first so bad values fail before touching the file, then builds the Impl.
+// std::bad_alloc is translated to an Error that names the file, so a huge or hostile file reports cleanly.
 Model Model::load(const std::string& path, ModelParams p) {
   if (p.n_ctx < 0) throw Error("n_ctx must be non-negative, got " + std::to_string(p.n_ctx));
   if (p.n_threads < 0) throw Error("n_threads must be non-negative, got " + std::to_string(p.n_threads));
@@ -89,6 +101,7 @@ Model Model::load(const std::string& path, ModelParams p) {
 }
 
 namespace {
+// Shared error for calls on a Model whose Impl was moved away.
 [[noreturn]] void throw_moved_from() { throw Error("use of moved-from Model"); }
 }  // namespace
 
@@ -101,9 +114,10 @@ int64_t Model::n_ctx() const {
   return impl_->n_ctx;
 }
 
+// Per-conversation state. The Session borrows the Model's Impl (hence "must not outlive its Model").
 struct Session::Impl {
   Model::Impl& m;
-  model::Transformer tf;
+  model::Transformer tf;  // owns the KV cache and activation buffers
   std::vector<float> logits;  // preallocated; forward path must not allocate. Valid when n_past > 0.
   int64_t n_prompt = 0, n_gen = 0;
   int64_t n_past = 0;  // tokens in the KV cache
@@ -116,10 +130,13 @@ struct Session::Impl {
         tf(m.cfg, m.weights, m.backend, m.n_ctx),
         logits(static_cast<size_t>(m.cfg.n_vocab)) {}
 
+  // The core loop shared by both generate overloads; see Session::Impl::run below.
   StopReason run(const std::vector<int32_t>& toks, const GenParams& gp,
                  const std::function<bool(std::string_view)>& on_token);
 };
 
+// Builds the Transformer, which allocates the KV cache and all scratch buffers up front, so that decoding
+// afterwards allocates nothing.
 Session::Session(Model& m) : impl_(std::make_unique<Impl>(m)) {}
 Session::~Session() = default;
 int64_t Session::n_prompt_tokens() const { return impl_->n_prompt; }
@@ -132,6 +149,11 @@ std::string Session::chat_template() const {
   return f.find("tokenizer.chat_template") ? f.get_string("tokenizer.chat_template") : std::string();
 }
 
+// Runs one generate call on already-encoded tokens: validates, seeds the sampler, prefills the new tokens
+// at position `start`, then samples and forwards one token at a time until a stop condition. Keeps
+// n_past equal to the number of tokens whose K/V are in the cache, and sets it to 0 while a forward is in
+// flight so an exception inside the model leaves the Session in a consistent "empty" state. See the
+// header for the full contract (append, ContextFull, empty prompt).
 StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams& gp,
                               const std::function<bool(std::string_view)>& on_token) {
   n_prompt = n_gen = 0;
@@ -193,6 +215,8 @@ StopReason Session::Impl::run(const std::vector<int32_t>& toks, const GenParams&
   }
 }
 
+// Multi-part overload: tokenizes the parts as one string (special-token text only where a part says so),
+// adds BOS when starting fresh, then delegates to run().
 StopReason Session::generate(std::span<const PromptPart> parts, const GenParams& gp,
                              const std::function<bool(std::string_view)>& on_token) {
   ++impl_->n_calls;
@@ -205,6 +229,8 @@ StopReason Session::generate(std::span<const PromptPart> parts, const GenParams&
   return impl_->run(impl_->m.tokenizer.encode_parts(tp, !gp.append && any_text), gp, on_token);
 }
 
+// Single-string overload with the original (M0-M3) contract: a fresh prompt that is empty or does not fit
+// throws instead of returning ContextFull.
 StopReason Session::generate(std::string_view prompt, const GenParams& gp,
                              const std::function<bool(std::string_view)>& on_token) {
   ++impl_->n_calls;

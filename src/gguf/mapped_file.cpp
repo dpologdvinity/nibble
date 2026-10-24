@@ -1,3 +1,4 @@
+// POSIX implementation of MappedFile (open + fstat + mmap).
 #include "gguf/mapped_file.h"
 
 #include <fcntl.h>
@@ -13,6 +14,8 @@
 
 namespace nibble::gguf {
 
+// The descriptor is closed as soon as the mapping exists (the mapping keeps the file alive). Every failure
+// path closes it first so no descriptor leaks. MAP_PRIVATE + PROT_READ: the file is never modified.
 MappedFile MappedFile::open(const std::string& path) {
   int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) throw Error("cannot open '" + path + "': " + std::strerror(errno));
@@ -36,6 +39,7 @@ MappedFile MappedFile::open(const std::string& path) {
   return f;
 }
 
+// Moves transfer ownership of the mapping; the source is left empty (it must not munmap).
 MappedFile::MappedFile(MappedFile&& o) noexcept
     : addr_(std::exchange(o.addr_, nullptr)), size_(std::exchange(o.size_, 0)) {}
 

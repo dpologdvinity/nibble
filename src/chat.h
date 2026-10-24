@@ -1,5 +1,7 @@
 #pragma once
-// ChatML formatting for nibble::Chat (declared in nibble/nibble.h).
+// Chat-template formatting behind nibble::Chat (declared in nibble/nibble.h): picks the format from the
+// model's chat template and builds each turn's prompt as a list of parts, marking which parts are special
+// markup (parsed as control tokens) and which are user text (never parsed, so users cannot inject markup).
 #include <string>
 #include <string_view>
 #include <vector>
@@ -8,6 +10,7 @@
 
 namespace nibble {
 
+// The prompt layouts nibble knows: ChatML (Qwen), Llama 3 header format, Zephyr (TinyLlama).
 enum class ChatFormat { ChatML, Llama3, Zephyr };
 
 // Picked from markers in the model's chat template ("<|im_start|>" ChatML,
@@ -26,6 +29,8 @@ inline constexpr std::string_view kQwenDefaultSystem =
 // user text are not. BOS is never included. The views point into the arguments.
 std::vector<PromptPart> chat_turn(ChatFormat, std::string_view system, std::string_view user, bool first);
 
+// State of one conversation. Chat detects misuse of the Session behind its back ("chat context lost") by
+// remembering what the Session looked like after the previous send.
 struct Chat::Impl {
   Session& session;
   ChatFormat format;

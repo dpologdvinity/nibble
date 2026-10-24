@@ -1,3 +1,15 @@
+// Scalar reference implementation of the quantized formats declared in quant.h: dequantization, the Q8_0 /
+// Q8_1 / Q8_K activation quantizers and every block dot product.
+//
+// This file is the oracle for the whole project. Each operation mirrors the corresponding function in
+// llama.cpp's generic (non-SIMD) ggml code, including the *order* of floating-point operations, because
+// float addition is not associative and the results are compared bit for bit: against golden vectors
+// produced by ggml itself (tests/test_quant.cpp) and against the AVX2 kernels (tests/test_simd.cpp). When
+// changing anything here, keep the evaluation order and re-run both.
+//
+// Robustness: blocks come from untrusted files, so every function must tolerate arbitrary bytes (all-ones
+// scales, NaN/Inf fp16 scales). Blocks are read with memcpy, never through a typed pointer, because they
+// may sit at any byte offset.
 #include "quant.h"
 
 #include <cmath>
@@ -10,6 +22,7 @@
 namespace nibble {
 
 namespace {
+// Throws unless n is a non-negative multiple of `block` (the element count of one block of the type).
 void check_n(int64_t n, int64_t block = kQK) {
   if (n < 0 || n % block != 0) throw Error("quant: length must be a multiple of " + std::to_string(block));
 }
@@ -44,6 +57,7 @@ void scale_min_k4(int j, const uint8_t* q, uint8_t* d, uint8_t* m) {
 
 // Unpacks a K super-block's 256 weights to integers, in element order (group k of 32 = elements 32k..32k+31):
 // Q4_K/Q5_K to 0..15 / 0..31, Q6_K to -32..31. Each 32-group has one scale (Q6_K: each 16-group).
+// The three overloads differ only in how each format stores its bits; callers pick one by block type.
 void expand_k(const BlockQ4_K& b, int8_t a[256]) {
   for (int c = 0; c < 4; ++c)
     for (int l = 0; l < 32; ++l) {
@@ -58,6 +72,9 @@ void expand_k(const BlockQ5_K& b, int8_t a[256]) {
       a[64 * c + 32 + l] = static_cast<int8_t>((b.qs[32 * c + l] >> 4) + (b.qh[l] & (2 << (2 * c)) ? 16 : 0));
     }
 }
+// Q6_K: a 128-element half is 4 groups of 32 whose 6-bit values combine ql nibbles (group 0: ql[0..31]
+// low nibble, group 1: ql[32..63] low, group 2: ql[0..31] high, group 3: ql[32..63] high) with 2 bits each
+// from qh[0..31] (bits 0-1, 2-3, 4-5, 6-7 respectively). The -32 bias makes the values signed.
 void expand_k(const BlockQ6_K& b, int8_t a[256]) {
   for (int h = 0; h < 2; ++h)
     for (int l = 0; l < 32; ++l) {
@@ -70,6 +87,8 @@ void expand_k(const BlockQ6_K& b, int8_t a[256]) {
     }
 }
 
+// Dequantizes nb Q4_K or Q5_K super-blocks starting at p: x = d * sc[k] * q - dmin * m[k] per 32-element
+// sub-block k, in ggml's operation order (multiply d by the scale first, then by the quant, then subtract).
 template <class Blk>
 void dequantize_k45(const unsigned char* p, float* dst, int64_t nb) {
   for (int64_t b = 0; b < nb; ++b) {
@@ -128,6 +147,8 @@ int nearest_int(float fval) {
 }
 }  // namespace
 
+// Dispatches on t. The legacy formats are decoded in place; the k-quants go through the helpers above.
+// Each branch checks the length with the block size of its own type before reading anything.
 void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
   const auto* p = static_cast<const unsigned char*>(src);
   switch (t) {
@@ -217,6 +238,8 @@ void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
   throw Error("dequantize_row: unsupported dtype");
 }
 
+// One block at a time through quantize_block_q8; the finished block is memcpy'd out because y may be
+// unaligned.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
   check_n(n);
   for (int64_t b = 0; b < n / kQK; ++b) {
@@ -272,6 +295,8 @@ void quantize_row_q8_K(const float* x, BlockQ8_K* y, int64_t n) {
   }
 }
 
+// Q4_0 x Q8_0: per block, integer sum of (nibble - 8) * activation, then * d_w * d_a. Left-to-right float
+// multiplication order is ggml's (sumi * d_w) * d_a.
 float dot_q4_0_q8_0(const BlockQ4_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   const auto* pw = reinterpret_cast<const unsigned char*>(w);
   const auto* pa = reinterpret_cast<const unsigned char*>(a);
@@ -291,6 +316,8 @@ float dot_q4_0_q8_0(const BlockQ4_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   return sum;
 }
 
+// Q8_0 x Q8_0: per block, the integer dot of the 32 pairs, then sumi * (d_w * d_a) (ggml groups the two
+// scales first here, unlike the Q4_0 dot).
 float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   const auto* pw = reinterpret_cast<const unsigned char*>(w);
   const auto* pa = reinterpret_cast<const unsigned char*>(a);
@@ -306,6 +333,8 @@ float dot_q8_0_q8_0(const BlockQ8_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   return sum;
 }
 
+// Q5_0 x Q8_0: as Q4_0 with the fifth bit restored from qh and a -16 bias; scales grouped as (d_w * d_a) *
+// sumi.
 float dot_q5_0_q8_0(const BlockQ5_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   const auto* pw = reinterpret_cast<const unsigned char*>(w);
   const auto* pa = reinterpret_cast<const unsigned char*>(a);
@@ -327,6 +356,8 @@ float dot_q5_0_q8_0(const BlockQ5_0* w, const BlockQ8_0* a, int64_t n_blocks) {
   return sum;
 }
 
+// Q5_1 x Q8_1: unsigned 5-bit values, so the weight's minimum contributes m_w * s_a (s_a is the activation
+// block's value sum). The block term (d_w * d_a) * sumi + m_w * s_a is formed first, then added to the total.
 float dot_q5_1_q8_1(const BlockQ5_1* w, const BlockQ8_1* a, int64_t n_blocks) {
   const auto* pw = reinterpret_cast<const unsigned char*>(w);
   const auto* pa = reinterpret_cast<const unsigned char*>(a);
@@ -376,6 +407,7 @@ float dot_q6_K_q8_K(const BlockQ6_K* w, const BlockQ8_K* act, int64_t n_blocks) 
   return sumf;
 }
 
+// Mirrors ggml's vec_dot_type table for the supported weight types.
 ActType act_type(DType w) {
   switch (w) {
     case DType::Q4_0: case DType::Q5_0: case DType::Q8_0: return ActType::Q8_0;

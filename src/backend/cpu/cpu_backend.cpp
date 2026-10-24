@@ -1,3 +1,6 @@
+// CpuBackend implementation: scratch management and the dispatch from abstract ops to scalar/AVX2 kernels.
+// The interesting function is matmul_multi, which quantizes the shared input once per activation type and
+// then runs each weight's rows in parallel.
 #include "backend/cpu/cpu_backend.h"
 
 #include <algorithm>
@@ -15,6 +18,8 @@ namespace nibble::cpu {
 
 CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool) {}
 
+// Computes every scratch size with overflow checks first (so a bad request changes nothing), then grows the
+// attention scores, the packed Q8_0 tile buffer (AVX2 builds) and the three quantized-activation buffers.
 void CpuBackend::reserve(const ReserveParams& rp) {
   const int64_t n_ctx = rp.n_ctx, n_heads = rp.n_heads;
   uint64_t need, xq_need, xqk_need;
@@ -59,10 +64,12 @@ void CpuBackend::reserve(const ReserveParams& rp) {
   }
 }
 
+// Frees any blocks the owner did not free.
 CpuBackend::~CpuBackend() {
   for (void* p : allocs_) std::free(p);
 }
 
+// Rounds the size up to a multiple of 64 bytes (aligned_alloc requires it), zeroes the block and records it.
 float* CpuBackend::alloc(int64_t n_floats) {
   if (n_floats < 0) throw Error("alloc: negative size " + std::to_string(n_floats) + " floats");
   uint64_t bytes;
@@ -83,6 +90,7 @@ float* CpuBackend::alloc(int64_t n_floats) {
   return static_cast<float*>(p);
 }
 
+// Tolerates nullptr and unknown pointers (ignored) rather than risking a double free.
 void CpuBackend::free(float* p) {
   if (!p) return;
   auto it = std::find(allocs_.begin(), allocs_.end(), static_cast<void*>(p));
@@ -91,12 +99,14 @@ void CpuBackend::free(float* p) {
   allocs_.erase(it);
 }
 
+// Host memory is the backend's memory, so this is a memcpy.
 void CpuBackend::read(float* host_dst, const float* src, int64_t n) {
   NIBBLE_DCHECK(host_dst && src && n >= 0, "read: dst=%p src=%p n=%lld", static_cast<void*>(host_dst),
                 static_cast<const void*>(src), static_cast<long long>(n));
   std::memcpy(host_dst, src, static_cast<size_t>(n) * sizeof(float));
 }
 
+// F16 tables use the F16C row converter; every other type goes through the reference embed.
 void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float* out) {
   NIBBLE_DCHECK(out && table.data && !ids.empty() && supports(table.type), "embed: out=%p table=%p n=%zu dtype %u",
                 static_cast<void*>(out), table.data, ids.size(), static_cast<unsigned>(table.type));
@@ -118,12 +128,19 @@ void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float*
   cpu::embed(table, ids, out);
 }
 
+// Convenience: a group of one.
 void CpuBackend::matmul(const Tensor& w, const float* x, float* y, int64_t n) {
   const Tensor* ws[] = {&w};
   float* const ys[] = {y};
   matmul_multi(ws, x, ys, n);
 }
 
+// Steps: (1) check the weights share an input width, else fall back to one call per weight; (2) note which
+// activation quantizations the weights need and quantize x once for each (Q8_0 via AVX2 when available, Q8_1
+// and Q8_K scalar), packing Q8_0 into 8-token tiles for the prefill GEMM when n >= 4; (3) one parallel_for over
+// the stacked output rows of all weights, each weight dispatched on its own type to a SIMD kernel or the
+// scalar oracle. Every kernel gives the same result for a row regardless of which rows are in its call, so
+// results do not depend on thread count.
 void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x, std::span<float* const> ys,
                               int64_t n) {
   NIBBLE_DCHECK(!ws.empty() && ws.size() == ys.size() && x && n > 0, "matmul: %zu weights, %zu outputs, x=%p n=%lld",
@@ -201,6 +218,7 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
   });
 }
 
+// The elementwise ops below dispatch to the AVX2 twin when compiled in, else to ref_ops.
 void CpuBackend::rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) {
   NIBBLE_DCHECK(x && y && weight.data && n > 0 && weight.type == DType::F32,
                 "rmsnorm: x=%p y=%p weight=%p n=%lld weight dtype %u (need F32)", static_cast<const void*>(x),
@@ -248,6 +266,7 @@ void CpuBackend::silu_mul(float* gate, const float* up, int64_t count) {
 #endif
 }
 
+// One parallel_for chunk per head; each head owns a slice of scratch_ for its score row, so no sharing.
 void CpuBackend::attention(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
                            int64_t n_heads, int64_t n_kv_heads, int64_t head_dim) {
   NIBBLE_DCHECK(q && k && v && out && n > 0 && pos0 >= 0 && n_heads > 0 && n_kv_heads > 0 &&

@@ -11,6 +11,7 @@
 namespace nibble::simd {
 namespace {
 
+// Horizontal sum of the 4 double lanes.
 inline double hsum_pd(__m256d v) {
   __m128d s = _mm_add_pd(_mm256_castpd256_pd128(v), _mm256_extractf128_pd(v, 1));
   return _mm_cvtsd_f64(_mm_add_sd(s, _mm_unpackhi_pd(s, s)));
@@ -21,6 +22,7 @@ inline __m128 scale_pd(__m128 x, double scale, __m128 w) {
   return _mm256_cvtpd_ps(_mm256_mul_pd(_mm256_mul_pd(_mm256_cvtps_pd(x), _mm256_set1_pd(scale)), _mm256_cvtps_pd(w)));
 }
 
+// silu(g) * u for 8 lanes, using exp_ps for e^-g.
 inline __m256 silu_mul8(__m256 g, __m256 u) {
   const __m256 e = exp_ps(_mm256_xor_ps(g, _mm256_set1_ps(-0.0f)));
   return _mm256_mul_ps(_mm256_div_ps(g, _mm256_add_ps(_mm256_set1_ps(1.0f), e)), u);
@@ -50,12 +52,15 @@ float exp_sub_sum(float* x, int64_t len, float m) {
 
 }  // namespace
 
+// Exact elementwise add (bit-identical to the scalar).
 void add(float* x, const float* y, int64_t count) {
   int64_t i = 0;
   for (; i + 8 <= count; i += 8) _mm256_storeu_ps(x + i, _mm256_add_ps(_mm256_loadu_ps(x + i), _mm256_loadu_ps(y + i)));
   for (; i < count; ++i) x[i] += y[i];
 }
 
+// Sum of squares in vectorized double precision (only the summation order differs from the scalar), then
+// per-element scaling in double exactly as the scalar does.
 void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) {
   const int64_t d = weight.ne[0];
   const float* w = static_cast<const float*>(weight.data);
@@ -80,6 +85,7 @@ void rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float ep
   }
 }
 
+// Vector body plus a zero-padded final vector so tail elements take the same path as the rest.
 void silu_mul(float* gate, const float* up, int64_t count) {
   int64_t i = 0;
   for (; i + 8 <= count; i += 8) _mm256_storeu_ps(gate + i, silu_mul8(_mm256_loadu_ps(gate + i), _mm256_loadu_ps(up + i)));
@@ -92,6 +98,8 @@ void silu_mul(float* gate, const float* up, int64_t count) {
   }
 }
 
+// Same structure as the scalar attention: scores into scratch (vector dot per key), max, vectorized exp-sum
+// and normalization, then the weighted sum of V rows with FMA.
 void attention_heads(const float* q, const float* k, const float* v, float* out, int64_t n, int64_t pos0,
                      int64_t n_heads, int64_t n_kv_heads, int64_t head_dim, int64_t head_begin, int64_t head_end,
                      float* scratch) {

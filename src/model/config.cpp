@@ -1,3 +1,5 @@
+// Reads LlamaConfig from GGUF metadata (see config.h). Every key is looked up under the architecture prefix,
+// e.g. "qwen2.embedding_length" or "llama.embedding_length".
 #include "model/config.h"
 
 #include "nibble/error.h"
