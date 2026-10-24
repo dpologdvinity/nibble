@@ -63,7 +63,8 @@ bool parse_threads(const std::string& s, std::vector<int>& out) {
 
 // 1-minute load average (path overridable through NIBBLE_LOADAVG_PATH for tests).
 double load1() {
-  const char* p = std::getenv("NIBBLE_LOADAVG_PATH");
+  // getenv is safe here: the CLI is single-threaded when this runs (before any thread pool exists).
+  const char* p = std::getenv("NIBBLE_LOADAVG_PATH");  // NOLINT(concurrency-mt-unsafe)
   std::ifstream f(p ? p : "/proc/loadavg");
   double v = 0;
   f >> v;

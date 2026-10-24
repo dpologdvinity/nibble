@@ -75,7 +75,7 @@ Weights Weights::bind(const gguf::File& f, const LlamaConfig& c, const Backend& 
     l.w_gate = get(f, be, p + "ffn_gate.weight", {E, c.n_ff}, false);
     l.w_up = get(f, be, p + "ffn_up.weight", {E, c.n_ff}, false);
     l.w_down = get(f, be, p + "ffn_down.weight", {c.n_ff, E}, false);
-    w.layers.push_back(std::move(l));
+    w.layers.push_back(l);
   }
   return w;
 }

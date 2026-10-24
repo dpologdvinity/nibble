@@ -31,14 +31,19 @@ namespace {
 // metadata, before Tokenizer::from_gguf builds its tables, so a file with a huge
 // token array cannot make us build them first. Missing or mistyped entries are left
 // to the tokenizer/config loaders, which report them.
-const gguf::File& check_vocab_matches_embd(const gguf::File& f) {
+void check_vocab_matches_embd(const gguf::File& f) {
   const gguf::Value* v = f.find("tokenizer.ggml.tokens");
   const auto* toks = v ? std::get_if<gguf::Array>(v) : nullptr;
   const auto* te = f.find_tensor("token_embd.weight");
   if (toks && toks->is_string() && te && static_cast<int64_t>(toks->size()) != te->tensor.ne[1])
     throw Error("tokenizer has " + std::to_string(toks->size()) + " tokens but token_embd.weight has " +
                 std::to_string(te->tensor.ne[1]) + " rows");
-  return f;
+}
+
+// Checks the vocabulary size against the embedding matrix, then builds the tokenizer.
+tok::Tokenizer build_tokenizer(const gguf::File& f) {
+  check_vocab_matches_embd(f);
+  return tok::Tokenizer::from_gguf(f);
 }
 
 // Builds the config and checks the requested n_ctx against context_length before
@@ -70,7 +75,7 @@ struct Model::Impl {
   Impl(const std::string& path, const ModelParams& p)
       : file(gguf::File::open(path)),
         cfg(load_config(file, p)),
-        tokenizer(tok::Tokenizer::from_gguf(check_vocab_matches_embd(file))),
+        tokenizer(build_tokenizer(file)),
         pool(p.n_threads > 0 ? p.n_threads
                              : default_thread_count("/sys/devices/system/cpu", std::thread::hardware_concurrency())),
         backend(pool),

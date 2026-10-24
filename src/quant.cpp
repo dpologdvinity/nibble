@@ -39,7 +39,7 @@ float quantize_block_q8(const float* x, int8_t* qs) {
   bool has_nan = false;
   for (int j = 0; j < kQK; ++j) {
     amax = std::fmax(amax, std::fabs(x[j]));  // fmax skips NaN; has_nan accounts for it below
-    has_nan |= x[j] != x[j];
+    has_nan |= std::isnan(x[j]);
   }
   const float d = has_nan ? std::numeric_limits<float>::quiet_NaN() : amax / 127.f;
   const float id = d ? 1.0f / d : 0.0f;
@@ -235,8 +235,10 @@ void dequantize_row(DType t, const void* src, float* dst, int64_t n) {
         int8_t a[256];
         expand_k(blk, a);
         const float d = fp16_to_fp32(blk.d);
-        for (int i = 0; i < 256; ++i)
-          dst[b * kQK_K + i] = d * static_cast<float>(blk.scales[i / 16]) * static_cast<float>(a[i]);
+        for (int k = 0; k < 16; ++k) {  // one signed scale per 16 elements
+          const float dk = d * static_cast<float>(blk.scales[k]);
+          for (int l = 0; l < 16; ++l) dst[b * kQK_K + 16 * k + l] = dk * static_cast<float>(a[16 * k + l]);
+        }
       }
       return;
   }
@@ -283,7 +285,7 @@ void quantize_row_q8_K(const float* x, BlockQ8_K* y, int64_t n) {
         amax = ax;
         max = x[j];
       }
-      has_nan |= x[j] != x[j];
+      has_nan |= std::isnan(x[j]);
     }
     if (amax) {
       const float iscale = -127.f / max;

@@ -89,33 +89,17 @@ std::vector<bool> build_eog(const gguf::File& f, const std::vector<std::string>&
   add(fim("tokenizer.ggml.fim_sep_token_id", {"<|file_sep|>", "<|plamo:file_separator|>"}));  // :3023-3025
   // EOG names, :3029-3055 (every supported vocab's eot/eom name is in this list, so the
   // eot/eom name searches at :2828-2860 add nothing beyond it).
-  static const char* const names[] = {"<|eot_id|>",
-                                      "<|eot|>",
-                                      "<|im_end|>",
-                                      "<|end|>",
-                                      "<|return|>",
-                                      "<|call|>",
-                                      "<|flush|>",
-                                      "<|calls|>",
-                                      "<end_of_turn>",
-                                      "<|endoftext|>",
-                                      "</s>",
-                                      "<|eom_id|>",
-                                      "<EOT>",
-                                      "_<EOT>",
-                                      "[EOT]",
-                                      "[EOS]",
-                                      "<|end_of_text|>",
-                                      "<end_of_utterance>",
-                                      "<eos>",
-                                      "<turn|>",
-                                      "<|tool_response>",
+  static const char* const names[] = {"<|eot_id|>", "<|eot|>", "<|im_end|>", "<|end|>", "<|return|>", "<|call|>",
+                                      "<|flush|>", "<|calls|>", "<end_of_turn>", "<|endoftext|>", "</s>", "<|eom_id|>",
+                                      "<EOT>", "_<EOT>", "[EOT]", "[EOS]", "<|end_of_text|>", "<end_of_utterance>",
+                                      "<eos>", "<turn|>", "<|tool_response>",
+                                      // Adjacent literals on purpose: "\x9C" followed by "e" would read as one hex
+                                      // escape. NOLINTNEXTLINE(bugprone-suspicious-missing-comma)
                                       "<\xEF\xBD\x9C"
                                       "end\xE2\x96\x81"
                                       "of\xE2\x96\x81"
                                       "sentence\xEF\xBD\x9C>",
-                                      "[e~[",
-                                      "<|ifm|im_end|>"};
+                                      "[e~[", "<|ifm|im_end|>"};
   for (const char* nm : names) {
     auto it = by_text.find(nm);
     if (it != by_text.end()) eog.insert(it->second), promote.insert(it->second);
