@@ -9,7 +9,7 @@ Q="$ROOT/third_party/build/bin/llama-quantize"
 SRC="$ROOT/models/qwen2.5-0.5b-instruct-fp16.gguf"
 [ -x "$Q" ] || { echo "missing $Q (run tools/build_llama_cpp.sh)" >&2; exit 1; }
 [ -f "$SRC" ] || { echo "missing $SRC" >&2; exit 1; }
-lower() { echo "$1" | tr 'A-Z' 'a-z'; }
+lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
 for T in Q8_0 Q4_0; do
   OUT="$ROOT/models/qwen2.5-0.5b-instruct-$(lower "$T").gguf"
   if [ -f "$OUT" ]; then echo "skip $OUT"; continue; fi
