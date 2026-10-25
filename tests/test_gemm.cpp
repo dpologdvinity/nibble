@@ -193,6 +193,20 @@ void check_gemm_k(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, i
     if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]) && mismatches++ == 0)
       UNSCOPED_INFO("first mismatch i=" << i << " want=" << want[i] << " got=" << got[i]);
   CHECK(mismatches == 0);
+  // matmul_rows_k shares tile_k with gemm_k, so also compare against the scalar oracle in quant.cpp.
+  const int64_t nb = in / 256;
+  int64_t scalar_mismatches = 0;
+  for (int64_t r = rb; r < re; ++r)
+    for (int64_t t = 0; t < n; ++t) {
+      const auto* row = static_cast<const uint8_t*>(w.data) + size_t(r) * size_t(w.row_bytes());
+      const BlockQ8_K* a = xq.data() + t * nb;
+      float ref = 0.f;
+      if (type == DType::Q4_K) ref = dot_q4_K_q8_K(reinterpret_cast<const BlockQ4_K*>(row), a, nb);
+      if (type == DType::Q5_K) ref = dot_q5_K_q8_K(reinterpret_cast<const BlockQ5_K*>(row), a, nb);
+      if (type == DType::Q6_K) ref = dot_q6_K_q8_K(reinterpret_cast<const BlockQ6_K*>(row), a, nb);
+      if (std::bit_cast<uint32_t>(got[size_t(t * rows + r)]) != std::bit_cast<uint32_t>(ref)) ++scalar_mismatches;
+    }
+  CHECK(scalar_mismatches == 0);
 }
 }  // namespace
 
@@ -210,6 +224,57 @@ TEST_CASE("gemm_k equals the k-quant row path bitwise", "[gemm][simd]") {
     check_gemm_k(t, 512, 37, 9, 36, 37);  // single trailing row
     check_gemm_k(t, 512, 37, 9, 9, 9);    // empty range
     check_gemm_k(t, 2048, 64, 513, 0, 64);
+  }
+}
+
+// Hostile weight blocks (every byte 0xFF, or zero) with NaN, Inf, zero and large fp16 scales through the Q5_0 and
+// k-quant prefill tiles: bitwise equal to the scalar oracle, NaN where the oracle is NaN.
+TEST_CASE("prefill tiles match the scalar oracle on hostile blocks", "[gemm][simd]") {
+  const uint16_t scales[] = {0x7E00, 0x7C00, 0xFC00, 0x0000, 0x7BFF, 0x3C00};  // NaN, +Inf, -Inf, 0, max, 1.0
+  for (DType type : {DType::Q5_0, DType::Q4_K, DType::Q5_K, DType::Q6_K}) {
+    const bool k = type != DType::Q5_0;
+    const int64_t in = k ? 512 : 96, rows = 12, n = 9;
+    Tensor w;
+    w.type = type;
+    w.n_dims = 2;
+    w.ne = {in, rows, 1, 1};
+    const size_t rb = size_t(w.row_bytes()), bs = k ? (type == DType::Q6_K   ? 210
+                                                       : type == DType::Q5_K ? 176
+                                                                             : 144)
+                                                    : 22;
+    std::vector<uint8_t> bytes(rb * rows);
+    for (int64_t r = 0; r < rows; ++r)
+      for (size_t b = 0; b < rb / bs; ++b) {
+        uint8_t* blk = bytes.data() + size_t(r) * rb + b * bs;
+        std::memset(blk, r % 2 ? 0xFF : 0x00, bs);
+        const uint16_t d = scales[size_t(r / 2) % 6];
+        std::memcpy(blk + (type == DType::Q6_K ? 208 : 0), &d, 2);
+        if (type == DType::Q4_K || type == DType::Q5_K) std::memcpy(blk + 2, &d, 2);  // dmin
+      }
+    w.data = bytes.data();
+    std::mt19937 g(5);
+    const auto x = rnd(size_t(n * in), g);
+    std::vector<float> got(size_t(n * rows), -7.f), want(got);
+    if (k) {
+      std::vector<BlockQ8_K> xq(size_t(n * in / 256));
+      for (int64_t t = 0; t < n; ++t) quantize_row_q8_K(x.data() + t * in, xq.data() + t * (in / 256), in);
+      simd::gemm_k(w, xq.data(), got.data(), n, 0, rows);
+      const QuantActs qa{nullptr, nullptr, xq.data()};
+      cpu::matmul_rows(w, x.data(), want.data(), n, 0, rows, &qa);
+    } else {
+      std::vector<BlockQ8_0> xq(size_t(n * in / 32));
+      cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
+      std::vector<simd::BlockQ8_0x8> xp(size_t((n + 7) / 8 * (in / 32)));
+      simd::pack_q8_0_x8(xq.data(), n, in / 32, xp.data());
+      simd::gemm_q(w, xp.data(), got.data(), n, 0, rows);
+      const QuantActs qa{xq.data()};
+      cpu::matmul_rows(w, x.data(), want.data(), n, 0, rows, &qa);
+    }
+    for (size_t i = 0; i < got.size(); ++i) {
+      INFO("type=" << int(type) << " i=" << i << " got=" << got[i] << " want=" << want[i]);
+      CHECK((std::isnan(got[i]) ? std::isnan(want[i])
+                                : std::bit_cast<uint32_t>(got[i]) == std::bit_cast<uint32_t>(want[i])));
+    }
   }
 }
 #endif

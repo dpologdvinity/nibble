@@ -7,6 +7,10 @@ execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY ${SRC}
 if(DEFINED ENV{NIBBLE_GIT_SHA} AND NOT "$ENV{NIBBLE_GIT_SHA}" STREQUAL "")
   # Builds without a .git directory (container image) pass the revision in explicitly.
   set(sha "$ENV{NIBBLE_GIT_SHA}")
+  if(NOT sha MATCHES "^[0-9A-Za-z._-]+$")
+    message(FATAL_ERROR "NIBBLE_GIT_SHA must be a revision name (letters, digits, . _ -), got '${sha}'")
+  endif()
+  string(SUBSTRING "${sha}" 0 7 sha)  # `git rev-parse --short` length, so image and tarballs report the same revision
 elseif(NOT rc EQUAL 0 OR NOT sha)
   set(sha unknown)
 else()
