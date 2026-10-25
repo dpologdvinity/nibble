@@ -227,10 +227,12 @@ at the end of M7.)
 ## Performance
 
 > The Q4_K_M and Q6_K files of all three models were benchmarked at the end of M7, with the same protocol as the
-> M6 files. The Q5_0, Q5_1 and k-quant kernels are AVX2 row kernels that are bit-identical to the scalar code. They
-> have no tiled prefill GEMM yet, so on those files nibble's prompt processing (`pp512`) is 1.3–4.7× slower than
-> llama.cpp's, while decode is within about 2× (see the table). A prefill tile is the next performance step: Qwen2.5-0.5B Q4_K_M reaches 90.6 pp512 tok/s at t = 8 against
-> 492.6 for Q4_0 (0.18×), well under the 0.5× the milestone plan set as the trigger for building one.
+> M6 files, **before the prefill tiles for Q5_0 and the k-quants** (`gemm.cpp`, `kquant_avx2.cpp`) existed. In
+> that table nibble's `pp512` on those files is 1.3–4.7× slower than llama.cpp's; Qwen2.5-0.5B Q4_K_M reached
+> 90.6 tok/s at t = 8 against 492.6 for Q4_0 (0.18×, under the 0.5× that triggered building the tiles). With the
+> tiles (single `nibble bench -t 8 -r 3` runs, not paired ABBA blocks) it reaches about 218 tok/s, and Llama-3.2-1B
+> Q4_K_M goes from 32.4 to about 66 tok/s. Decode is unchanged. The paired ratios below have not been re-recorded
+> with the tiles.
 
 All numbers come from `bench/results/*.jsonl`; the charts and the tables below are
 generated from them by `bench/plot.py` (`bench/plot.py` writes `docs/bench/*.svg`,
@@ -375,7 +377,7 @@ been measured on native Linux. `nibble bench -t` still defaults to 1.
 
 Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama · M6 SIMD
 kernels, threading and benchmarks · M7 Q5_0/Q5_1 and the k-quants (Q4_K, Q5_K, Q6_K) with AVX2 kernels.
-Next: a tiled prefill GEMM for Q5_0 and the k-quants; then Phase 2: CUDA backend.
+Next: re-record the k-quant ABBA blocks with the prefill tiles; then Phase 2: CUDA backend.
 
 ## Documentation and contributing
 
