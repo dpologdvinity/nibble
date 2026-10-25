@@ -41,13 +41,18 @@ struct Weight {
     } else if (type == DType::Q4_0 || type == DType::Q8_0) {
       q = test_quantize_rows(type, f32, in);
       t.data = q.data();
+    } else if (type != DType::F32) {  // Q5_0 and the k-quants: random valid-looking blocks
+      q = test_weight_rows(type, uint64_t(in * 31 + rows), rows, in);
+      t.data = q.data();
     } else {
       t.data = f32.data();
     }
   }
 };
 
-bool quant(DType t) { return t == DType::Q4_0 || t == DType::Q8_0; }
+// Legacy quantized types the Q8_0-activation GEMM (gemm_q) handles.
+bool quant(DType t) { return t == DType::Q4_0 || t == DType::Q5_0 || t == DType::Q8_0; }
+bool kquant(DType t) { return t == DType::Q4_K || t == DType::Q5_K || t == DType::Q6_K; }
 }  // namespace
 
 // Prefill-sized matmuls through the backend (tiled GEMM for n >= 4 when SIMD is on) against the scalar
@@ -57,28 +62,36 @@ TEST_CASE("cpu backend prefill matmul matches scalar for all dtypes", "[gemm][cp
   cpu::CpuBackend be(pool);
   be.reserve({64, 4, 513, 4864});
   std::mt19937 g(11);
-  for (DType type : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0})
-    for (int64_t in : {32, 896, 4864})
+  for (DType type :
+       {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0, DType::Q5_0, DType::Q4_K, DType::Q5_K, DType::Q6_K})
+    for (int64_t in : {32, 256, 896, 4864})
       for (int64_t rows : {1, 37, 896, 4864})
         for (int64_t n : {4, 5, 17, 64, 513}) {
-          if (n * rows * in > 40'000'000) continue;  // scalar-oracle budget; every size still appears
+          if (n * rows * in > 40'000'000) continue;     // scalar-oracle budget; every size still appears
+          if (kquant(type) && in % 256 != 0) continue;  // k-quant rows are whole 256-element super-blocks
           INFO("type=" << int(type) << " in=" << in << " rows=" << rows << " n=" << n);
           Weight w(type, in, rows, g);
           const auto x = rnd(size_t(n * in), g);
           std::vector<float> want(size_t(n * rows)), got(want.size(), -7.f);
           std::vector<BlockQ8_0> xq;
+          std::vector<BlockQ8_K> xk;
           if (quant(type)) {
             xq.resize(size_t(n * in / 32));
             cpu::quantize_rows_q8_0(x.data(), xq.data(), n, in);
+          } else if (kquant(type)) {
+            xk.resize(size_t(n * in / 256));
+            for (int64_t t = 0; t < n; ++t) quantize_row_q8_K(x.data() + t * in, xk.data() + t * (in / 256), in);
           }
-          const QuantActs qa{xq.data()};
-          cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, xq.empty() ? nullptr : &qa);
+          QuantActs qa{xq.data()};
+          qa.q8_K = xk.data();
+          const bool quantized = quant(type) || kquant(type);
+          cpu::matmul_rows(w.t, x.data(), want.data(), n, 0, rows, quantized ? &qa : nullptr);
           be.matmul(w.t, x.data(), got.data(), n);
           int64_t mismatches = 0;
           for (int64_t t = 0; t < n; ++t)
             for (int64_t r = 0; r < rows; ++r) {
               const size_t i = size_t(t * rows + r);
-              if (quant(type)) {
+              if (quant(type) || kquant(type)) {
                 if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]) && mismatches++ == 0)
                   UNSCOPED_INFO("first mismatch t=" << t << " r=" << r << " want=" << want[i] << " got=" << got[i]);
                 continue;
@@ -104,7 +117,7 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
   std::mt19937 g(uint32_t(in * 7 + rows * 3 + n));
   Weight w(type, in, rows, g);
   if (quant(type)) {  // arbitrary quants (Q8_0 -128, every nibble), quantizer scales
-    const size_t bs = type == DType::Q4_0 ? sizeof(BlockQ4_0) : sizeof(BlockQ8_0);
+    const size_t bs = size_t(w.t.row_bytes()) / size_t(in / 32);
     for (size_t i = 0; i < w.q.size(); ++i)
       if (i % bs >= 2) w.q[i] = uint8_t(g());
   }
@@ -140,7 +153,7 @@ void check_gemm(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int
 // Calls the tiled kernels and the row kernels directly on the same misaligned data and row ranges and
 // requires identical bits for every dtype and token count.
 TEST_CASE("gemm equals the row-at-a-time simd path bitwise", "[gemm][simd]") {
-  for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0}) {
+  for (DType t : {DType::F32, DType::F16, DType::Q8_0, DType::Q4_0, DType::Q5_0}) {
     const std::vector<int64_t> ins =
         quant(t) ? std::vector<int64_t>{32, 96, 896, 4864} : std::vector<int64_t>{8, 13, 300, 896, 4864};
     for (int64_t in : ins)
@@ -154,6 +167,49 @@ TEST_CASE("gemm equals the row-at-a-time simd path bitwise", "[gemm][simd]") {
     check_gemm(t, in, 37, 9, 36, 37);  // single trailing row
     check_gemm(t, in, 37, 9, 9, 9);    // empty range
     check_gemm(t, 896, 896, 513, 0, 896);
+  }
+}
+
+namespace {
+// gemm_k over [rb, re) vs matmul_rows_k, bit for bit, on weights and activations at odd byte offsets.
+void check_gemm_k(DType type, int64_t in, int64_t rows, int64_t n, int64_t rb, int64_t re) {
+  std::mt19937 g(uint32_t(in * 5 + rows * 3 + n));
+  const auto blocks = test_weight_rows(type, uint64_t(in + rows), rows, in);
+  std::vector<uint8_t> shifted(blocks.size() + 1);  // one byte off any alignment
+  std::memcpy(shifted.data() + 1, blocks.data(), blocks.size());
+  Tensor w;
+  w.type = type;
+  w.n_dims = 2;
+  w.ne = {in, rows, 1, 1};
+  w.data = shifted.data() + 1;
+  const auto x = rnd(size_t(n * in), g);
+  std::vector<BlockQ8_K> xq(size_t(n * in / 256));
+  for (int64_t t = 0; t < n; ++t) quantize_row_q8_K(x.data() + t * in, xq.data() + t * (in / 256), in);
+  std::vector<float> want(size_t(n * rows), -7.f), got(want);
+  simd::matmul_rows_k(w, xq.data(), want.data(), n, rb, re);
+  simd::gemm_k(w, xq.data(), got.data(), n, rb, re);
+  int64_t mismatches = 0;
+  for (size_t i = 0; i < want.size(); ++i)
+    if (std::bit_cast<uint32_t>(got[i]) != std::bit_cast<uint32_t>(want[i]) && mismatches++ == 0)
+      UNSCOPED_INFO("first mismatch i=" << i << " want=" << want[i] << " got=" << got[i]);
+  CHECK(mismatches == 0);
+}
+}  // namespace
+
+// The 4-row x 4-token k-quant prefill tile unpacks each weight super-block once for four tokens; every output
+// must still equal the row-at-a-time kernel's, for token counts that leave 1-3 token and row remainders.
+TEST_CASE("gemm_k equals the k-quant row path bitwise", "[gemm][simd]") {
+  for (DType t : {DType::Q4_K, DType::Q5_K, DType::Q6_K}) {
+    for (int64_t in : {256, 512, 1024})
+      for (int64_t rows : {1, 3, 4, 37})
+        for (int64_t n : {1, 2, 3, 4, 5, 7, 8, 9, 17, 64}) {
+          INFO("type=" << int(t) << " in=" << in << " rows=" << rows << " n=" << n);
+          check_gemm_k(t, in, rows, n, 0, rows);
+        }
+    check_gemm_k(t, 512, 37, 9, 5, 22);   // row range not 4-aligned
+    check_gemm_k(t, 512, 37, 9, 36, 37);  // single trailing row
+    check_gemm_k(t, 512, 37, 9, 9, 9);    // empty range
+    check_gemm_k(t, 2048, 64, 513, 0, 64);
   }
 }
 #endif

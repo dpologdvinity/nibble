@@ -132,9 +132,10 @@ two blocks' scales.
 once per distinct activation type needed, and runs all weights' rows in a single `parallel_for`. This is also how
 mixed-type groups work: real k-quant files use different types for, say, `attn_v` and `attn_q`.
 
-For prefill (`n ≥ 4` tokens) Q4_0/Q8_0 weights use a tiled GEMM that processes 4 weight rows × 16 tokens per tile
-over a packed, interleaved copy of the activations (`gemm.cpp`); float weights use a tiled float GEMM. The other
-types fall back to the row kernels.
+For prefill (`n ≥ 4` tokens) Q4_0/Q5_0/Q8_0 weights use a tiled GEMM that processes 4 weight rows × 16 tokens per
+tile over a packed, interleaved copy of the activations (`gemm.cpp`); float weights use a tiled float GEMM. The
+k-quants use a 4-row × 4-token tile (`gemm_k` in `kquant_avx2.cpp`) that unpacks each weight super-block once per
+tile. Q5_1 and decode (`n < 4`) use the row kernels.
 
 ## Numerical fidelity: the oracle design
 
@@ -209,13 +210,13 @@ multi-gigabyte model files and are not run in CI; everything else is.
   build host. This keeps the dispatch cost zero and the code simple; runtime dispatch is future work.
 * **Scalar twins instead of intrinsics-only.** Every optimized kernel keeps a readable twin. This costs code but makes
   correctness checkable and keeps non-AVX2 targets working.
-* **The k-quant GEMM tile is not implemented.** Prefill for Q5_0 and the k-quants uses the row kernels. Whether a tiled
-  GEMM is worth it is decided by measurement (see README performance notes).
+* **The k-quant tile shares the row kernel's arithmetic.** `tile_k<W, R, T>` is the only implementation; decode runs it
+  with T = 1, so a tile equals R·T single dots bit for bit (`test_gemm.cpp`). It re-permutes each activation block once
+  per row tile; pre-permuted activations are a possible next step.
 * **No dequantize-to-float path for matmul.** It would be simpler but slower and would not match llama.cpp's numerics.
 * **Pinned oracle.** The llama.cpp release in `tools/llama_cpp_version.txt` is the single reference; bumping it means
   regenerating goldens and re-reviewing numerical differences.
 
 ## Where to go next
 
-Planned work is a CUDA backend behind the existing `Backend` interface, runtime CPU dispatch, and tiled GEMM kernels for
-the k-quants, subject to measurements.
+Planned work is a CUDA backend behind the existing `Backend` interface and runtime CPU dispatch.

@@ -116,55 +116,92 @@ inline float act_d(const u8* a) {
   return d;
 }
 
-// One super-block of a Q4_K/Q5_K row against the permuted activation groups ap.
+// A weight super-block unpacked once: the lane-permuted weight groups, the per-group scale operands for
+// madd_epi16 and the float scales. prep_* does the (comparatively expensive) bit unpacking; apply_* is the
+// per-activation-row arithmetic. Splitting them lets the prefill tile (tile_k) unpack each weight block once
+// for several tokens while every (row, token) result keeps exactly the single-dot operation order.
+struct Prep {
+  __m256i wp[8];  // lane_perm of the weight groups (Q4_K/Q5_K: unsigned 0..31, Q6_K: signed -32..31)
+  __m256i sc[8];  // madd operand: the group's scale in every int16 (Q4_K/Q5_K) or alternating pairs (Q6_K)
+  uint8_t mn[8];  // Q4_K/Q5_K sub-block minimums (unused for Q6_K)
+  float d, dmin;  // fp16 super-block scales as float (dmin unused for Q6_K)
+};
+
+// Q4_K/Q5_K super-block at w.
 template <class W>
-inline void block45(const u8* w, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
-  uint8_t sc[8], mn[8];
-  unpack_scales(w + 4, sc, mn);
+inline void prep45(const u8* w, Prep& p) {
+  uint8_t sc[8];
+  unpack_scales(w + 4, sc, p.mn);
   __m256i wv[8];
   W::groups(w, wv);
+  for (int g = 0; g < 8; ++g) {
+    p.wp[g] = lane_perm(wv[g]);
+    p.sc[g] = _mm256_set1_epi16(static_cast<short>(sc[g]));
+  }
+  p.d = load_h(w);
+  p.dmin = load_h(w + 2);
+}
+
+inline void prep6(const u8* w, Prep& p) {
+  __m256i wv[8];
+  Q6K::groups(w, wv);
+  const auto* sc = reinterpret_cast<const int8_t*>(w + 192);
+  for (int g = 0; g < 8; ++g) {
+    p.wp[g] = lane_perm(wv[g]);
+    const uint32_t pair = static_cast<uint16_t>(static_cast<int16_t>(sc[2 * g])) |
+                          (static_cast<uint32_t>(static_cast<uint16_t>(static_cast<int16_t>(sc[2 * g + 1]))) << 16);
+    p.sc[g] = _mm256_set1_epi32(static_cast<int>(pair));
+  }
+  p.d = load_h(w + 208);
+}
+
+// One prepared Q4_K/Q5_K super-block against the permuted activation groups ap of activation block a.
+inline void apply45(const Prep& p, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
   __m256i acc = _mm256_setzero_si256();
   for (int g = 0; g < 8; ++g) {
-    const __m256i prod = _mm256_maddubs_epi16(lane_perm(wv[g]), ap[g]);  // unsigned weights x signed activations
-    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, _mm256_set1_epi16(static_cast<short>(sc[g]))));
+    const __m256i prod = _mm256_maddubs_epi16(p.wp[g], ap[g]);  // unsigned weights x signed activations
+    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, p.sc[g]));
   }
   int sumi = 0;
   for (int k = 0; k < 8; ++k) {
     int16_t b0, b1;
     std::memcpy(&b0, a + 260 + 4 * k, 2);
     std::memcpy(&b1, a + 262 + 4 * k, 2);
-    sumi += (b0 + b1) * mn[k];
+    sumi += (b0 + b1) * p.mn[k];
   }
   const float ad = act_d(a);
-  const float d = load_h(w) * ad;
+  const float d = p.d * ad;
   r.sums8 = _mm256_add_ps(r.sums8, _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(acc)));
-  const float dmin = load_h(w + 2) * ad;
+  const float dmin = p.dmin * ad;
   r.sumf -= dmin * static_cast<float>(sumi);
 }
 
-inline void block6(const u8* w, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
-  __m256i wv[8];
-  Q6K::groups(w, wv);
-  const auto* sc = reinterpret_cast<const int8_t*>(w + 192);
+inline void apply6(const Prep& p, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
   __m256i acc = _mm256_setzero_si256();
   for (int g = 0; g < 8; ++g) {
-    const __m256i wp = lane_perm(wv[g]);
+    const __m256i wp = p.wp[g];
     // |w| as the unsigned operand, a negated where w < 0: exact because a != -128 (Q8_K output is in [-127, 127]).
     const __m256i prod = _mm256_maddubs_epi16(_mm256_sign_epi8(wp, wp), _mm256_sign_epi8(ap[g], wp));
-    const uint32_t pair = static_cast<uint16_t>(static_cast<int16_t>(sc[2 * g])) |
-                          (static_cast<uint32_t>(static_cast<uint16_t>(static_cast<int16_t>(sc[2 * g + 1]))) << 16);
-    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, _mm256_set1_epi32(static_cast<int>(pair))));
+    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, p.sc[g]));
   }
-  const float d = load_h(w + 208) * act_d(a);
+  const float d = p.d * act_d(a);
   r.sums8 = _mm256_add_ps(r.sums8, _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(acc)));
 }
 
 template <class W>
-inline void block(const u8* w, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
+inline void prep(const u8* w, Prep& p) {
   if constexpr (std::is_same_v<W, Q6K>)
-    block6(w, a, ap, r);
+    prep6(w, p);
   else
-    block45<W>(w, a, ap, r);
+    prep45<W>(w, p);
+}
+
+template <class W>
+inline void apply(const Prep& p, const u8* a, const __m256i (&ap)[8], RowAcc& r) {
+  if constexpr (std::is_same_v<W, Q6K>)
+    apply6(p, a, ap, r);
+  else
+    apply45(p, a, ap, r);
 }
 
 inline float finish(const RowAcc& r) {
@@ -175,16 +212,25 @@ inline float finish(const RowAcc& r) {
   return sumf;
 }
 
-// R consecutive weight rows (stride rb bytes) against one activation row; out[0..R).
-template <class W, int R>
-void dotk(const u8* w, size_t rb, const u8* a, int64_t nb, float* out) {
-  RowAcc acc[R];
-  for (int64_t b = 0; b < nb; ++b, w += sizeof(typename W::Blk), a += sizeof(BlockQ8_K)) {
-    __m256i ap[8];
-    activation_groups(a, ap);
-    for (int i = 0; i < R; ++i) block<W>(w + i * rb, a, ap, acc[i]);
+// R consecutive weight rows (stride rb bytes) against T consecutive activation rows (stride nb blocks):
+// out[t * ostride + i] for token t < T, row i < R. Each weight super-block is unpacked once and applied to all
+// T tokens; the arithmetic per (row, token) is the same sequence for any R and T, so a tile equals R*T single
+// dots bit for bit. T = 1 is the row-at-a-time kernel used for decode.
+template <class W, int R, int T>
+void tile_k(const u8* w, size_t rb, const u8* a, int64_t nb, float* out, int64_t ostride) {
+  RowAcc acc[T][R];
+  for (int64_t b = 0; b < nb; ++b, w += sizeof(typename W::Blk)) {
+    Prep p[R];
+    for (int i = 0; i < R; ++i) prep<W>(w + i * rb, p[i]);
+    for (int t = 0; t < T; ++t) {
+      const u8* at = a + (t * nb + b) * sizeof(BlockQ8_K);
+      __m256i ap[8];
+      activation_groups(at, ap);
+      for (int i = 0; i < R; ++i) apply<W>(p[i], at, ap, acc[t][i]);
+    }
   }
-  for (int i = 0; i < R; ++i) out[i] = finish(acc[i]);
+  for (int t = 0; t < T; ++t)
+    for (int i = 0; i < R; ++i) out[t * ostride + i] = finish(acc[t][i]);
 }
 
 template <class W>
@@ -194,15 +240,33 @@ void matmul_k(const u8* w, int64_t nb, int64_t out, const BlockQ8_K* xq, float* 
     const u8* a = reinterpret_cast<const u8*>(xq + t * nb);
     float* yt = y + t * out;
     int64_t r = rb;
-    for (; r + 4 <= re; r += 4) dotk<W, 4>(w + static_cast<size_t>(r) * row, row, a, nb, yt + r);
-    for (; r < re; ++r) dotk<W, 1>(w + static_cast<size_t>(r) * row, 0, a, nb, yt + r);
+    for (; r + 4 <= re; r += 4) tile_k<W, 4, 1>(w + static_cast<size_t>(r) * row, row, a, nb, yt + r, out);
+    for (; r < re; ++r) tile_k<W, 1, 1>(w + static_cast<size_t>(r) * row, 0, a, nb, yt + r, out);
   }
+}
+
+// Prefill: [rb, re) x [0, n) in tiles of 4 weight rows x 4 tokens; leftover tokens use 1-token tiles and
+// leftover rows 1-row tiles.
+template <class W>
+void gemm_kt(const u8* w, int64_t nb, int64_t out, const BlockQ8_K* xq, float* y, int64_t n, int64_t rb, int64_t re) {
+  const size_t row = static_cast<size_t>(nb) * sizeof(typename W::Blk);
+  const int64_t re_full = rb + (re - rb) / 4 * 4, n_full = n / 4 * 4;
+  auto rows = [&]<int T>(int64_t t) {
+    const u8* a = reinterpret_cast<const u8*>(xq + t * nb);
+    float* yt = y + t * out;
+    int64_t r = rb;
+    for (; r < re_full; r += 4) tile_k<W, 4, T>(w + static_cast<size_t>(r) * row, row, a, nb, yt + r, out);
+    for (; r < re; ++r) tile_k<W, 1, T>(w + static_cast<size_t>(r) * row, 0, a, nb, yt + r, out);
+  };
+  int64_t t = 0;
+  for (; t < n_full; t += 4) rows.template operator()<4>(t);
+  for (; t < n; ++t) rows.template operator()<1>(t);
 }
 
 template <class W>
 float dot1(const void* w, const BlockQ8_K* a, int64_t nb) {
   float out;
-  dotk<W, 1>(static_cast<const u8*>(w), 0, reinterpret_cast<const u8*>(a), nb, &out);
+  tile_k<W, 1, 1>(static_cast<const u8*>(w), 0, reinterpret_cast<const u8*>(a), nb, &out, 0);
   return out;
 }
 
@@ -220,6 +284,17 @@ void matmul_rows_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, in
     case DType::Q5_K: return matmul_k<Q5K>(wd, nb, out, xq, y, n, row_begin, row_end);
     case DType::Q6_K: return matmul_k<Q6K>(wd, nb, out, xq, y, n, row_begin, row_end);
     default: throw Error("simd::matmul_rows_k: not a k-quant weight type");
+  }
+}
+
+void gemm_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
+  const auto* wd = static_cast<const u8*>(w.data);
+  const int64_t out = w.rows(), nb = w.ne[0] / kQK_K;
+  switch (w.type) {
+    case DType::Q4_K: return gemm_kt<Q4K>(wd, nb, out, xq, y, n, row_begin, row_end);
+    case DType::Q5_K: return gemm_kt<Q5K>(wd, nb, out, xq, y, n, row_begin, row_end);
+    case DType::Q6_K: return gemm_kt<Q6K>(wd, nb, out, xq, y, n, row_begin, row_end);
+    default: throw Error("simd::gemm_k: not a k-quant weight type");
   }
 }
 

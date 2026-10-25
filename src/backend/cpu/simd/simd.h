@@ -169,6 +169,9 @@ float dot_q5_K_q8_K(const BlockQ5_K* w, const BlockQ8_K* a, int64_t n_blocks);
 float dot_q6_K_q8_K(const BlockQ6_K* w, const BlockQ8_K* a, int64_t n_blocks);
 // matmul_rows_q's k-quant half: weights of type Q4_K, Q5_K or Q6_K against xq, 4 weight rows per activation block.
 void matmul_rows_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
+// Prefill twin of matmul_rows_k (kquant_avx2.cpp): 4 weight rows x 4 tokens per tile, each weight super-block
+// unpacked once per tile. Bit-identical to matmul_rows_k for any n; faster once n >= 4.
+void gemm_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 // Same contract as cpu::matmul_rows for quantized weights (xq from the quantizers in quant.h), bit-identical
 // to it. Every quantized type runs an AVX2 kernel, 4 weight rows sharing each activation block, then a 1-row
 // remainder.
@@ -182,6 +185,7 @@ void matmul_rows_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t
 void gemm_f(const Tensor& w, const float* x, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 // xp: the n activation rows (nb blocks each) packed by pack_q8_0_x8, (n+7)/8 * nb blocks.
 void pack_q8_0_x8(const BlockQ8_0* xq, int64_t n, int64_t nb, BlockQ8_0x8* xp);
+// Weights: Q4_0, Q5_0 or Q8_0.
 void gemm_q(const Tensor& w, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t row_begin, int64_t row_end);
 // out[k] = fp16_to_fp32(row[k]) for k < d.
 void embed_row_f16(const uint16_t* row, float* out, int64_t d);

@@ -1,10 +1,10 @@
 // Tiled prefill GEMM: an R-row x T-token output tile per microkernel call, so each weight load (and F16
 // convert / Q4_0 unpack) is shared by T tokens and each activation load by R rows.
-// Q4_0/Q8_0 activations are first interleaved 8 tokens per vector (pack_q8_0_x8).
+// Q4_0/Q5_0/Q8_0 activations are first interleaved 8 tokens per vector (pack_q8_0_x8).
 // Every output element goes through the same operation sequence as in the row-at-a-time kernels
 // (matmul_f.cpp, quant_avx2.cpp), which depends only on its row and K, never on n or the tile shape:
 // - F32/F16: 8 FMA lanes over k in steps of 8, hsum_ps, then the scalar tail.
-// - Q4_0/Q8_0: exact integer block sums, the scalar's per-block float products, sequential float adds.
+// - Q4_0/Q5_0/Q8_0: exact integer block sums, the scalar's per-block float products, sequential float adds.
 // So results are bit-identical to the row path. F32/F16 partial tiles are delegated to it; Q tiles pad
 // tokens to a multiple of 8 and use 1-row tiles for leftover rows.
 // Compiled with -ffp-contract=off, like the row kernels.
@@ -65,7 +65,7 @@ void gemm_ft(const Tensor& wt, const float* x, float* y, int64_t n, int64_t rb, 
   if (re_full < re) matmul_rows_f(wt, x, y, n, re_full, re);
 }
 
-// ---- Q4_0 / Q8_0 weights x interleaved Q8_0 activations ----
+// ---- Q4_0 / Q5_0 / Q8_0 weights x interleaved Q8_0 activations ----
 // Lanes are 8 tokens (BlockQ8_0x8): each 4-byte weight group is broadcast and multiplied against the same
 // group of 8 tokens, so a block's lanes end up holding each token's exact integer block sum without any
 // horizontal reduction. dot() writes those sums for TV vectors of 8 tokens.
@@ -133,6 +133,46 @@ struct Q4 {
   }
   // quant.cpp: float(s) * dw * da.
   static __m256 scale(__m256 s, __m256 dw, __m256 da) { return _mm256_mul_ps(_mm256_mul_ps(s, dw), da); }
+};
+// Weight trait for Q5_0 tiles. The 5-bit values (nibble | high bit << 4, unsigned 0..31, true value minus 16) are
+// multiplied unsigned and the bias is removed through the activation sums, as in the VNNI Q4 path. Without VNNI
+// each maddubs pair (at most 2*31*128) is widened to int32 at once: eight of them would overflow an int16 lane.
+struct Q5 {
+  static constexpr size_t kBytes = sizeof(BlockQ5_0);
+  // Four bytes of 0x10 / 0 for the four qh bits starting at bit `shift`: bit i lands in byte i through the
+  // multiply (the shifted copies of the nibble occupy distinct bit positions, so nothing carries).
+  static __m256i high4(uint32_t qh, int shift) {
+    return _mm256_set1_epi32(static_cast<int>((((qh >> shift) & 0xF) * 0x00204081u & 0x01010101u) << 4));
+  }
+  template <int R, int TV>
+  static void dot(const u8* w, size_t rowb, const BlockQ8_0x8* const* a, __m256i (*s)[TV]) {
+    const __m256i m = _mm256_set1_epi8(0x0F);
+    uint32_t qh[R];
+    for (int r = 0; r < R; ++r) std::memcpy(&qh[r], w + r * rowb + 2, 4);
+    for (int v = 0; v < TV; ++v) {
+      const __m256i bias = _mm256_slli_epi32(load_sum(a[v]), 4);
+      for (int r = 0; r < R; ++r) s[r][v] = _mm256_sub_epi32(_mm256_setzero_si256(), bias);
+    }
+    for (int g = 0; g < 4; ++g)
+      for (int r = 0; r < R; ++r) {
+        const __m256i x = bcast_group(w + r * rowb + 4, g);  // qs starts 4 bytes after the scale
+        const __m256i lo = _mm256_or_si256(_mm256_and_si256(x, m), high4(qh[r], 4 * g));
+        const __m256i hi = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(x, 4), m), high4(qh[r], 16 + 4 * g));
+        for (int v = 0; v < TV; ++v) {
+#if defined(NIBBLE_HAVE_AVXVNNI)
+          s[r][v] = _mm256_dpbusd_avx_epi32(s[r][v], lo, load_group(a[v], g));
+          s[r][v] = _mm256_dpbusd_avx_epi32(s[r][v], hi, load_group(a[v], g + 4));
+#else
+          const __m256i one = _mm256_set1_epi16(1);
+          s[r][v] = _mm256_add_epi32(s[r][v], _mm256_madd_epi16(_mm256_maddubs_epi16(lo, load_group(a[v], g)), one));
+          s[r][v] =
+              _mm256_add_epi32(s[r][v], _mm256_madd_epi16(_mm256_maddubs_epi16(hi, load_group(a[v], g + 4)), one));
+#endif
+        }
+      }
+  }
+  // quant.cpp: (dw * da) * float(s).
+  static __m256 scale(__m256 s, __m256 dw, __m256 da) { return _mm256_mul_ps(s, _mm256_mul_ps(dw, da)); }
 };
 // Weight trait for Q8_0 tiles (signed x signed via the sign trick, or VNNI with a +128 bias correction).
 struct Q8 {
@@ -246,12 +286,13 @@ void pack_q8_0_x8(const BlockQ8_0* xq, int64_t n, int64_t nb, BlockQ8_0x8* xp) {
     }
 }
 
-// Type dispatch for the quantized GEMM (Q4_0 and Q8_0 weights only).
+// Type dispatch for the quantized GEMM (Q4_0, Q5_0 and Q8_0 weights only).
 void gemm_q(const Tensor& w, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t row_begin, int64_t row_end) {
-  if (w.type == DType::Q4_0)
-    gemm_qt<Q4>(w, xp, y, n, row_begin, row_end);
-  else
-    gemm_qt<Q8>(w, xp, y, n, row_begin, row_end);
+  switch (w.type) {
+    case DType::Q4_0: return gemm_qt<Q4>(w, xp, y, n, row_begin, row_end);
+    case DType::Q5_0: return gemm_qt<Q5>(w, xp, y, n, row_begin, row_end);
+    default: return gemm_qt<Q8>(w, xp, y, n, row_begin, row_end);
+  }
 }
 
 }  // namespace nibble::simd
