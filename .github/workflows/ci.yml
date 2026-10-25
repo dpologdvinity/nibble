@@ -22,8 +22,9 @@ on:
   workflow_call:  # release.yml runs the whole suite on the tagged commit before publishing anything
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # Only superseded pull-request pushes are cancelled; every commit on master/main (and tag) gets a full run.
+  # Pull requests share one group per ref, so a newer push cancels the older run. Every other event gets a group of
+  # its own per commit: with a shared group GitHub would drop queued runs of rapid pushes, leaving commits untested.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
