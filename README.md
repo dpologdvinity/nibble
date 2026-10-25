@@ -216,11 +216,11 @@ at the end of M7.)
 
 ## Performance
 
-> The Q5_0 and k-quant files (M7) have not been benchmarked yet: the protocol below needs a machine with a
-> 1-minute load average under 2. The numbers in this section are the M6 results for Qwen2.5-0.5B Q4_0 / Q8_0 / F16, Llama-3.2-1B F16 and
-> TinyLlama-1.1B F16. Q5_0 and the k-quants use AVX2 row kernels that are bit-identical to the scalar code; they do
-> not have the tiled prefill GEMM that Q4_0 and Q8_0 have, so expect their prompt processing (`pp512`) to lag
-> Q4_0/Q8_0 more than their decode.
+> The Q4_K_M and Q6_K files of all three models were benchmarked at the end of M7, with the same protocol as the
+> M6 files. The Q5_0, Q5_1 and k-quant kernels are AVX2 row kernels that are bit-identical to the scalar code. They
+> have no tiled prefill GEMM yet, so on those files nibble's prompt processing (`pp512`) is 1.3–4.7× slower than
+> llama.cpp's, while decode is within about 2× (see the table). A prefill tile is the next performance step: Qwen2.5-0.5B Q4_K_M reaches 90.6 pp512 tok/s at t = 8 against
+> 492.6 for Q4_0 (0.18×), well under the 0.5× the milestone plan set as the trigger for building one.
 
 All numbers come from `bench/results/*.jsonl`; the charts and the tables below are
 generated from them by `bench/plot.py` (`bench/plot.py` writes `docs/bench/*.svg`,
@@ -251,9 +251,9 @@ ratio is the mean of the two llama.cpp medians divided by the mean of the two ni
 medians; above 1 means llama.cpp is faster. Each run measures pp512 and tg128, so one
 block yields both. Blocks are interleaved: every (model, t) gets its first block
 before any gets its second. Qwen2.5-0.5B Q4_0 has 3 blocks at t = 1 and t = 8, the
-other models 2 each. The tables give the median block ratio and its range. All 88
-runs (nibble at commit `39ec442`) started with load average below 2, so none is
-noisy. Noisy rows would be marked † and drawn hollow.
+other models 2 each. The tables give the median block ratio and its range. All 184
+runs (nibble at commits `39ec442` for the M6 files and `2a0ab2c` for the k-quant files, whose engine code
+is identical) started with load average below 2 except four, whose blocks are marked † and drawn hollow.
 
 **Target (tg128 on Qwen2.5-0.5B Q4_0 within 1.5× of llama.cpp): met at t = 8, missed
 at t = 1.** At t = 8, the default thread count, llama.cpp ÷ nibble is 1.19× (range
@@ -287,6 +287,30 @@ Paired ABBA blocks (llama.cpp ÷ nibble; tok/s are medians of the per-block mean
 | TinyLlama-1.1B F16 | tg128 | 8 | 2 | 0.70× | 0.63–0.78× | 12.9 | 8.9 |
 | TinyLlama-1.1B F16 | pp512 | 1 | 2 | 1.02× | 1.01–1.04× | 33.6 | 34.4 |
 | TinyLlama-1.1B F16 | pp512 | 8 | 2 | 0.89× | 0.79–0.99× | 65.5 | 57.3 |
+| Qwen2.5-0.5B Q4_K_M | tg128 | 1 | 2† | 1.07× | 1.05–1.09× | 20.9 | 22.3 |
+| Qwen2.5-0.5B Q4_K_M | tg128 | 8 | 2 | 0.89× | 0.82–0.96× | 33.9 | 30.2 |
+| Qwen2.5-0.5B Q4_K_M | pp512 | 1 | 2† | 2.02× | 1.76–2.28× | 39.4 | 79.4 |
+| Qwen2.5-0.5B Q4_K_M | pp512 | 8 | 2 | 1.34× | 1.04–1.63× | 90.6 | 121.1 |
+| Llama-3.2-1B Q4_K_M | tg128 | 1 | 2 | 1.86× | 1.72–2.00× | 7.6 | 14.0 |
+| Llama-3.2-1B Q4_K_M | tg128 | 8 | 2 | 1.84× | 1.30–2.38× | 13.5 | 22.7 |
+| Llama-3.2-1B Q4_K_M | pp512 | 1 | 2 | 4.16× | 3.66–4.67× | 13.5 | 55.2 |
+| Llama-3.2-1B Q4_K_M | pp512 | 8 | 2 | 3.82× | 2.40–5.24× | 32.4 | 117.7 |
+| TinyLlama-1.1B Q4_K_M | tg128 | 1 | 2 | 1.98× | 1.76–2.21× | 9.0 | 17.7 |
+| TinyLlama-1.1B Q4_K_M | tg128 | 8 | 2 | 1.00× | 0.96–1.03× | 23.5 | 23.5 |
+| TinyLlama-1.1B Q4_K_M | pp512 | 1 | 2 | 4.00× | 3.39–4.60× | 14.0 | 54.6 |
+| TinyLlama-1.1B Q4_K_M | pp512 | 8 | 2 | 2.34× | 1.97–2.71× | 39.9 | 93.3 |
+| Qwen2.5-0.5B Q6_K | tg128 | 1 | 2 | 1.14× | 1.13–1.15× | 19.7 | 22.5 |
+| Qwen2.5-0.5B Q6_K | tg128 | 8 | 2 | 1.02× | 0.95–1.08× | 50.7 | 51.3 |
+| Qwen2.5-0.5B Q6_K | pp512 | 1 | 2 | 1.36× | 1.33–1.38× | 88.9 | 120.7 |
+| Qwen2.5-0.5B Q6_K | pp512 | 8 | 2 | 1.43× | 1.37–1.49× | 231.5 | 331.0 |
+| Llama-3.2-1B Q6_K | tg128 | 1 | 2† | 1.55× | 1.38–1.72× | 6.2 | 9.6 |
+| Llama-3.2-1B Q6_K | tg128 | 8 | 2 | 0.87× | 0.68–1.05× | 10.9 | 9.8 |
+| Llama-3.2-1B Q6_K | pp512 | 1 | 2† | 4.67× | 4.44–4.90× | 12.0 | 56.0 |
+| Llama-3.2-1B Q6_K | pp512 | 8 | 2 | 2.59× | 2.37–2.80× | 24.5 | 63.9 |
+| TinyLlama-1.1B Q6_K | tg128 | 1 | 2† | 1.44× | 1.23–1.65× | 7.2 | 10.5 |
+| TinyLlama-1.1B Q6_K | tg128 | 8 | 2† | 1.22× | 1.00–1.44× | 13.3 | 15.6 |
+| TinyLlama-1.1B Q6_K | pp512 | 1 | 2† | 4.29× | 4.16–4.41× | 12.0 | 51.7 |
+| TinyLlama-1.1B Q6_K | pp512 | 8 | 2† | 3.79× | 2.56–5.01× | 28.4 | 105.0 |
 
 Thread sweep, Qwen2.5-0.5B Q4_0, tok/s: single session (2026-10-19 11:57–13:00 UTC, nibble 2ca56ef), used only to choose the default thread count:
 
@@ -341,7 +365,7 @@ been measured on native Linux. `nibble bench -t` still defaults to 1.
 
 Done: M4 Q8_0/Q4_0, sampler, chat · M5 Llama 3.2 and TinyLlama · M6 SIMD
 kernels, threading and benchmarks · M7 Q5_0/Q5_1 and the k-quants (Q4_K, Q5_K, Q6_K) with AVX2 kernels.
-Next: benchmark the k-quant files and decide on a tiled prefill GEMM for them; then Phase 2: CUDA backend.
+Next: a tiled prefill GEMM for Q5_0 and the k-quants; then Phase 2: CUDA backend.
 
 ## Documentation and contributing
 

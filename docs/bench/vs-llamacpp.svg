@@ -4,153 +4,297 @@
 <line x1="60.0" y1="350.0" x2="450.0" y2="350.0" stroke="#ccc" stroke-width="1"/>
 <text x="55.0" y="354.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0</text>
 <line x1="60.0" y1="290.0" x2="450.0" y2="290.0" stroke="#ccc" stroke-width="1"/>
-<text x="55.0" y="294.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0.5</text>
+<text x="55.0" y="294.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">1.2</text>
 <line x1="60.0" y1="230.0" x2="450.0" y2="230.0" stroke="#ccc" stroke-width="1"/>
-<text x="55.0" y="234.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">1</text>
+<text x="55.0" y="234.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">2.4</text>
 <line x1="60.0" y1="170.0" x2="450.0" y2="170.0" stroke="#ccc" stroke-width="1"/>
-<text x="55.0" y="174.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">1.5</text>
+<text x="55.0" y="174.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">3.6</text>
 <line x1="60.0" y1="110.0" x2="450.0" y2="110.0" stroke="#ccc" stroke-width="1"/>
-<text x="55.0" y="114.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">2</text>
+<text x="55.0" y="114.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">4.8</text>
 <line x1="60.0" y1="50.0" x2="450.0" y2="50.0" stroke="#ccc" stroke-width="1"/>
-<text x="55.0" y="54.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">2.5</text>
+<text x="55.0" y="54.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">6</text>
 <text x="255.0" y="42.0" font-family="sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#222">tg128</text>
-<line x1="60.0" y1="230.0" x2="450.0" y2="230.0" stroke="#444" stroke-width="1.5"/>
-<line x1="60.0" y1="170.0" x2="450.0" y2="170.0" stroke="#b00" stroke-width="1.5" stroke-dasharray="4 3"/>
-<rect x="71.7" y="147.9" width="24.3" height="202.1" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="83.8" y1="162.0" x2="83.8" y2="144.7" stroke="#222" stroke-width="1.5"/>
-<line x1="79.8" y1="162.0" x2="87.8" y2="162.0" stroke="#222" stroke-width="1.5"/>
-<line x1="79.8" y1="144.7" x2="87.8" y2="144.7" stroke="#222" stroke-width="1.5"/>
-<text x="83.8" y="140.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.68</text>
-<rect x="99.0" y="207.8" width="24.3" height="142.2" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="111.2" y1="231.8" x2="111.2" y2="205.5" stroke="#222" stroke-width="1.5"/>
-<line x1="107.2" y1="231.8" x2="115.2" y2="231.8" stroke="#222" stroke-width="1.5"/>
-<line x1="107.2" y1="205.5" x2="115.2" y2="205.5" stroke="#222" stroke-width="1.5"/>
-<text x="111.2" y="201.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.19</text>
-<text x="99.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
-<text x="99.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_0</text>
-<rect x="149.7" y="225.5" width="24.3" height="124.5" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="161.8" y1="230.9" x2="161.8" y2="220.2" stroke="#222" stroke-width="1.5"/>
-<line x1="157.8" y1="230.9" x2="165.8" y2="230.9" stroke="#222" stroke-width="1.5"/>
-<line x1="157.8" y1="220.2" x2="165.8" y2="220.2" stroke="#222" stroke-width="1.5"/>
-<text x="161.8" y="216.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.04</text>
-<rect x="177.0" y="246.3" width="24.3" height="103.7" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="189.2" y1="261.0" x2="189.2" y2="231.6" stroke="#222" stroke-width="1.5"/>
-<line x1="185.2" y1="261.0" x2="193.2" y2="261.0" stroke="#222" stroke-width="1.5"/>
-<line x1="185.2" y1="231.6" x2="193.2" y2="231.6" stroke="#222" stroke-width="1.5"/>
-<text x="189.2" y="227.6" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.86</text>
-<text x="177.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
-<text x="177.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q8_0</text>
-<rect x="227.7" y="247.3" width="24.3" height="102.7" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="239.8" y1="249.5" x2="239.8" y2="245.1" stroke="#222" stroke-width="1.5"/>
-<line x1="235.8" y1="249.5" x2="243.8" y2="249.5" stroke="#222" stroke-width="1.5"/>
-<line x1="235.8" y1="245.1" x2="243.8" y2="245.1" stroke="#222" stroke-width="1.5"/>
-<text x="239.8" y="241.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.86</text>
-<rect x="255.0" y="250.1" width="24.3" height="99.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="267.1" y1="250.6" x2="267.1" y2="249.6" stroke="#222" stroke-width="1.5"/>
-<line x1="263.1" y1="250.6" x2="271.1" y2="250.6" stroke="#222" stroke-width="1.5"/>
-<line x1="263.1" y1="249.6" x2="271.1" y2="249.6" stroke="#222" stroke-width="1.5"/>
-<text x="267.1" y="245.6" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.83</text>
+<line x1="60.0" y1="300.0" x2="450.0" y2="300.0" stroke="#444" stroke-width="1.5"/>
+<line x1="60.0" y1="275.0" x2="450.0" y2="275.0" stroke="#b00" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="65.3" y="265.8" width="9.4" height="84.2" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="70.0" y1="271.7" x2="70.0" y2="264.5" stroke="#222" stroke-width="1.5"/>
+<line x1="66.0" y1="271.7" x2="74.0" y2="271.7" stroke="#222" stroke-width="1.5"/>
+<line x1="66.0" y1="264.5" x2="74.0" y2="264.5" stroke="#222" stroke-width="1.5"/>
+<text x="70.0" y="260.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.68</text>
+<rect x="77.7" y="290.7" width="9.4" height="59.3" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="82.4" y1="300.7" x2="82.4" y2="289.8" stroke="#222" stroke-width="1.5"/>
+<line x1="78.4" y1="300.7" x2="86.4" y2="300.7" stroke="#222" stroke-width="1.5"/>
+<line x1="78.4" y1="289.8" x2="86.4" y2="289.8" stroke="#222" stroke-width="1.5"/>
+<text x="82.4" y="285.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.19</text>
+<text x="77.7" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="77.7" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_0</text>
+<rect x="100.8" y="298.1" width="9.4" height="51.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="105.5" y1="300.4" x2="105.5" y2="295.9" stroke="#222" stroke-width="1.5"/>
+<line x1="101.5" y1="300.4" x2="109.5" y2="300.4" stroke="#222" stroke-width="1.5"/>
+<line x1="101.5" y1="295.9" x2="109.5" y2="295.9" stroke="#222" stroke-width="1.5"/>
+<text x="105.5" y="291.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.04</text>
+<rect x="113.2" y="306.8" width="9.4" height="43.2" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="117.9" y1="312.9" x2="117.9" y2="300.7" stroke="#222" stroke-width="1.5"/>
+<line x1="113.9" y1="312.9" x2="121.9" y2="312.9" stroke="#222" stroke-width="1.5"/>
+<line x1="113.9" y1="300.7" x2="121.9" y2="300.7" stroke="#222" stroke-width="1.5"/>
+<text x="117.9" y="296.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.86</text>
+<text x="113.2" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="113.2" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q8_0</text>
+<rect x="136.2" y="307.2" width="9.4" height="42.8" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="140.9" y1="308.1" x2="140.9" y2="306.3" stroke="#222" stroke-width="1.5"/>
+<line x1="136.9" y1="308.1" x2="144.9" y2="308.1" stroke="#222" stroke-width="1.5"/>
+<line x1="136.9" y1="306.3" x2="144.9" y2="306.3" stroke="#222" stroke-width="1.5"/>
+<text x="140.9" y="302.3" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.86</text>
+<rect x="148.6" y="308.4" width="9.4" height="41.6" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="153.3" y1="308.6" x2="153.3" y2="308.1" stroke="#222" stroke-width="1.5"/>
+<line x1="149.3" y1="308.6" x2="157.3" y2="308.6" stroke="#222" stroke-width="1.5"/>
+<line x1="149.3" y1="308.1" x2="157.3" y2="308.1" stroke="#222" stroke-width="1.5"/>
+<text x="153.3" y="304.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.83</text>
+<text x="148.6" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="148.6" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="171.7" y="316.0" width="9.4" height="34.0" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="176.4" y1="317.8" x2="176.4" y2="314.1" stroke="#222" stroke-width="1.5"/>
+<line x1="172.4" y1="317.8" x2="180.4" y2="317.8" stroke="#222" stroke-width="1.5"/>
+<line x1="172.4" y1="314.1" x2="180.4" y2="314.1" stroke="#222" stroke-width="1.5"/>
+<text x="176.4" y="310.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.68</text>
+<rect x="184.1" y="313.7" width="9.4" height="36.3" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="188.8" y1="316.6" x2="188.8" y2="310.9" stroke="#222" stroke-width="1.5"/>
+<line x1="184.8" y1="316.6" x2="192.8" y2="316.6" stroke="#222" stroke-width="1.5"/>
+<line x1="184.8" y1="310.9" x2="192.8" y2="310.9" stroke="#222" stroke-width="1.5"/>
+<text x="188.8" y="306.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.73</text>
+<text x="184.1" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="184.1" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="207.1" y="315.1" width="9.4" height="34.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="211.8" y1="315.1" x2="211.8" y2="315.0" stroke="#222" stroke-width="1.5"/>
+<line x1="207.8" y1="315.1" x2="215.8" y2="315.1" stroke="#222" stroke-width="1.5"/>
+<line x1="207.8" y1="315.0" x2="215.8" y2="315.0" stroke="#222" stroke-width="1.5"/>
+<text x="211.8" y="311.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.70</text>
+<rect x="219.5" y="310.9" width="9.4" height="39.1" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="224.2" y1="310.9" x2="224.2" y2="310.9" stroke="#222" stroke-width="1.5"/>
+<line x1="220.2" y1="310.9" x2="228.2" y2="310.9" stroke="#222" stroke-width="1.5"/>
+<line x1="220.2" y1="310.9" x2="228.2" y2="310.9" stroke="#222" stroke-width="1.5"/>
+<text x="224.2" y="306.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.78</text>
+<text x="219.5" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="219.5" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="242.6" y="296.5" width="9.4" height="53.5" fill="white" stroke="#1f77b4" stroke-width="2"/>
+<line x1="247.3" y1="297.6" x2="247.3" y2="295.4" stroke="#222" stroke-width="1.5"/>
+<line x1="243.3" y1="297.6" x2="251.3" y2="297.6" stroke="#222" stroke-width="1.5"/>
+<line x1="243.3" y1="295.4" x2="251.3" y2="295.4" stroke="#222" stroke-width="1.5"/>
+<text x="247.3" y="291.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.07</text>
+<rect x="255.0" y="305.6" width="9.4" height="44.4" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="259.7" y1="309.2" x2="259.7" y2="302.1" stroke="#222" stroke-width="1.5"/>
+<line x1="255.7" y1="309.2" x2="263.7" y2="309.2" stroke="#222" stroke-width="1.5"/>
+<line x1="255.7" y1="302.1" x2="263.7" y2="302.1" stroke="#222" stroke-width="1.5"/>
+<text x="259.7" y="298.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.89</text>
 <text x="255.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
-<text x="255.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
-<rect x="305.7" y="268.3" width="24.3" height="81.7" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="317.8" y1="272.8" x2="317.8" y2="263.8" stroke="#222" stroke-width="1.5"/>
-<line x1="313.8" y1="272.8" x2="321.8" y2="272.8" stroke="#222" stroke-width="1.5"/>
-<line x1="313.8" y1="263.8" x2="321.8" y2="263.8" stroke="#222" stroke-width="1.5"/>
-<text x="317.8" y="259.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.68</text>
-<rect x="333.0" y="262.9" width="24.3" height="87.1" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="345.1" y1="269.8" x2="345.1" y2="256.1" stroke="#222" stroke-width="1.5"/>
-<line x1="341.1" y1="269.8" x2="349.1" y2="269.8" stroke="#222" stroke-width="1.5"/>
-<line x1="341.1" y1="256.1" x2="349.1" y2="256.1" stroke="#222" stroke-width="1.5"/>
-<text x="345.1" y="252.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.73</text>
-<text x="333.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
-<text x="333.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
-<rect x="383.7" y="266.2" width="24.3" height="83.8" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="395.8" y1="266.2" x2="395.8" y2="266.1" stroke="#222" stroke-width="1.5"/>
-<line x1="391.8" y1="266.2" x2="399.8" y2="266.2" stroke="#222" stroke-width="1.5"/>
-<line x1="391.8" y1="266.1" x2="399.8" y2="266.1" stroke="#222" stroke-width="1.5"/>
-<text x="395.8" y="262.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.70</text>
-<rect x="411.0" y="265.6" width="24.3" height="84.4" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="423.1" y1="274.9" x2="423.1" y2="256.2" stroke="#222" stroke-width="1.5"/>
-<line x1="419.1" y1="274.9" x2="427.1" y2="274.9" stroke="#222" stroke-width="1.5"/>
-<line x1="419.1" y1="256.2" x2="427.1" y2="256.2" stroke="#222" stroke-width="1.5"/>
-<text x="423.1" y="252.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.70</text>
-<text x="411.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
-<text x="411.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<text x="255.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_K_M</text>
+<rect x="278.0" y="256.9" width="9.4" height="93.1" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="282.8" y1="264.0" x2="282.8" y2="249.8" stroke="#222" stroke-width="1.5"/>
+<line x1="278.8" y1="264.0" x2="286.8" y2="264.0" stroke="#222" stroke-width="1.5"/>
+<line x1="278.8" y1="249.8" x2="286.8" y2="249.8" stroke="#222" stroke-width="1.5"/>
+<text x="282.8" y="245.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.86</text>
+<rect x="290.5" y="258.1" width="9.4" height="91.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="295.2" y1="285.2" x2="295.2" y2="231.0" stroke="#222" stroke-width="1.5"/>
+<line x1="291.2" y1="285.2" x2="299.2" y2="285.2" stroke="#222" stroke-width="1.5"/>
+<line x1="291.2" y1="231.0" x2="299.2" y2="231.0" stroke="#222" stroke-width="1.5"/>
+<text x="295.2" y="227.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.84</text>
+<text x="290.5" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="290.5" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_K_M</text>
+<rect x="313.5" y="250.8" width="9.4" height="99.2" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="318.2" y1="261.8" x2="318.2" y2="239.7" stroke="#222" stroke-width="1.5"/>
+<line x1="314.2" y1="261.8" x2="322.2" y2="261.8" stroke="#222" stroke-width="1.5"/>
+<line x1="314.2" y1="239.7" x2="322.2" y2="239.7" stroke="#222" stroke-width="1.5"/>
+<text x="318.2" y="235.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.98</text>
+<rect x="325.9" y="300.1" width="9.4" height="49.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="330.6" y1="301.8" x2="330.6" y2="298.4" stroke="#222" stroke-width="1.5"/>
+<line x1="326.6" y1="301.8" x2="334.6" y2="301.8" stroke="#222" stroke-width="1.5"/>
+<line x1="326.6" y1="298.4" x2="334.6" y2="298.4" stroke="#222" stroke-width="1.5"/>
+<text x="330.6" y="294.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.00</text>
+<text x="325.9" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="325.9" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_K_M</text>
+<rect x="349.0" y="293.1" width="9.4" height="56.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="353.7" y1="293.5" x2="353.7" y2="292.6" stroke="#222" stroke-width="1.5"/>
+<line x1="349.7" y1="293.5" x2="357.7" y2="293.5" stroke="#222" stroke-width="1.5"/>
+<line x1="349.7" y1="292.6" x2="357.7" y2="292.6" stroke="#222" stroke-width="1.5"/>
+<text x="353.7" y="288.6" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.14</text>
+<rect x="361.4" y="299.1" width="9.4" height="50.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="366.1" y1="302.4" x2="366.1" y2="295.9" stroke="#222" stroke-width="1.5"/>
+<line x1="362.1" y1="302.4" x2="370.1" y2="302.4" stroke="#222" stroke-width="1.5"/>
+<line x1="362.1" y1="295.9" x2="370.1" y2="295.9" stroke="#222" stroke-width="1.5"/>
+<text x="366.1" y="291.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.02</text>
+<text x="361.4" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="361.4" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q6_K</text>
+<rect x="384.4" y="272.6" width="9.4" height="77.4" fill="white" stroke="#1f77b4" stroke-width="2"/>
+<line x1="389.1" y1="281.1" x2="389.1" y2="264.2" stroke="#222" stroke-width="1.5"/>
+<line x1="385.1" y1="281.1" x2="393.1" y2="281.1" stroke="#222" stroke-width="1.5"/>
+<line x1="385.1" y1="264.2" x2="393.1" y2="264.2" stroke="#222" stroke-width="1.5"/>
+<text x="389.1" y="260.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.55</text>
+<rect x="396.8" y="306.5" width="9.4" height="43.5" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="401.5" y1="315.8" x2="401.5" y2="297.3" stroke="#222" stroke-width="1.5"/>
+<line x1="397.5" y1="315.8" x2="405.5" y2="315.8" stroke="#222" stroke-width="1.5"/>
+<line x1="397.5" y1="297.3" x2="405.5" y2="297.3" stroke="#222" stroke-width="1.5"/>
+<text x="401.5" y="293.3" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.87</text>
+<text x="396.8" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="396.8" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q6_K</text>
+<rect x="419.9" y="277.8" width="9.4" height="72.2" fill="white" stroke="#1f77b4" stroke-width="2"/>
+<line x1="424.6" y1="288.3" x2="424.6" y2="267.3" stroke="#222" stroke-width="1.5"/>
+<line x1="420.6" y1="288.3" x2="428.6" y2="288.3" stroke="#222" stroke-width="1.5"/>
+<line x1="420.6" y1="267.3" x2="428.6" y2="267.3" stroke="#222" stroke-width="1.5"/>
+<text x="424.6" y="263.3" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.44</text>
+<rect x="432.3" y="288.9" width="9.4" height="61.1" fill="white" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="437.0" y1="299.9" x2="437.0" y2="277.8" stroke="#222" stroke-width="1.5"/>
+<line x1="433.0" y1="299.9" x2="441.0" y2="299.9" stroke="#222" stroke-width="1.5"/>
+<line x1="433.0" y1="277.8" x2="441.0" y2="277.8" stroke="#222" stroke-width="1.5"/>
+<text x="437.0" y="273.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.22</text>
+<text x="432.3" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="432.3" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q6_K</text>
 <line x1="470.0" y1="350.0" x2="860.0" y2="350.0" stroke="#ccc" stroke-width="1"/>
 <text x="465.0" y="354.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0</text>
 <line x1="470.0" y1="290.0" x2="860.0" y2="290.0" stroke="#ccc" stroke-width="1"/>
-<text x="465.0" y="294.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">0.5</text>
+<text x="465.0" y="294.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">1.2</text>
 <line x1="470.0" y1="230.0" x2="860.0" y2="230.0" stroke="#ccc" stroke-width="1"/>
-<text x="465.0" y="234.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">1</text>
+<text x="465.0" y="234.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">2.4</text>
 <line x1="470.0" y1="170.0" x2="860.0" y2="170.0" stroke="#ccc" stroke-width="1"/>
-<text x="465.0" y="174.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">1.5</text>
+<text x="465.0" y="174.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">3.6</text>
 <line x1="470.0" y1="110.0" x2="860.0" y2="110.0" stroke="#ccc" stroke-width="1"/>
-<text x="465.0" y="114.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">2</text>
+<text x="465.0" y="114.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">4.8</text>
 <line x1="470.0" y1="50.0" x2="860.0" y2="50.0" stroke="#ccc" stroke-width="1"/>
-<text x="465.0" y="54.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">2.5</text>
+<text x="465.0" y="54.0" font-family="sans-serif" font-size="10" text-anchor="end" font-weight="normal" fill="#222">6</text>
 <text x="665.0" y="42.0" font-family="sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#222">pp512</text>
-<line x1="470.0" y1="230.0" x2="860.0" y2="230.0" stroke="#444" stroke-width="1.5"/>
-<line x1="470.0" y1="170.0" x2="860.0" y2="170.0" stroke="#b00" stroke-width="1.5" stroke-dasharray="4 3"/>
-<rect x="481.7" y="261.3" width="24.3" height="88.7" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="493.8" y1="269.0" x2="493.8" y2="260.9" stroke="#222" stroke-width="1.5"/>
-<line x1="489.8" y1="269.0" x2="497.8" y2="269.0" stroke="#222" stroke-width="1.5"/>
-<line x1="489.8" y1="260.9" x2="497.8" y2="260.9" stroke="#222" stroke-width="1.5"/>
-<text x="493.8" y="256.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.74</text>
-<rect x="509.0" y="215.8" width="24.3" height="134.2" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="521.1" y1="218.5" x2="521.1" y2="213.8" stroke="#222" stroke-width="1.5"/>
-<line x1="517.1" y1="218.5" x2="525.1" y2="218.5" stroke="#222" stroke-width="1.5"/>
-<line x1="517.1" y1="213.8" x2="525.1" y2="213.8" stroke="#222" stroke-width="1.5"/>
-<text x="521.1" y="209.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.12</text>
-<text x="509.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
-<text x="509.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_0</text>
-<rect x="559.7" y="292.0" width="24.3" height="58.0" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="571.9" y1="295.3" x2="571.9" y2="288.6" stroke="#222" stroke-width="1.5"/>
-<line x1="567.9" y1="295.3" x2="575.9" y2="295.3" stroke="#222" stroke-width="1.5"/>
-<line x1="567.9" y1="288.6" x2="575.9" y2="288.6" stroke="#222" stroke-width="1.5"/>
-<text x="571.9" y="284.6" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.48</text>
-<rect x="587.0" y="288.3" width="24.3" height="61.7" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="599.1" y1="292.8" x2="599.1" y2="283.9" stroke="#222" stroke-width="1.5"/>
-<line x1="595.1" y1="292.8" x2="603.1" y2="292.8" stroke="#222" stroke-width="1.5"/>
-<line x1="595.1" y1="283.9" x2="603.1" y2="283.9" stroke="#222" stroke-width="1.5"/>
-<text x="599.1" y="279.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.51</text>
-<text x="587.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
-<text x="587.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q8_0</text>
-<rect x="637.7" y="222.5" width="24.3" height="127.5" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="649.9" y1="226.9" x2="649.9" y2="218.2" stroke="#222" stroke-width="1.5"/>
-<line x1="645.9" y1="226.9" x2="653.9" y2="226.9" stroke="#222" stroke-width="1.5"/>
-<line x1="645.9" y1="218.2" x2="653.9" y2="218.2" stroke="#222" stroke-width="1.5"/>
-<text x="649.9" y="214.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.06</text>
-<rect x="665.0" y="118.0" width="24.3" height="232.0" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="677.1" y1="123.7" x2="677.1" y2="112.2" stroke="#222" stroke-width="1.5"/>
-<line x1="673.1" y1="123.7" x2="681.1" y2="123.7" stroke="#222" stroke-width="1.5"/>
-<line x1="673.1" y1="112.2" x2="681.1" y2="112.2" stroke="#222" stroke-width="1.5"/>
-<text x="677.1" y="108.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.93</text>
+<line x1="470.0" y1="300.0" x2="860.0" y2="300.0" stroke="#444" stroke-width="1.5"/>
+<line x1="470.0" y1="275.0" x2="860.0" y2="275.0" stroke="#b00" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="475.3" y="313.0" width="9.4" height="37.0" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="480.0" y1="316.2" x2="480.0" y2="312.9" stroke="#222" stroke-width="1.5"/>
+<line x1="476.0" y1="316.2" x2="484.0" y2="316.2" stroke="#222" stroke-width="1.5"/>
+<line x1="476.0" y1="312.9" x2="484.0" y2="312.9" stroke="#222" stroke-width="1.5"/>
+<text x="480.0" y="308.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.74</text>
+<rect x="487.7" y="294.1" width="9.4" height="55.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="492.4" y1="295.2" x2="492.4" y2="293.2" stroke="#222" stroke-width="1.5"/>
+<line x1="488.4" y1="295.2" x2="496.4" y2="295.2" stroke="#222" stroke-width="1.5"/>
+<line x1="488.4" y1="293.2" x2="496.4" y2="293.2" stroke="#222" stroke-width="1.5"/>
+<text x="492.4" y="289.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.12</text>
+<text x="487.7" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="487.7" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_0</text>
+<rect x="510.8" y="325.8" width="9.4" height="24.2" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="515.5" y1="327.2" x2="515.5" y2="324.4" stroke="#222" stroke-width="1.5"/>
+<line x1="511.5" y1="327.2" x2="519.5" y2="327.2" stroke="#222" stroke-width="1.5"/>
+<line x1="511.5" y1="324.4" x2="519.5" y2="324.4" stroke="#222" stroke-width="1.5"/>
+<text x="515.5" y="320.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.48</text>
+<rect x="523.2" y="324.3" width="9.4" height="25.7" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="527.9" y1="326.2" x2="527.9" y2="322.4" stroke="#222" stroke-width="1.5"/>
+<line x1="523.9" y1="326.2" x2="531.9" y2="326.2" stroke="#222" stroke-width="1.5"/>
+<line x1="523.9" y1="322.4" x2="531.9" y2="322.4" stroke="#222" stroke-width="1.5"/>
+<text x="527.9" y="318.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.51</text>
+<text x="523.2" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="523.2" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q8_0</text>
+<rect x="546.2" y="296.9" width="9.4" height="53.1" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="550.9" y1="298.7" x2="550.9" y2="295.1" stroke="#222" stroke-width="1.5"/>
+<line x1="546.9" y1="298.7" x2="554.9" y2="298.7" stroke="#222" stroke-width="1.5"/>
+<line x1="546.9" y1="295.1" x2="554.9" y2="295.1" stroke="#222" stroke-width="1.5"/>
+<text x="550.9" y="291.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.06</text>
+<rect x="558.6" y="253.3" width="9.4" height="96.7" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="563.3" y1="255.7" x2="563.3" y2="250.9" stroke="#222" stroke-width="1.5"/>
+<line x1="559.3" y1="255.7" x2="567.3" y2="255.7" stroke="#222" stroke-width="1.5"/>
+<line x1="559.3" y1="250.9" x2="567.3" y2="250.9" stroke="#222" stroke-width="1.5"/>
+<text x="563.3" y="246.9" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.93</text>
+<text x="558.6" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="558.6" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="581.7" y="297.5" width="9.4" height="52.5" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="586.4" y1="300.5" x2="586.4" y2="294.4" stroke="#222" stroke-width="1.5"/>
+<line x1="582.4" y1="300.5" x2="590.4" y2="300.5" stroke="#222" stroke-width="1.5"/>
+<line x1="582.4" y1="294.4" x2="590.4" y2="294.4" stroke="#222" stroke-width="1.5"/>
+<text x="586.4" y="290.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.05</text>
+<rect x="594.1" y="303.6" width="9.4" height="46.4" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="598.8" y1="307.4" x2="598.8" y2="299.8" stroke="#222" stroke-width="1.5"/>
+<line x1="594.8" y1="307.4" x2="602.8" y2="307.4" stroke="#222" stroke-width="1.5"/>
+<line x1="594.8" y1="299.8" x2="602.8" y2="299.8" stroke="#222" stroke-width="1.5"/>
+<text x="598.8" y="295.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.93</text>
+<text x="594.1" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="594.1" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="617.1" y="298.8" width="9.4" height="51.2" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="621.8" y1="299.7" x2="621.8" y2="298.0" stroke="#222" stroke-width="1.5"/>
+<line x1="617.8" y1="299.7" x2="625.8" y2="299.7" stroke="#222" stroke-width="1.5"/>
+<line x1="617.8" y1="298.0" x2="625.8" y2="298.0" stroke="#222" stroke-width="1.5"/>
+<text x="621.8" y="294.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.02</text>
+<rect x="629.5" y="300.5" width="9.4" height="49.5" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="634.2" y1="300.5" x2="634.2" y2="300.5" stroke="#222" stroke-width="1.5"/>
+<line x1="630.2" y1="300.5" x2="638.2" y2="300.5" stroke="#222" stroke-width="1.5"/>
+<line x1="630.2" y1="300.5" x2="638.2" y2="300.5" stroke="#222" stroke-width="1.5"/>
+<text x="634.2" y="296.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.99</text>
+<text x="629.5" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="629.5" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<rect x="652.6" y="248.8" width="9.4" height="101.2" fill="white" stroke="#1f77b4" stroke-width="2"/>
+<line x1="657.3" y1="261.8" x2="657.3" y2="235.8" stroke="#222" stroke-width="1.5"/>
+<line x1="653.3" y1="261.8" x2="661.3" y2="261.8" stroke="#222" stroke-width="1.5"/>
+<line x1="653.3" y1="235.8" x2="661.3" y2="235.8" stroke="#222" stroke-width="1.5"/>
+<text x="657.3" y="231.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">2.02</text>
+<rect x="665.0" y="283.2" width="9.4" height="66.8" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="669.7" y1="297.9" x2="669.7" y2="268.4" stroke="#222" stroke-width="1.5"/>
+<line x1="665.7" y1="297.9" x2="673.7" y2="297.9" stroke="#222" stroke-width="1.5"/>
+<line x1="665.7" y1="268.4" x2="673.7" y2="268.4" stroke="#222" stroke-width="1.5"/>
+<text x="669.7" y="264.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.34</text>
 <text x="665.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
-<text x="665.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
-<rect x="715.7" y="223.9" width="24.3" height="126.1" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="727.9" y1="231.1" x2="727.9" y2="216.7" stroke="#222" stroke-width="1.5"/>
-<line x1="723.9" y1="231.1" x2="731.9" y2="231.1" stroke="#222" stroke-width="1.5"/>
-<line x1="723.9" y1="216.7" x2="731.9" y2="216.7" stroke="#222" stroke-width="1.5"/>
-<text x="727.9" y="212.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.05</text>
-<rect x="743.0" y="238.6" width="24.3" height="111.4" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="755.1" y1="247.8" x2="755.1" y2="229.5" stroke="#222" stroke-width="1.5"/>
-<line x1="751.1" y1="247.8" x2="759.1" y2="247.8" stroke="#222" stroke-width="1.5"/>
-<line x1="751.1" y1="229.5" x2="759.1" y2="229.5" stroke="#222" stroke-width="1.5"/>
-<text x="755.1" y="225.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.93</text>
-<text x="743.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
-<text x="743.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
-<rect x="793.7" y="227.1" width="24.3" height="122.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
-<line x1="805.9" y1="229.2" x2="805.9" y2="225.1" stroke="#222" stroke-width="1.5"/>
-<line x1="801.9" y1="229.2" x2="809.9" y2="229.2" stroke="#222" stroke-width="1.5"/>
-<line x1="801.9" y1="225.1" x2="809.9" y2="225.1" stroke="#222" stroke-width="1.5"/>
-<text x="805.9" y="221.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.02</text>
-<rect x="821.0" y="243.2" width="24.3" height="106.8" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
-<line x1="833.1" y1="255.2" x2="833.1" y2="231.1" stroke="#222" stroke-width="1.5"/>
-<line x1="829.1" y1="255.2" x2="837.1" y2="255.2" stroke="#222" stroke-width="1.5"/>
-<line x1="829.1" y1="231.1" x2="837.1" y2="231.1" stroke="#222" stroke-width="1.5"/>
-<text x="833.1" y="227.1" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">0.89</text>
-<text x="821.0" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
-<text x="821.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">F16</text>
+<text x="665.0" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_K_M</text>
+<rect x="688.0" y="141.8" width="9.4" height="208.2" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="692.8" y1="166.9" x2="692.8" y2="116.7" stroke="#222" stroke-width="1.5"/>
+<line x1="688.8" y1="166.9" x2="696.8" y2="166.9" stroke="#222" stroke-width="1.5"/>
+<line x1="688.8" y1="116.7" x2="696.8" y2="116.7" stroke="#222" stroke-width="1.5"/>
+<text x="692.8" y="112.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">4.16</text>
+<rect x="700.5" y="159.1" width="9.4" height="190.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="705.2" y1="230.2" x2="705.2" y2="88.0" stroke="#222" stroke-width="1.5"/>
+<line x1="701.2" y1="230.2" x2="709.2" y2="230.2" stroke="#222" stroke-width="1.5"/>
+<line x1="701.2" y1="88.0" x2="709.2" y2="88.0" stroke="#222" stroke-width="1.5"/>
+<text x="705.2" y="84.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">3.82</text>
+<text x="700.5" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="700.5" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_K_M</text>
+<rect x="723.5" y="150.1" width="9.4" height="199.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="728.2" y1="180.4" x2="728.2" y2="119.8" stroke="#222" stroke-width="1.5"/>
+<line x1="724.2" y1="180.4" x2="732.2" y2="180.4" stroke="#222" stroke-width="1.5"/>
+<line x1="724.2" y1="119.8" x2="732.2" y2="119.8" stroke="#222" stroke-width="1.5"/>
+<text x="728.2" y="115.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">4.00</text>
+<rect x="735.9" y="233.1" width="9.4" height="116.9" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="740.6" y1="251.5" x2="740.6" y2="214.7" stroke="#222" stroke-width="1.5"/>
+<line x1="736.6" y1="251.5" x2="744.6" y2="251.5" stroke="#222" stroke-width="1.5"/>
+<line x1="736.6" y1="214.7" x2="744.6" y2="214.7" stroke="#222" stroke-width="1.5"/>
+<text x="740.6" y="210.7" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">2.34</text>
+<text x="735.9" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="735.9" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q4_K_M</text>
+<rect x="759.0" y="282.1" width="9.4" height="67.9" fill="#1f77b4" stroke="#1f77b4" stroke-width="2"/>
+<line x1="763.7" y1="283.4" x2="763.7" y2="280.8" stroke="#222" stroke-width="1.5"/>
+<line x1="759.7" y1="283.4" x2="767.7" y2="283.4" stroke="#222" stroke-width="1.5"/>
+<line x1="759.7" y1="280.8" x2="767.7" y2="280.8" stroke="#222" stroke-width="1.5"/>
+<text x="763.7" y="276.8" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.36</text>
+<rect x="771.4" y="278.5" width="9.4" height="71.5" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="776.1" y1="281.5" x2="776.1" y2="275.4" stroke="#222" stroke-width="1.5"/>
+<line x1="772.1" y1="281.5" x2="780.1" y2="281.5" stroke="#222" stroke-width="1.5"/>
+<line x1="772.1" y1="275.4" x2="780.1" y2="275.4" stroke="#222" stroke-width="1.5"/>
+<text x="776.1" y="271.4" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">1.43</text>
+<text x="771.4" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Qwen2.5-0.5B</text>
+<text x="771.4" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q6_K</text>
+<rect x="794.4" y="116.6" width="9.4" height="233.4" fill="white" stroke="#1f77b4" stroke-width="2"/>
+<line x1="799.1" y1="128.0" x2="799.1" y2="105.2" stroke="#222" stroke-width="1.5"/>
+<line x1="795.1" y1="128.0" x2="803.1" y2="128.0" stroke="#222" stroke-width="1.5"/>
+<line x1="795.1" y1="105.2" x2="803.1" y2="105.2" stroke="#222" stroke-width="1.5"/>
+<text x="799.1" y="101.2" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">4.67</text>
+<rect x="806.8" y="220.7" width="9.4" height="129.3" fill="#ff7f0e" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="811.5" y1="231.4" x2="811.5" y2="210.0" stroke="#222" stroke-width="1.5"/>
+<line x1="807.5" y1="231.4" x2="815.5" y2="231.4" stroke="#222" stroke-width="1.5"/>
+<line x1="807.5" y1="210.0" x2="815.5" y2="210.0" stroke="#222" stroke-width="1.5"/>
+<text x="811.5" y="206.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">2.59</text>
+<text x="806.8" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Llama-3.2-1B</text>
+<text x="806.8" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q6_K</text>
+<rect x="829.9" y="135.6" width="9.4" height="214.4" fill="white" stroke="#1f77b4" stroke-width="2"/>
+<line x1="834.6" y1="141.8" x2="834.6" y2="129.3" stroke="#222" stroke-width="1.5"/>
+<line x1="830.6" y1="141.8" x2="838.6" y2="141.8" stroke="#222" stroke-width="1.5"/>
+<line x1="830.6" y1="129.3" x2="838.6" y2="129.3" stroke="#222" stroke-width="1.5"/>
+<text x="834.6" y="125.3" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">4.29</text>
+<rect x="842.3" y="160.7" width="9.4" height="189.3" fill="white" stroke="#ff7f0e" stroke-width="2"/>
+<line x1="847.0" y1="221.9" x2="847.0" y2="99.5" stroke="#222" stroke-width="1.5"/>
+<line x1="843.0" y1="221.9" x2="851.0" y2="221.9" stroke="#222" stroke-width="1.5"/>
+<line x1="843.0" y1="99.5" x2="851.0" y2="99.5" stroke="#222" stroke-width="1.5"/>
+<text x="847.0" y="95.5" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">3.79</text>
+<text x="842.3" y="364.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">TinyLlama-1.1B</text>
+<text x="842.3" y="376.0" font-family="sans-serif" font-size="9" text-anchor="middle" font-weight="normal" fill="#222">Q6_K</text>
 <rect x="70.0" y="389.0" width="10" height="10" fill="#1f77b4"/>
 <text x="85.0" y="398.0" font-family="sans-serif" font-size="11" text-anchor="start" font-weight="normal" fill="#222">t = 1</text>
 <rect x="70.0" y="405.0" width="10" height="10" fill="#ff7f0e"/>
