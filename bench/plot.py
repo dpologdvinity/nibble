@@ -36,6 +36,12 @@ MODELS = [  # (file, label, colour)
     ("qwen2.5-0.5b-instruct-fp16.gguf", "Qwen2.5-0.5B F16", "#2ca02c"),
     ("llama-3.2-1b-instruct-f16.gguf", "Llama-3.2-1B F16", "#d62728"),
     ("tinyllama-1.1b-chat-f16.gguf", "TinyLlama-1.1B F16", "#9467bd"),
+    ("qwen2.5-0.5b-instruct-q4_k_m.gguf", "Qwen2.5-0.5B Q4_K_M", "#8c564b"),
+    ("llama-3.2-1b-instruct-q4_k_m.gguf", "Llama-3.2-1B Q4_K_M", "#e377c2"),
+    ("tinyllama-1.1b-chat-q4_k_m.gguf", "TinyLlama-1.1B Q4_K_M", "#7f7f7f"),
+    ("qwen2.5-0.5b-instruct-q6_k.gguf", "Qwen2.5-0.5B Q6_K", "#bcbd22"),
+    ("llama-3.2-1b-instruct-q6_k.gguf", "Llama-3.2-1B Q6_K", "#17becf"),
+    ("tinyllama-1.1b-chat-q6_k.gguf", "TinyLlama-1.1B Q6_K", "#393b79"),
 ]
 # GGUF file sizes stand in for bytes read per token (weights dominate). The sizes of models/<file> are
 # used when present; this table is the fallback for checkouts without the models.
@@ -45,6 +51,12 @@ MODEL_BYTES = {
     "qwen2.5-0.5b-instruct-fp16.gguf": 1266425696,
     "llama-3.2-1b-instruct-f16.gguf": 2479595264,
     "tinyllama-1.1b-chat-f16.gguf": 2201017664,
+    "qwen2.5-0.5b-instruct-q4_k_m.gguf": 491400032,
+    "llama-3.2-1b-instruct-q4_k_m.gguf": 807694080,
+    "tinyllama-1.1b-chat-q4_k_m.gguf": 667815232,
+    "qwen2.5-0.5b-instruct-q6_k.gguf": 650379104,
+    "llama-3.2-1b-instruct-q6_k.gguf": 1021800192,
+    "tinyllama-1.1b-chat-q6_k.gguf": 903413056,
 }
 TOOLS = [("nibble", "#1f77b4"), ("llama.cpp", "#ff7f0e")]
 TG, PP = "tg128", "pp512"
