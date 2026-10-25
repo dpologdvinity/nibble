@@ -159,7 +159,7 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
     // Task 9 gates on supports() at load time so the hot path never sees one.
     if (!supports(ws[i]->type)) cpu::matmul_rows(*ws[i], x, ys[i], 0, 0, 0, nullptr);  // n=0: only the dtype check runs
     need[static_cast<int>(act_type(ws[i]->type))] = true;
-    need_pack |= ws[i]->type == DType::Q4_0 || ws[i]->type == DType::Q8_0;
+    need_pack |= ws[i]->type == DType::Q4_0 || ws[i]->type == DType::Q5_0 || ws[i]->type == DType::Q8_0;
     total += ws[i]->rows();
   }
   const int64_t in = w0.ne[0];
@@ -213,8 +213,10 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
 #ifdef NIBBLE_HAVE_AVX2
       if (is_float)
         n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
-      else if (xp && (w.type == DType::Q4_0 || w.type == DType::Q8_0))
+      else if (xp && (w.type == DType::Q4_0 || w.type == DType::Q5_0 || w.type == DType::Q8_0))
         simd::gemm_q(w, xp, ys[i], n, lo, hi);
+      else if (n >= 4 && acts.q8_K && act_type(w.type) == ActType::Q8_K)
+        simd::gemm_k(w, acts.q8_K, ys[i], n, lo, hi);
       else
         simd::matmul_rows_q(w, acts, ys[i], n, lo, hi);
 #else
