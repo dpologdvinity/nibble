@@ -20,11 +20,16 @@ on:
     branches: [master, main]
   workflow_dispatch:
   workflow_call:  # release.yml runs the whole suite on the tagged commit before publishing anything
+    inputs:
+      skip-package:  # the release workflow builds its own, versioned packages
+        type: boolean
+        default: false
 
 concurrency:
-  # Pull requests share one group per ref, so a newer push cancels the older run. Every other event gets a group of
-  # its own per commit: with a shared group GitHub would drop queued runs of rapid pushes, leaving commits untested.
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  # Pull requests share one group per ref, so a newer push cancels the older run. Every other run gets a group of
+  # its own: with a shared group GitHub drops queued runs of rapid pushes (or of two tags on one commit), leaving
+  # commits untested.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -267,6 +272,7 @@ jobs:
   package:
     name: package
     needs: [test, static-analysis, coverage, fuzz]
+    if: ${{ !inputs.skip-package }}
     uses: ./.github/workflows/package.yml
     permissions:
       contents: read

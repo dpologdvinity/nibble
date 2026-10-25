@@ -15,6 +15,8 @@ permissions:
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
+    with:
+      skip-package: true
     permissions:
       contents: read
 
