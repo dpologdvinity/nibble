@@ -30,8 +30,9 @@ Useful variants (each in its own build directory):
 
 | goal | configure with |
 |---|---|
-| portable scalar build | `-DNIBBLE_NATIVE=OFF` |
-| scalar kernels on a native build | `-DNIBBLE_SIMD=OFF` |
+| release-shaped build (plain x86-64, kernels chosen at runtime) | `-DNIBBLE_NATIVE=OFF` |
+| no SIMD kernels at all | `-DNIBBLE_SIMD=OFF` |
+| force a kernel tier at run time | environment `NIBBLE_KERNELS=scalar`, `avx2` or `avx2+vnni` |
 | AddressSanitizer + UBSan | `-DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=address,undefined` (run tests with `setarch -R`) |
 | ThreadSanitizer | `-DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=thread` (with `setarch -R`) |
 | clang | `CXX=clang++ cmake ...` |
@@ -39,6 +40,8 @@ Useful variants (each in its own build directory):
 
 A change that touches kernels or numerics should pass the unit tests in **Release, the SIMD-off build and the
 sanitizer build**: bit-exactness bugs often show up in only one of them.
+The SIMD kernel tests run once per tier the CPU supports (`avx2`, and `vnni` on an AVX-VNNI CPU), and
+`NIBBLE_KERNELS=avx2 ctest ...` runs the rest of the suite on the non-VNNI tier.
 
 ### End-to-end tests
 

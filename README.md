@@ -82,14 +82,17 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 
 Requires CMake ≥ 3.25 and g++ 13 or clang 18. Catch2 is fetched at configure time.
 
-The SIMD kernels are chosen at compile time: they need AVX2, FMA and F16C, and the
-VNNI dot products also need AVX-VNNI. `NIBBLE_NATIVE` defaults to ON
-(`-march=native`), so the binary may not run on an older CPU than the build host.
-`-DNIBBLE_NATIVE=OFF` builds a portable binary that runs only the scalar kernels and
-is much slower (add `-DCMAKE_CXX_FLAGS=-march=x86-64-v3` for a redistributable AVX2 binary).
-`-DNIBBLE_SIMD=OFF` forces the scalar kernels even on a native build. `-DNIBBLE_BUILD_TESTS=OFF`
-skips the tests (and the Catch2 download). `nibble info <model.gguf>` prints the active set, e.g.
-`kernels: avx2+fma+f16c+avxvnni` or `kernels: scalar`.
+The SIMD kernels are chosen at startup, from what the CPU supports: AVX2 + FMA + F16C with AVX-VNNI, the same
+without AVX-VNNI, or the scalar kernels. Every build contains all three, so a binary runs on any x86-64 CPU.
+`NIBBLE_NATIVE` defaults to ON (`-march=native` for everything except the kernels), so a native build may not
+run on an older CPU than the build host; `-DNIBBLE_NATIVE=OFF` builds for plain x86-64, which is how the
+release binaries and the container image are built. `-DNIBBLE_SIMD=OFF` leaves the SIMD kernels out (scalar
+only). `-DNIBBLE_BUILD_TESTS=OFF` skips the tests (and the Catch2 download). `nibble info <model.gguf>` prints the
+tier in use, e.g. `kernels: avx2+fma+f16c+avxvnni`, `kernels: avx2+fma+f16c` or `kernels: scalar`, and the
+environment variable `NIBBLE_KERNELS=scalar|avx2|avx2+vnni` forces a tier (an error if the CPU lacks it).
+
+Prebuilt binaries: each [release](https://github.com/dpologdvinity/nibble/releases) has one
+`nibble-<version>-linux-x86_64.tar.gz` (with a `.sha256` file) and an image `ghcr.io/dpologdvinity/nibble:<version>`.
 
 ## Getting a model
 
