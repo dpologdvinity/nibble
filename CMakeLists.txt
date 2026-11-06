@@ -4,6 +4,7 @@
 # - nibble (static library): everything under src/, the engine itself.
 # - nibble_cli (executable `nibble`): the command-line tool in cli/.
 # - nibble_tests, nibble_alloc_tests: Catch2 unit/integration tests; end-to-end cases carry the `e2e` label.
+# - nibble_simd_helpers_<tier>: Catch2 tests of the simd.h intrinsics helpers, compiled once per SIMD tier.
 # - fuzz_gguf, fuzz_load, make_seed (NIBBLE_FUZZ=ON, clang only): libFuzzer targets and their seed generator.
 #
 # Options: NIBBLE_NATIVE (-march=native), NIBBLE_SIMD (use the AVX2 kernels when the target supports them),
@@ -148,6 +149,23 @@ foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
   add_test(NAME simd_symbols_${tier}
     COMMAND ${CMAKE_SOURCE_DIR}/tools/check_simd_symbols.sh ${tier} $<TARGET_OBJECTS:nibble_simd_${tier}>
     COMMAND_EXPAND_LISTS)
+endforeach()
+
+# The intrinsics helpers in simd.h are tested once per tier: simd_helpers_test.cpp is compiled like a tier source
+# (an object library with the tier's flags), and simd_helpers_main.cpp, built for the baseline target, exits
+# with 77 (skipped) before running any test when the CPU lacks the tier.
+foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
+  add_library(nibble_simd_helpers_obj_${tier} OBJECT tests/simd_helpers_test.cpp)
+  target_include_directories(nibble_simd_helpers_obj_${tier} PRIVATE include src tests)
+  target_compile_options(nibble_simd_helpers_obj_${tier} PRIVATE ${NIBBLE_SIMD_TIER_FLAGS_${tier}} -ffp-contract=off)
+  target_compile_definitions(nibble_simd_helpers_obj_${tier} PRIVATE NIBBLE_SIMD_TIER=${tier})
+  target_link_libraries(nibble_simd_helpers_obj_${tier} PRIVATE nibble_warnings Catch2::Catch2)
+  add_executable(nibble_simd_helpers_${tier} tests/simd_helpers_main.cpp $<TARGET_OBJECTS:nibble_simd_helpers_obj_${tier}>)
+  target_include_directories(nibble_simd_helpers_${tier} PRIVATE include src)
+  target_compile_definitions(nibble_simd_helpers_${tier} PRIVATE NIBBLE_HELPERS_TIER="${tier}")
+  target_link_libraries(nibble_simd_helpers_${tier} PRIVATE nibble Catch2::Catch2)
+  add_test(NAME simd_helpers_${tier} COMMAND nibble_simd_helpers_${tier})
+  set_tests_properties(simd_helpers_${tier} PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()
 
 # Separate binary: replaces global operator new/delete with a counting hook.
