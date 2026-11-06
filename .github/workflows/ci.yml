@@ -69,7 +69,7 @@ jobs:
           cmake --version | awk 'NR==1 { split($3, v, "."); exit !(v[1] > 3 || (v[1] == 3 && v[2] >= 25)) }'
       - name: Cache Catch2 (fetched at configure time)
         id: deps
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DEPS_DIR }}
           key: deps-${{ hashFiles('CMakeLists.txt') }}
@@ -187,7 +187,7 @@ jobs:
         id: cpu
         run: echo "id=$( (grep -m1 '^model name' /proc/cpuinfo; grep -m1 '^flags' /proc/cpuinfo) | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
       - name: Restore ccache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
           key: ccache-${{ matrix.name }}-${{ steps.cpu.outputs.id }}-${{ github.sha }}
