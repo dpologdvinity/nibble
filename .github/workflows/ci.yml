@@ -264,6 +264,10 @@ jobs:
           cmake --build build -j "$(nproc)"
       - name: Test
         run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
+      # Again with the scalar kernels forced, so the backend's scalar branches (taken on CPUs without AVX2) are
+      # exercised and counted too; gcov accumulates both runs.
+      - name: Test with the scalar kernels forced
+        run: NIBBLE_KERNELS=scalar ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
       - name: Coverage report
         run: |
           # no_working_dir_found/source_not_found only come from CMake's compiler-id probes and Catch2, which the
