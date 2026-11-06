@@ -270,6 +270,8 @@ jobs:
         run: NIBBLE_KERNELS=scalar ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
       - name: Coverage report
         run: |
+          # --merge-lines: the SIMD kernels are compiled once per tier, so each source line has one copy per tier; a
+          # line counts as covered when any copy ran (the runners have no AVX-VNNI, so the vnni copy never runs).
           # no_working_dir_found/source_not_found only come from CMake's compiler-id probes and Catch2, which the
           # --filter flags exclude from the report anyway.
           set -o pipefail  # a gcovr failure (or the threshold) must fail the step, not be masked by tee
@@ -278,6 +280,7 @@ jobs:
                 --exclude-directories '.*\.deps-cache' \
                 --gcov-ignore-parse-errors=negative_hits.warn \
                 --gcov-ignore-errors=no_working_dir_found --gcov-ignore-errors=source_not_found \
+                --merge-lines \
                 --print-summary --xml-pretty --xml coverage/coverage.xml --html-details coverage/index.html \
                 --fail-under-line "${MIN_LINE_COVERAGE}" | tee coverage/summary.txt
           { echo '### Coverage (src/ and cli/)'; echo '```'; cat coverage/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
