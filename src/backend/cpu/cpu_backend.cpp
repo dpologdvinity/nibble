@@ -1,4 +1,5 @@
-// CpuBackend implementation: scratch management and the dispatch from abstract ops to scalar/AVX2 kernels.
+// CpuBackend implementation: scratch management and the dispatch from abstract ops to the kernel tier chosen at
+// construction (simd::select(): a Kernels table, or nullptr for the scalar ref_ops).
 // The interesting function is matmul_multi, which quantizes the shared input once per activation type and
 // then runs each weight's rows in parallel.
 #include "backend/cpu/cpu_backend.h"
@@ -10,13 +11,13 @@
 #include <new>
 
 #include "backend/cpu/ref_ops.h"
-#include "backend/cpu/simd/simd.h"
+#include "backend/cpu/simd/dispatch.h"
 #include "debug_check.h"
 #include "nibble/error.h"
 
 namespace nibble::cpu {
 
-CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool) {}
+CpuBackend::CpuBackend(ThreadPool& pool) : pool_(pool), k_(simd::select()) {}
 
 // Computes every scratch size with overflow checks first (so a bad request changes nothing), then grows the
 // attention scores, the packed Q8_0 tile buffer (AVX2 builds) and the three quantized-activation buffers.
@@ -43,17 +44,17 @@ void CpuBackend::reserve(const ReserveParams& rp) {
       throw Error("reserve: cannot allocate " + std::to_string(need * sizeof(float)) + " bytes of attention scratch");
     }
   }
-#ifdef NIBBLE_HAVE_AVX2
-  const uint64_t xp_need = (static_cast<uint64_t>(rp.max_rows) + 7) / 8 * (static_cast<uint64_t>(rp.max_width) / kQK);
-  if (xp_.size() < xp_need) {
-    try {
-      xp_.resize(static_cast<size_t>(xp_need));
-    } catch (const std::exception&) {
-      throw Error("reserve: cannot allocate " + std::to_string(xp_need * sizeof(simd::BlockQ8_0x8)) +
-                  " bytes of packed activation scratch");
+  if (k_) {  // the packed activations only feed the SIMD tiled GEMM
+    const uint64_t xp_need = (static_cast<uint64_t>(rp.max_rows) + 7) / 8 * (static_cast<uint64_t>(rp.max_width) / kQK);
+    if (xp_.size() < xp_need) {
+      try {
+        xp_.resize(static_cast<size_t>(xp_need));
+      } catch (const std::exception&) {
+        throw Error("reserve: cannot allocate " + std::to_string(xp_need * sizeof(simd::BlockQ8_0x8)) +
+                    " bytes of packed activation scratch");
+      }
     }
   }
-#endif
   try {
     if (xq_.size() < xq_need) xq_.resize(static_cast<size_t>(xq_need));
     if (xq1_.size() < xq_need) xq1_.resize(static_cast<size_t>(xq_need));
@@ -116,18 +117,16 @@ void CpuBackend::embed(const Tensor& table, std::span<const int32_t> ids, float*
     NIBBLE_DCHECK(ids[i] >= 0 && ids[i] < table.ne[1], "embed: ids[%zu]=%d out of range [0, %lld)", i,
                   static_cast<int>(ids[i]), static_cast<long long>(table.ne[1]));
 #endif
-#ifdef NIBBLE_HAVE_AVX2
-  if (table.type == DType::F16) {
+  if (k_ && table.type == DType::F16) {
     const int64_t d = table.ne[0];
     for (size_t t = 0; t < ids.size(); ++t) {
       if (ids[t] < 0 || ids[t] >= table.rows())
         throw Error("embed: token id " + std::to_string(ids[t]) + " out of range (n_vocab " +
                     std::to_string(table.rows()) + ")");
-      simd::embed_row_f16(static_cast<const uint16_t*>(table.data) + ids[t] * d, out + static_cast<int64_t>(t) * d, d);
+      k_->embed_row_f16(static_cast<const uint16_t*>(table.data) + ids[t] * d, out + static_cast<int64_t>(t) * d, d);
     }
     return;
   }
-#endif
   cpu::embed(table, ids, out);
 }
 
@@ -172,17 +171,17 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
     if (need[static_cast<int>(ActType::Q8_0)]) {
       ++quantize_calls_;
       if (xq_.size() < blocks) xq_.resize(blocks);  // beyond reserve(): outside the no-allocation guarantee
-#ifdef NIBBLE_HAVE_AVX2
-      for (int64_t t = 0; t < n; ++t) simd::quantize_row_q8_0(x + t * in, xq_.data() + t * nb, in);
-      if (n >= 4 && need_pack) {
-        const size_t xp_need = static_cast<size_t>((n + 7) / 8 * nb);
-        if (xp_.size() < xp_need) xp_.resize(xp_need);  // beyond reserve(), like xq_
-        simd::pack_q8_0_x8(xq_.data(), n, nb, xp_.data());
-        xp = xp_.data();
+      if (k_) {
+        for (int64_t t = 0; t < n; ++t) k_->quantize_row_q8_0(x + t * in, xq_.data() + t * nb, in);
+        if (n >= 4 && need_pack) {
+          const size_t xp_need = static_cast<size_t>((n + 7) / 8 * nb);
+          if (xp_.size() < xp_need) xp_.resize(xp_need);  // beyond reserve(), like xq_
+          k_->pack_q8_0_x8(xq_.data(), n, nb, xp_.data());
+          xp = xp_.data();
+        }
+      } else {
+        cpu::quantize_rows_q8_0(x, xq_.data(), n, in);
       }
-#else
-      cpu::quantize_rows_q8_0(x, xq_.data(), n, in);
-#endif
       acts.q8_0 = xq_.data();
     }
     if (need[static_cast<int>(ActType::Q8_1)]) {
@@ -210,41 +209,31 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
       const int64_t lo = std::max(b, off) - off, hi = std::min(e, off + w.rows()) - off;
       if (lo >= hi) continue;
       const bool is_float = w.type == DType::F32 || w.type == DType::F16;
-#ifdef NIBBLE_HAVE_AVX2
-      if (is_float)
-        n >= 4 ? simd::gemm_f(w, x, ys[i], n, lo, hi) : simd::matmul_rows_f(w, x, ys[i], n, lo, hi);
+      if (!k_)
+        cpu::matmul_rows(w, x, ys[i], n, lo, hi, is_float ? nullptr : &acts);
+      else if (is_float)
+        n >= 4 ? k_->gemm_f(w, x, ys[i], n, lo, hi) : k_->matmul_rows_f(w, x, ys[i], n, lo, hi);
       else if (xp && (w.type == DType::Q4_0 || w.type == DType::Q5_0 || w.type == DType::Q8_0))
-        simd::gemm_q(w, xp, ys[i], n, lo, hi);
+        k_->gemm_q(w, xp, ys[i], n, lo, hi);
       else if (n >= 4 && acts.q8_K && act_type(w.type) == ActType::Q8_K)
-        simd::gemm_k(w, acts.q8_K, ys[i], n, lo, hi);
+        k_->gemm_k(w, acts.q8_K, ys[i], n, lo, hi);
       else
-        simd::matmul_rows_q(w, acts, ys[i], n, lo, hi);
-#else
-      cpu::matmul_rows(w, x, ys[i], n, lo, hi, is_float ? nullptr : &acts);
-#endif
+        k_->matmul_rows_q(w, acts, ys[i], n, lo, hi);
     }
   });
 }
 
-// The elementwise ops below dispatch to the AVX2 twin when compiled in, else to ref_ops.
+// The elementwise ops below run the selected tier's kernel, or the scalar ref_ops one when there is none.
 void CpuBackend::rmsnorm(const float* x, const Tensor& weight, float* y, int64_t n, float eps) {
   NIBBLE_DCHECK(x && y && weight.data && n > 0 && weight.type == DType::F32,
                 "rmsnorm: x=%p y=%p weight=%p n=%lld weight dtype %u (need F32)", static_cast<const void*>(x),
                 static_cast<void*>(y), weight.data, static_cast<long long>(n), static_cast<unsigned>(weight.type));
-#ifdef NIBBLE_HAVE_AVX2
-  simd::rmsnorm(x, weight, y, n, eps);
-#else
-  cpu::rmsnorm(x, weight, y, n, eps);
-#endif
+  k_ ? k_->rmsnorm(x, weight, y, n, eps) : cpu::rmsnorm(x, weight, y, n, eps);
 }
 void CpuBackend::add(float* x, const float* y, int64_t count) {
   NIBBLE_DCHECK(x && y && count > 0, "add: x=%p y=%p count=%lld", static_cast<void*>(x), static_cast<const void*>(y),
                 static_cast<long long>(count));
-#ifdef NIBBLE_HAVE_AVX2
-  simd::add(x, y, count);
-#else
-  cpu::add(x, y, count);
-#endif
+  k_ ? k_->add(x, y, count) : cpu::add(x, y, count);
 }
 void CpuBackend::add_bias(float* x, const Tensor& bias, int64_t n) {
   NIBBLE_DCHECK(x && bias.data && n > 0 && bias.type == DType::F32,
@@ -267,11 +256,7 @@ void CpuBackend::copy(float* dst, const float* src, int64_t count) {
 void CpuBackend::silu_mul(float* gate, const float* up, int64_t count) {
   NIBBLE_DCHECK(gate && up && count > 0, "silu_mul: gate=%p up=%p count=%lld", static_cast<void*>(gate),
                 static_cast<const void*>(up), static_cast<long long>(count));
-#ifdef NIBBLE_HAVE_AVX2
-  simd::silu_mul(gate, up, count);
-#else
-  cpu::silu_mul(gate, up, count);
-#endif
+  k_ ? k_->silu_mul(gate, up, count) : cpu::silu_mul(gate, up, count);
 }
 
 // One parallel_for chunk per head; each head owns a slice of scratch_ for its score row, so no sharing.
@@ -290,11 +275,8 @@ void CpuBackend::attention(const float* q, const float* k, const float* v, float
   float* scratch = scratch_.data();
   pool_.parallel_for(n_heads, 1, [&](int64_t b, int64_t e) {
     for (int64_t h = b; h < e; ++h)
-#ifdef NIBBLE_HAVE_AVX2
-      simd::attention_heads(q, k, v, out, n, pos0, n_heads, n_kv_heads, head_dim, h, h + 1, scratch + h * ctx);
-#else
-      cpu::attention_heads(q, k, v, out, n, pos0, n_heads, n_kv_heads, head_dim, h, h + 1, scratch + h * ctx);
-#endif
+      (k_ ? k_->attention_heads : cpu::attention_heads)(q, k, v, out, n, pos0, n_heads, n_kv_heads, head_dim, h, h + 1,
+                                                        scratch + h * ctx);
   });
 }
 

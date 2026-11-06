@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <type_traits>
 
 #include "backend/cpu/simd/simd.h"
@@ -13,15 +14,10 @@
 
 using namespace nibble;
 
-// The reported kernel-set string matches the macros the build was compiled with.
-TEST_CASE("kernel_set names the active macros", "[simd]") {
-#if defined(NIBBLE_HAVE_AVXVNNI)
-  CHECK(std::strcmp(simd::kernel_set(), "avx2+fma+f16c+avxvnni") == 0);
-#elif defined(NIBBLE_HAVE_AVX2)
-  CHECK(std::strcmp(simd::kernel_set(), "avx2+fma+f16c") == 0);
-#else
-  CHECK(std::strcmp(simd::kernel_set(), "scalar") == 0);
-#endif
+// The reported kernel set is one of the three tiers (which one depends on the CPU and NIBBLE_KERNELS).
+TEST_CASE("kernel_set names a known tier", "[simd]") {
+  const std::string k = simd::kernel_set();
+  CHECK((k == "scalar" || k == "avx2+fma+f16c" || k == "avx2+fma+f16c+avxvnni"));
 }
 
 // Self-test of the comparison harness used by other tests (tests/simd_test_util.h).

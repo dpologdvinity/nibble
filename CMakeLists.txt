@@ -24,21 +24,26 @@ option(NIBBLE_NATIVE "Build with -march=native" ON)
 option(NIBBLE_SIMD "Enable hand-written SIMD kernels when the target supports them" ON)
 set(NIBBLE_SANITIZE "" CACHE STRING "Value for -fsanitize=")
 
-# nibble_flags carries the compile settings every target shares: strict warnings as errors, -march=native, the
-# SIMD switch and the sanitizer flags.
-add_library(nibble_flags INTERFACE)
-target_compile_options(nibble_flags INTERFACE -Wall -Wextra -Wpedantic -Werror)
+# Compile settings are split in two so the SIMD kernel tiers can take everything except the target architecture:
+#   nibble_warnings  strict warnings as errors, the SIMD switch and the sanitizer flags (every target)
+#   nibble_arch      -march=native when NIBBLE_NATIVE is on (everything except the kernel tiers)
+#   nibble_flags     both, for the library, CLI and tests
+add_library(nibble_warnings INTERFACE)
+target_compile_options(nibble_warnings INTERFACE -Wall -Wextra -Wpedantic -Werror)
+add_library(nibble_arch INTERFACE)
 if(NIBBLE_NATIVE)
-  target_compile_options(nibble_flags INTERFACE -march=native)
+  target_compile_options(nibble_arch INTERFACE -march=native)
   # Some CPUs (e.g. recent cloud runners) make clang's -march=native detection report "+avx10.1-256 ... will be
   # promoted to avx10.1-512", which -Werror would turn into a build failure. It describes the host CPU, not our code.
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(nibble_flags INTERFACE -Wno-invalid-feature-combination)
+    target_compile_options(nibble_arch INTERFACE -Wno-invalid-feature-combination)
   endif()
 endif()
 if(NIBBLE_SIMD)
-  target_compile_definitions(nibble_flags INTERFACE NIBBLE_SIMD_ENABLED=1)
+  target_compile_definitions(nibble_warnings INTERFACE NIBBLE_SIMD_ENABLED=1)
 endif()
+add_library(nibble_flags INTERFACE)
+target_link_libraries(nibble_flags INTERFACE nibble_warnings nibble_arch)
 if(NIBBLE_SANITIZE)
   set(NIBBLE_SANITIZE_FLAGS ${NIBBLE_SANITIZE})
   # -fsanitize=undefined leaves out float-to-int casts of NaN/out-of-range values; quantizers need them checked.
@@ -46,8 +51,8 @@ if(NIBBLE_SANITIZE)
     string(APPEND NIBBLE_SANITIZE_FLAGS ",float-cast-overflow")
   endif()
   # Fatal: without this UBSan prints "runtime error:" and the test still passes.
-  target_compile_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all -fno-omit-frame-pointer)
-  target_link_options(nibble_flags INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all)
+  target_compile_options(nibble_warnings INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all -fno-omit-frame-pointer)
+  target_link_options(nibble_warnings INTERFACE -fsanitize=${NIBBLE_SANITIZE_FLAGS} -fno-sanitize-recover=all)
 endif()
 
 # The library sources are everything under src/ (globbed, re-globbed automatically when files are added).
@@ -62,13 +67,42 @@ file(GLOB_RECURSE NIBBLE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp
 # ops.cpp (SIMD rmsnorm/silu/attention) needs it too: g++ contracts _mm256_mul_ps/_add_ps (and _pd) pairs,
 # e.g. exp_ps's final multiply into a softmax sum, and rmsnorm must keep the scalar's per-element math.
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/quant.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/ref_ops.cpp
-  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/quant_avx2.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/kquant_avx2.cpp
-  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/matmul_f.cpp
-  ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/gemm.cpp ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/ops.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+  PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+
+# SIMD kernel tiers. The kernel sources are compiled once per tier, each with that tier's instruction-set flags,
+# into the namespace nibble::simd::<tier> (NIBBLE_SIMD_TIER), and export one Kernels table (table.cpp). The rest
+# of the program is built for the target architecture and picks a table at runtime (dispatch.cpp), so one binary
+# runs on any x86-64 CPU. Tiers never get -march=native: native and release builds run the same kernel code. All
+# kernel sources keep -ffp-contract=off, since they reproduce the scalar rounding bit for bit.
+set(NIBBLE_SIMD_TIER_SOURCES quant_avx2.cpp kquant_avx2.cpp gemm.cpp matmul_f.cpp ops.cpp table.cpp)
+list(TRANSFORM NIBBLE_SIMD_TIER_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/src/backend/cpu/simd/)
+list(REMOVE_ITEM NIBBLE_SOURCES ${NIBBLE_SIMD_TIER_SOURCES})
+set(NIBBLE_SIMD_TIER_FLAGS_avx2 -mavx2 -mfma -mf16c)
+set(NIBBLE_SIMD_TIER_FLAGS_vnni -mavx2 -mfma -mf16c -mavxvnni)
+# Creates object library <name> holding the kernel sources compiled for <tier>.
+function(nibble_simd_tier name tier)
+  add_library(${name} OBJECT ${NIBBLE_SIMD_TIER_SOURCES})
+  target_include_directories(${name} PRIVATE include src)
+  target_compile_options(${name} PRIVATE ${NIBBLE_SIMD_TIER_FLAGS_${tier}} -ffp-contract=off)
+  target_compile_definitions(${name} PRIVATE NIBBLE_SIMD_TIER=${tier})
+  target_link_libraries(${name} PRIVATE nibble_warnings)
+endfunction()
+set(NIBBLE_SIMD_TIERS "")
+if(NIBBLE_SIMD AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  set(NIBBLE_SIMD_TIERS avx2 vnni)
+endif()
+
 # The engine library; its public include directory is include/ (the API), src/ stays private.
 add_library(nibble STATIC ${NIBBLE_SOURCES})
 target_include_directories(nibble PUBLIC include PRIVATE src)
 target_link_libraries(nibble PUBLIC nibble_flags Threads::Threads)
+foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
+  nibble_simd_tier(nibble_simd_${tier} ${tier})
+  target_sources(nibble PRIVATE $<TARGET_OBJECTS:nibble_simd_${tier}>)
+endforeach()
+if(NIBBLE_SIMD_TIERS)
+  target_compile_definitions(nibble PRIVATE NIBBLE_SIMD_TIERS=1)
+endif()
 
 # CLI
 # The CLI. nibble_git.h (the build's git SHA, with a -dirty marker) is generated on every build by
@@ -108,6 +142,13 @@ target_link_libraries(nibble_tests PRIVATE nibble Catch2::Catch2WithMain)
 
 catch_discover_tests(nibble_tests TEST_SPEC "~[e2e]")
 catch_discover_tests(nibble_tests TEST_SPEC "[e2e]" EXTRA_ARGS --allow-running-no-tests TEST_SUFFIX " [e2e]" PROPERTIES LABELS e2e TIMEOUT 7200)
+
+# The SIMD tier objects must define no symbol outside their own namespace (tools/check_simd_symbols.sh).
+foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
+  add_test(NAME simd_symbols_${tier}
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/check_simd_symbols.sh ${tier} $<TARGET_OBJECTS:nibble_simd_${tier}>
+    COMMAND_EXPAND_LISTS)
+endforeach()
 
 # Separate binary: replaces global operator new/delete with a counting hook.
 add_executable(nibble_alloc_tests tests/alloc_tests.cpp)

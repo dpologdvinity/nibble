@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "backend/cpu/cpu_backend.h"
-#include "backend/cpu/simd/simd.h"
+#include "backend/cpu/simd/dispatch.h"
 #include "bench/membw.h"
 #include "commands.h"
 #include "gguf/gguf.h"

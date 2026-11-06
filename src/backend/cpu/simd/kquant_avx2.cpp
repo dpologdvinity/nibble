@@ -23,9 +23,8 @@
 #include "fp16.h"
 #include "quant.h"
 #include "tensor.h"
-#include <nibble/error.h>
 
-namespace nibble::simd {
+namespace nibble::simd::NIBBLE_SIMD_TIER {
 namespace {
 
 using u8 = unsigned char;
@@ -283,7 +282,7 @@ void matmul_rows_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, in
     case DType::Q4_K: return matmul_k<Q4K>(wd, nb, out, xq, y, n, row_begin, row_end);
     case DType::Q5_K: return matmul_k<Q5K>(wd, nb, out, xq, y, n, row_begin, row_end);
     case DType::Q6_K: return matmul_k<Q6K>(wd, nb, out, xq, y, n, row_begin, row_end);
-    default: throw Error("simd::matmul_rows_k: not a k-quant weight type");
+    default: throw_error("simd::matmul_rows_k: not a k-quant weight type");
   }
 }
 
@@ -294,9 +293,9 @@ void gemm_k(const Tensor& w, const BlockQ8_K* xq, float* y, int64_t n, int64_t r
     case DType::Q4_K: return gemm_kt<Q4K>(wd, nb, out, xq, y, n, row_begin, row_end);
     case DType::Q5_K: return gemm_kt<Q5K>(wd, nb, out, xq, y, n, row_begin, row_end);
     case DType::Q6_K: return gemm_kt<Q6K>(wd, nb, out, xq, y, n, row_begin, row_end);
-    default: throw Error("simd::gemm_k: not a k-quant weight type");
+    default: throw_error("simd::gemm_k: not a k-quant weight type");
   }
 }
 
-}  // namespace nibble::simd
+}  // namespace nibble::simd::NIBBLE_SIMD_TIER
 #endif

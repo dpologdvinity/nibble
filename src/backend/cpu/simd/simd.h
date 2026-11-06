@@ -1,7 +1,9 @@
 #pragma once
 // Declarations of the AVX2 (+FMA, +F16C, optionally AVX-VNNI) kernels and the small intrinsics helpers they
-// share. Everything real is guarded by NIBBLE_HAVE_AVX2, so with SIMD off (or on a CPU target without these
-// extensions) this header declares nothing and the scalar paths in ref_ops.cpp are used.
+// share, for the SIMD tier sources only. CMake compiles those sources once per tier (avx2, vnni) with
+// NIBBLE_SIMD_TIER set and the tier's -m flags; everything here then lives in nibble::simd::<tier>. Other code
+// reaches the kernels through the Kernels table in dispatch.h, and in a non-tier source this header declares
+// nothing beyond dispatch.h.
 //
 // Contract for every kernel: it matches the scalar twin named in its comment, either bit for bit (the
 // quantized dots and the tiled GEMM) or within the stated float tolerance (anything whose summation order
@@ -9,8 +11,13 @@
 // the compiler cannot fuse multiply-adds behind our back (see CMakeLists.txt).
 #include <cstdint>
 
-// NIBBLE_SIMD=OFF (cmake) leaves NIBBLE_SIMD_ENABLED undefined: scalar paths only.
-#if defined(NIBBLE_SIMD_ENABLED) && defined(__AVX2__) && defined(__FMA__) && defined(__F16C__)
+#include "backend/cpu/simd/dispatch.h"
+
+// Only the tier sources include this header; CMake compiles them with NIBBLE_SIMD_TIER set to the tier's name
+// (avx2 or vnni) and the tier's -m flags, which define the macros below.
+// Outside a tier source the macros stay undefined and this header declares nothing beyond dispatch.h.
+#if defined(NIBBLE_SIMD_TIER) && defined(NIBBLE_SIMD_ENABLED) && defined(__AVX2__) && defined(__FMA__) && \
+    defined(__F16C__)
 #define NIBBLE_HAVE_AVX2 1
 #include <immintrin.h>
 
@@ -20,40 +27,10 @@
 #endif
 #endif
 
-namespace nibble {
-struct Tensor;
-struct BlockQ4_0;
-struct BlockQ8_0;
-struct BlockQ8_1;
-struct BlockQ5_0;
-struct BlockQ5_1;
-struct BlockQ4_K;
-struct BlockQ5_K;
-struct BlockQ6_K;
-struct BlockQ8_K;
-struct QuantActs;
-}  // namespace nibble
-
-namespace nibble::simd {
-
-// One 32-wide Q8_0 block of 8 tokens, interleaved for the tiled GEMM: qs[g][j] holds token j's quants
-// 4g..4g+3, d[j] its scale as float, sum[j] the sum of its 32 quants. Tokens past n are zero.
-struct alignas(32) BlockQ8_0x8 {
-  int8_t qs[8][8][4];
-  float d[8];
-  int32_t sum[8];
-};
-
-// Name of the instruction set the build compiled in, shown by `nibble info` and recorded in bench rows.
-inline const char* kernel_set() {
-#if defined(NIBBLE_HAVE_AVXVNNI)
-  return "avx2+fma+f16c+avxvnni";
-#elif defined(NIBBLE_HAVE_AVX2)
-  return "avx2+fma+f16c";
-#else
-  return "scalar";
-#endif
-}
+// Everything below, inline helpers included, lives in the tier's own namespace: a helper compiled with -mavxvnni
+// must never be the copy the linker keeps for the avx2 tier (tools/check_simd_symbols.sh enforces it).
+#ifdef NIBBLE_SIMD_TIER
+namespace nibble::simd::NIBBLE_SIMD_TIER {
 
 #ifdef NIBBLE_HAVE_AVX2
 // Horizontal sum of the 8 float lanes (fixed pairing order, so results are reproducible).
@@ -202,4 +179,5 @@ void attention_heads(const float* q, const float* k, const float* v, float* out,
                      float* scratch);
 #endif
 
-}  // namespace nibble::simd
+}  // namespace nibble::simd::NIBBLE_SIMD_TIER
+#endif  // NIBBLE_SIMD_TIER
