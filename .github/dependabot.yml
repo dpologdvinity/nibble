@@ -19,3 +19,7 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build"
+    ignore:
+      # Stay on Ubuntu LTS releases (YY.04 in even years): skip the interim releases up to the next LTS.
+      - dependency-name: ubuntu
+        versions: ["> 24.04, < 26.04"]
