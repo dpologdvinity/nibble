@@ -65,8 +65,9 @@ Transformer::Transformer(const LlamaConfig& c, const Weights& w, Backend& be, in
   try {
     be.reserve({n_ctx, c.n_heads, max_batch, std::max({c.n_embd, c.n_heads * c.head_dim, c.n_ff})});
   } catch (const Error& e) {
-    throw Error(std::string("cannot allocate attention scratch for n_ctx=") + std::to_string(n_ctx) +
-                "; try a smaller n_ctx (-c): " + e.what());
+    // reserve() sizes both attention scratch (n_ctx) and activation scratch (max_batch); its message names which.
+    throw Error("cannot reserve backend scratch for n_ctx=" + std::to_string(n_ctx) +
+                " max_batch=" + std::to_string(max_batch) + "; try a smaller n_ctx (-c): " + e.what());
   }
   const int64_t B = max_batch, E = c.n_embd;
   // KV cache size with overflow checks; spec 6.2 message on failure.
