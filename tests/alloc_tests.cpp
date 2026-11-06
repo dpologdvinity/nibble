@@ -333,3 +333,48 @@ TEST_CASE("Transformer::forward decode and CpuBackend::matmul do not allocate", 
     }
   }
 }
+
+// reserve() must size every scratch buffer up front: the very first forward calls after the Transformer is built
+// (a full n_batch prefill, then decode) allocate nothing and do not grow any backend scratch. The tests above warm
+// up first, so they cannot see a buffer that reserve() under-sizes and the first prefill then grows.
+TEST_CASE("first prefill after construction allocates nothing", "[model][alloc]") {
+  using nibble::DType;
+  struct Case {
+    const char* name;
+    DType base, override_type;
+    bool kdims;
+  };
+  for (const Case& c :
+       {Case{"F16", DType::F16, DType::F16, false}, Case{"Q4_0", DType::Q4_0, DType::Q4_0, false},
+        Case{"Q8_0", DType::Q8_0, DType::Q8_0, false}, Case{"Q5_1+Q8_0", DType::Q5_1, DType::Q8_0, false},
+        Case{"Q4_K+Q6_K+Q5_0", DType::Q4_K, DType::Q6_K, true}}) {
+    DYNAMIC_SECTION(c.name) {
+      nibble::ThreadPool pool(4);
+      nibble::cpu::CpuBackend be(pool);
+      TinyModelOpts mo;
+      (c.kdims ? mo.kquant_dims : mo.quant_dims) = true;
+      for (const char* p : {"blk.0.", "blk.1."}) {
+        mo.tensor_types.emplace_back(std::string(p) + "attn_v.weight", c.override_type);
+        mo.tensor_types.emplace_back(std::string(p) + "ffn_down.weight", c.override_type);
+      }
+      if (c.kdims) mo.tensor_types.emplace_back("token_embd.weight", DType::Q5_0);
+      LoadedTiny m(tiny_model_gguf(3, c.base, false, 259, mo), be);
+      nibble::model::Transformer tr(m.cfg, m.w, be, 64, 8);
+      std::vector<float> logits(static_cast<size_t>(m.cfg.n_vocab));
+      const size_t live = be.live_allocations(), sc = be.scratch_capacity(), xq = be.quant_scratch_capacity();
+      const std::vector<int32_t> p8 = {1, 50, 257, 3, 9, 10, 11, 12};
+      const int32_t one[1] = {7};
+      int64_t n = -1;
+      {
+        Armed a;
+        tr.forward(p8, 0, logits.data());  // full n_batch prefill: the tiled-GEMM paths and their packed scratch
+        for (int i = 0; i < 4; ++i) tr.forward(one, 8 + i, logits.data());
+        n = g_count.load();
+      }
+      CHECK(n == 0);
+      CHECK(be.live_allocations() == live);
+      CHECK(be.scratch_capacity() == sc);
+      CHECK(be.quant_scratch_capacity() == xq);
+    }
+  }
+}

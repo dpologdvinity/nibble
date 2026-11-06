@@ -381,6 +381,27 @@ TEST_CASE("transformer huge n_ctx throws Error naming n_ctx", "[model]") {
   CHECK(be.live_allocations() == base);
 }
 
+// A batch too large for the quantized-activation scratch names max_batch and the real cause, not the attention
+// scratch or n_ctx (shrinking -c would not help).
+TEST_CASE("transformer huge max_batch throws Error naming max_batch", "[model]") {
+  ThreadPool pool(1);
+  cpu::CpuBackend be(pool);
+  Loaded m(tiny_model_gguf(1), be);
+  const size_t base = be.live_allocations();
+  for (int64_t b : {INT64_MAX / 4, INT64_MAX}) {
+    try {
+      model::Transformer t(m.cfg, m.w, be, 64, b);
+      FAIL("no error for max_batch=" << b);
+    } catch (const Error& e) {
+      const std::string msg = e.what();
+      CHECK_THAT(msg, ContainsSubstring("max_batch=" + std::to_string(b)));
+      CHECK_THAT(msg, ContainsSubstring("activation scratch"));
+      CHECK_THAT(msg, !ContainsSubstring("attention scratch"));
+    }
+  }
+  CHECK(be.live_allocations() == base);
+}
+
 #ifndef NDEBUG
 // Spec 6.4: Debug builds check shape agreement at every op call. A valid model must
 // pass every check in all prefill modes.
