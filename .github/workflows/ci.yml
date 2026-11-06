@@ -4,8 +4,8 @@
 #   lint             clang-format, ruff, mypy, shellcheck           (fails fast: the build jobs wait for it)
 #   static-analysis  clang-tidy over src/ and cli/
 #   test             build + unit/integration tests in a matrix: portable, native gcc/clang, scalar kernels,
-#                    AddressSanitizer + UBSan, ThreadSanitizer
-#   coverage         gcc --coverage build, gcovr report (artifact + job summary) with a minimum line coverage
+#                    AddressSanitizer + UBSan, ThreadSanitizer; JUnit results go to Codecov Test Analytics
+#   coverage         gcc --coverage build, gcovr report (artifact + job summary + Codecov) with a minimum line coverage
 #   fuzz             60 s each of the GGUF-parser and full-load libFuzzer targets on a seeded corpus
 #   package          release tarballs and the container image (see package.yml)
 #
@@ -138,28 +138,36 @@ jobs:
     needs: lint
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}  # empty without secrets (forks, Dependabot, release.yml): upload skipped
     strategy:
       fail-fast: true
       matrix:
         include:
           - name: portable gcc
+            flag: portable-gcc
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
             kernels: scalar
           - name: native gcc
+            flag: native-gcc
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
             kernels: avx2
           - name: native clang
+            flag: native-clang
             cxx: clang++
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
             kernels: avx2
           - name: scalar kernels on a native build
+            flag: scalar-native
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON -DNIBBLE_SIMD=OFF
             kernels: scalar
           - name: asan+ubsan
+            flag: asan-ubsan
             cmake: -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=address,undefined
             kernels: avx2
             sanitizer: true
           - name: tsan
+            flag: tsan
             cmake: -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=thread
             kernels: avx2
             sanitizer: true
@@ -203,7 +211,19 @@ jobs:
             scalar) [[ "$kernels" == scalar ]] ;;
           esac
       - name: Test (everything except the end-to-end tests)
-        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+        # ctest writes the JUnit report relative to the test directory: build/junit.xml.
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900 --output-junit junit.xml
+      # Codecov Test Analytics: per-test pass/fail history and flaky-test detection. Runs when tests fail too.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ env.CODECOV_TOKEN }}
+          report_type: test_results
+          files: build/junit.xml
+          flags: ${{ matrix.flag }}
+          disable_search: true
+          fail_ci_if_error: true
 
   coverage:
     name: coverage
