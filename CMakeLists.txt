@@ -84,7 +84,10 @@ set(NIBBLE_SIMD_TIER_FLAGS_vnni -mavx2 -mfma -mf16c -mavxvnni)
 function(nibble_simd_tier name tier)
   add_library(${name} OBJECT ${NIBBLE_SIMD_TIER_SOURCES})
   target_include_directories(${name} PRIVATE include src)
-  target_compile_options(${name} PRIVATE ${NIBBLE_SIMD_TIER_FLAGS_${tier}} -ffp-contract=off)
+  # -O2 even in Debug builds: unoptimised code leaves inline helpers (fp16_to_fp32, Tensor::rows, std templates)
+  # out of line, and those weak copies, compiled with the tier's instruction set, could be the ones the linker
+  # keeps for the whole program (tools/check_simd_symbols.sh). Sanitizer and debug-info flags still apply.
+  target_compile_options(${name} PRIVATE ${NIBBLE_SIMD_TIER_FLAGS_${tier}} -ffp-contract=off -O2)
   target_compile_definitions(${name} PRIVATE NIBBLE_SIMD_TIER=${tier})
   target_link_libraries(${name} PRIVATE nibble_warnings)
 endfunction()

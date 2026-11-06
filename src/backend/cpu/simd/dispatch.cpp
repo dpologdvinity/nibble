@@ -10,6 +10,10 @@
 #include <nibble/error.h>
 
 #ifdef NIBBLE_SIMD_TIERS
+#include <cpuid.h>
+#endif
+
+#ifdef NIBBLE_SIMD_TIERS
 namespace nibble::simd::avx2 {
 extern const Kernels kTable;
 }
@@ -52,7 +56,10 @@ CpuFeatures cpu_features() {
   f.avx2 = __builtin_cpu_supports("avx2");
   f.fma = __builtin_cpu_supports("fma");
   f.f16c = __builtin_cpu_supports("f16c");
-  f.avxvnni = __builtin_cpu_supports("avxvnni");
+  // AVX-VNNI is CPUID leaf 7, sub-leaf 1, EAX bit 4. Read it directly: clang 18's __builtin_cpu_supports does not
+  // know "avxvnni". It uses the same YMM register state as AVX2, whose OS support the avx2 check already covers.
+  unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
+  f.avxvnni = __get_cpuid_count(7, 1, &eax, &ebx, &ecx, &edx) != 0 && (eax & (1u << 4)) != 0;
 #endif
   return f;
 }
