@@ -1,6 +1,7 @@
 # nibble
 
 [![CI](https://github.com/dpologdvinity/nibble/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/dpologdvinity/nibble/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/dpologdvinity/nibble/branch/master/graph/badge.svg)](https://codecov.io/gh/dpologdvinity/nibble)
 [![License: MIT](https://img.shields.io/github/license/dpologdvinity/nibble)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Platform: Linux x86-64](https://img.shields.io/badge/platform-linux--x86--64-lightgrey.svg)](#build)

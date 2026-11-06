@@ -210,6 +210,10 @@ jobs:
     needs: lint
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      # Empty for fork and Dependabot pull requests and for release.yml's call, which get no secrets; the upload
+      # step is skipped then, and the gcovr threshold above still gates the job.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -245,6 +249,14 @@ jobs:
           { echo '### Coverage (src/ and cli/)'; echo '```'; cat coverage/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
         env:
           MIN_LINE_COVERAGE: "80"
+      - name: Upload to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ env.CODECOV_TOKEN }}
+          files: coverage/coverage.xml
+          disable_search: true
+          fail_ci_if_error: true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
