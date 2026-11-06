@@ -10,9 +10,12 @@
 
 namespace nibble {
 
+// Both conversions are always inlined: the SIMD tier sources call them, and an out-of-line copy compiled with a
+// tier's instruction set must never exist for the linker to pick (tools/check_simd_symbols.sh).
+
 // Widens the half-precision bit pattern h to a float. Handles zeros, subnormals (normalized into float
 // normals), infinities and NaNs (payload bits preserved, shifted up).
-inline float fp16_to_fp32(uint16_t h) {
+[[gnu::always_inline]] inline float fp16_to_fp32(uint16_t h) {
   uint32_t sign = (static_cast<uint32_t>(h) & 0x8000u) << 16;
   uint32_t exp = (h >> 10) & 0x1Fu;
   uint32_t man = h & 0x3FFu;
@@ -40,7 +43,7 @@ inline float fp16_to_fp32(uint16_t h) {
 
 // Narrows f to the nearest half, rounding ties to even (the IEEE default). Overflow gives +-infinity,
 // values below half's smallest subnormal give signed zero, NaN stays NaN (quiet bit set).
-inline uint16_t fp32_to_fp16(float f) {
+[[gnu::always_inline]] inline uint16_t fp32_to_fp16(float f) {
   uint32_t x;
   std::memcpy(&x, &f, sizeof x);
   uint32_t sign = (x >> 16) & 0x8000u;
