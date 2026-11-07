@@ -5,6 +5,8 @@
 #
 # The binary is built for plain x86-64 and picks its kernels at startup: AVX-VNNI or AVX2 where the CPU has them,
 # scalar otherwise, so the image runs on any x86-64 CPU. NIBBLE_KERNELS=scalar|avx2|avx2+vnni forces a tier.
+# The build stage also checks the kernel tier objects with tools/check_simd_symbols.sh: this image's compiler is not
+# the one CI tests with, and a leaked tier symbol would make the binary crash on CPUs without AVX2.
 
 FROM ubuntu:26.04 AS build
 # Revision reported by `nibble --version` (.git is not in the build context): --build-arg GIT_SHA=$(git rev-parse --short HEAD)
@@ -18,9 +20,11 @@ COPY CMakeLists.txt LICENSE ./
 COPY include include
 COPY src src
 COPY cli cli
-COPY tools/gen_git_header.cmake tools/gen_git_header.cmake
+COPY tools/gen_git_header.cmake tools/check_simd_symbols.sh tools/
 RUN cmake -S . -B /build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_BUILD_TESTS=OFF -DNIBBLE_NATIVE=OFF \
     && cmake --build /build --target nibble_cli -j"$(nproc)" \
+    && tools/check_simd_symbols.sh avx2 /build/CMakeFiles/nibble_simd_avx2.dir/src/backend/cpu/simd/*.o \
+    && tools/check_simd_symbols.sh vnni /build/CMakeFiles/nibble_simd_vnni.dir/src/backend/cpu/simd/*.o \
     && strip /build/nibble
 
 FROM ubuntu:26.04

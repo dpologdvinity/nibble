@@ -84,10 +84,12 @@ set(NIBBLE_SIMD_TIER_FLAGS_vnni -mavx2 -mfma -mf16c -mavxvnni)
 function(nibble_simd_tier name tier)
   add_library(${name} OBJECT ${NIBBLE_SIMD_TIER_SOURCES})
   target_include_directories(${name} PRIVATE include src)
-  # -O2 even in Debug builds: unoptimised code leaves inline helpers (fp16_to_fp32, Tensor::rows, std templates)
-  # out of line, and those weak copies, compiled with the tier's instruction set, could be the ones the linker
-  # keeps for the whole program (tools/check_simd_symbols.sh). Sanitizer and debug-info flags still apply.
-  target_compile_options(${name} PRIVATE ${NIBBLE_SIMD_TIER_FLAGS_${tier}} -ffp-contract=off -O2)
+  # -O2 in builds that are not already optimised (Debug, or no build type): unoptimised code leaves inline helpers
+  # (std templates) out of line, and those weak copies, compiled with the tier's instruction set, could be the ones
+  # the linker keeps for the whole program (tools/check_simd_symbols.sh). Optimised builds keep their own level, so
+  # release kernels are compiled exactly as before. Sanitizer and debug-info flags still apply.
+  target_compile_options(${name} PRIVATE ${NIBBLE_SIMD_TIER_FLAGS_${tier}} -ffp-contract=off
+    $<$<NOT:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>>:-O2>)
   target_compile_definitions(${name} PRIVATE NIBBLE_SIMD_TIER=${tier})
   target_link_libraries(${name} PRIVATE nibble_warnings)
 endfunction()
@@ -223,8 +225,8 @@ nibble_cli_test(cli_info_escapes_control 0 ARGS info ${NIBBLE_DATA}/escape.gguf
   FORBID_REGEX "%ESC%"
   REGEX "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\"")
 nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*nonexistent")
-# NIBBLE_KERNELS from the environment: forcing the scalar kernels always works; an unknown value is a usage error
-# reported once, before any work (the cached select() error path).
+# NIBBLE_KERNELS from the environment: forcing the scalar kernels always works; an unknown value is an error,
+# raised when the first backend is created (the cached select() error path).
 add_test(NAME cli_kernels_forced_scalar COMMAND nibble_cli info ${NIBBLE_DATA}/small.gguf)
 set_tests_properties(cli_kernels_forced_scalar PROPERTIES ENVIRONMENT NIBBLE_KERNELS=scalar
   PASS_REGULAR_EXPRESSION "kernels: scalar")

@@ -83,7 +83,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 Requires CMake ≥ 3.25 and g++ 13 or clang 18. Catch2 is fetched at configure time.
 
 The SIMD kernels are chosen at startup, from what the CPU supports: AVX2 + FMA + F16C with AVX-VNNI, the same
-without AVX-VNNI, or the scalar kernels. Every build contains all three, so a binary runs on any x86-64 CPU.
+without AVX-VNNI, or the scalar kernels. An x86-64 build contains all three (unless `-DNIBBLE_SIMD=OFF`), so the
+same binary runs on any x86-64 CPU; other targets build the scalar kernels only.
 `NIBBLE_NATIVE` defaults to ON (`-march=native` for everything except the kernels), so a native build may not
 run on an older CPU than the build host; `-DNIBBLE_NATIVE=OFF` builds for plain x86-64, which is how the
 release binaries and the container image are built. `-DNIBBLE_SIMD=OFF` leaves the SIMD kernels out (scalar

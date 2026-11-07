@@ -144,7 +144,8 @@ The kernel sources in `cpu/simd/` are compiled twice, as the tiers `avx2` (`-mav
 same plus `-mavxvnni`), each into its own namespace (`nibble::simd::avx2`, `nibble::simd::vnni`), and each tier
 exports one `Kernels` table of function pointers (`table.cpp`). The rest of the program is compiled for the build's
 target (`-march=native` by default, plain x86-64 for releases) and reaches the kernels only through
-`simd::select()`, which `CpuBackend` calls once at construction: it checks the CPU with `__builtin_cpu_supports` and
+`simd::select()`, which `CpuBackend` calls once at construction: it checks the CPU (`__builtin_cpu_supports` for
+AVX2/FMA/F16C, CPUID leaf 7.1 for AVX-VNNI) and
 returns the strongest table the CPU can run, or `nullptr` for the scalar `ref_ops` kernels. `NIBBLE_KERNELS`
 (`scalar`, `avx2`, `avx2+vnni`) forces a tier and is an error if the CPU cannot run it. `nibble info` prints the
 tier in use. Because the tiers never take `-march=native`, native and release builds run the same kernel code.
@@ -152,7 +153,8 @@ tier in use. Because the tiers never take `-march=native`, native and release bu
 One rule keeps this safe: a tier object must not define any symbol outside its namespace. An inline function or
 template instantiation shared with baseline code would be compiled with the tier's instruction set, and the linker
 may keep that copy for the whole program. The tier sources therefore throw through `simd::throw_error` instead of
-constructing `Error`, and `tools/check_simd_symbols.sh` (a CTest test) fails the build on any such symbol.
+constructing `Error`, the helpers they share are always inlined, and `tools/check_simd_symbols.sh` rejects any such
+symbol: it runs as a CTest test in every build with tests, and in the container image's build stage.
 
 ## Numerical fidelity: the oracle design
 
