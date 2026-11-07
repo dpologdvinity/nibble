@@ -1,0 +1,17 @@
+# typos config: https://github.com/crate-ci/typos
+[files]
+extend-exclude = [
+  "*.{gif,png,jpg,jpeg,webp,ico,svg,pdf,woff,woff2,ttf}",
+]
+
+[default.extend-words]
+# CMake -DOUT=... script argument (output path) in the git-header generator.
+"dout" = "dout"
+# "ba" is a block-A variable in the quantization kernels and golden data.
+"ba" = "ba"
+# "hel" is a deliberate partial-word tokenizer test input ("hel" + "lo").
+"hel" = "hel"
+# "mis-shaped" hyphenated prefix.
+"mis" = "mis"
+# "Nd" is the Unicode general category (decimal digit).
+"nd" = "nd"

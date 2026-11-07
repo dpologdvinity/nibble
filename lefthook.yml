@@ -1,0 +1,21 @@
+# Git hooks managed by lefthook (https://lefthook.dev).
+# Enable locally with `lefthook install`; skip once with `LEFTHOOK=0 git commit`.
+pre-commit:
+  parallel: true
+  commands:
+    gitleaks:
+      # Block commits that stage secrets (API keys, tokens, passwords).
+      run: gitleaks git --staged --no-banner --redact
+    ruff-check:
+      glob: "{bench,tools}/*.py"
+      run: ruff check --force-exclude {staged_files}
+    ruff-format:
+      glob: "{bench,tools}/*.py"
+      run: ruff format --check --force-exclude {staged_files}
+    clang-format:
+      glob: "*.{c,cc,cpp,h,hpp}"
+      run: clang-format --dry-run --Werror {staged_files}
+    typos:
+      # typos would scan binary assets when handed explicit paths.
+      exclude: "*.{gif,png,jpg,jpeg,webp,ico,svg,pdf,woff,woff2,ttf}"
+      run: typos --force-exclude {staged_files}

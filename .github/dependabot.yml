@@ -1,4 +1,5 @@
-# Keeps the pinned GitHub Actions (referenced by commit SHA in .github/workflows) up to date.
+# Weekly dependency updates. Minor/patch bumps are grouped into one PR per
+# ecosystem; major bumps arrive as individual PRs for separate review.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -7,19 +8,27 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci"
+      include: scope
+    groups:
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
     commit-message:
-      prefix: "build"
+      prefix: "chore"
+      include: scope
+    groups:
+      pip-minor-patch:
+        update-types: ["minor", "patch"]
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
     commit-message:
-      prefix: "build"
-    ignore:
-      # Stay on Ubuntu LTS releases (YY.04 in even years): skip the interim releases up to the next LTS.
-      - dependency-name: ubuntu
-        versions: ["> 24.04, < 26.04"]
+      prefix: "chore"
+      include: scope
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
