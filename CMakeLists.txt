@@ -223,6 +223,16 @@ nibble_cli_test(cli_info_escapes_control 0 ARGS info ${NIBBLE_DATA}/escape.gguf
   FORBID_REGEX "%ESC%"
   REGEX "evil = \\\\x1b\\[31mred\\\\n.*\"\\\\x1b\\[0m\"")
 nibble_cli_test(cli_info_missing 1 ARGS info /nonexistent.gguf REGEX "error: .*nonexistent")
+# NIBBLE_KERNELS from the environment: forcing the scalar kernels always works; an unknown value is a usage error
+# reported once, before any work (the cached select() error path).
+add_test(NAME cli_kernels_forced_scalar COMMAND nibble_cli info ${NIBBLE_DATA}/small.gguf)
+set_tests_properties(cli_kernels_forced_scalar PROPERTIES ENVIRONMENT NIBBLE_KERNELS=scalar
+  PASS_REGULAR_EXPRESSION "kernels: scalar")
+add_test(NAME cli_kernels_unknown COMMAND nibble_cli info ${NIBBLE_DATA}/small.gguf)
+set_tests_properties(cli_kernels_unknown PROPERTIES ENVIRONMENT NIBBLE_KERNELS=avx512 WILL_FAIL TRUE)
+add_test(NAME cli_kernels_unknown_message COMMAND nibble_cli info ${NIBBLE_DATA}/small.gguf)
+set_tests_properties(cli_kernels_unknown_message PROPERTIES ENVIRONMENT NIBBLE_KERNELS=avx512
+  PASS_REGULAR_EXPRESSION "error: NIBBLE_KERNELS=\"avx512\" is not one of: scalar, avx2, avx2\\+vnni")
 nibble_cli_test(cli_info_q6k 0 ARGS info ${NIBBLE_DATA}/q6k.gguf REGEX "w +Q6_K +\\[256\\]")
 nibble_cli_test(cli_usage 2 ARGS frobnicate REGEX "unknown subcommand")
 # --help / help print the usage to stdout and succeed; --version prints the build's git SHA.
