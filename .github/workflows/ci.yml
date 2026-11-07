@@ -294,7 +294,7 @@ jobs:
           files: coverage/coverage.xml
           disable_search: true
           fail_ci_if_error: true
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage
           path: coverage/
