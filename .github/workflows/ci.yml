@@ -3,7 +3,8 @@
 #   environment      provisions the toolchain and the pinned Python tools (cached) and fetches Catch2 once
 #   lint             clang-format, ruff, mypy, shellcheck           (fails fast: the build jobs wait for it)
 #   static-analysis  clang-tidy over src/ and cli/
-#   test             build + unit/integration tests in a matrix: portable, native gcc/clang, scalar kernels,
+#   test             build + unit/integration tests in a matrix: portable (runtime-dispatched, as released; also run
+#                    with NIBBLE_KERNELS=avx2), native gcc/clang, scalar kernels,
 #                    AddressSanitizer + UBSan, ThreadSanitizer; JUnit results go to Codecov Test Analytics
 #   coverage         gcc --coverage build, gcovr report (artifact + job summary + Codecov) with a minimum line coverage
 #   fuzz             60 s each of the GGUF-parser and full-load libFuzzer targets on a seeded corpus
@@ -144,10 +145,11 @@ jobs:
       fail-fast: true
       matrix:
         include:
+          # The release-shaped build: plain x86-64, kernels chosen at runtime (the runners have AVX2).
           - name: portable gcc
             flag: portable-gcc
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
-            kernels: scalar
+            kernels: avx2
           - name: native gcc
             flag: native-gcc
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
@@ -203,7 +205,7 @@ jobs:
                 -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build
         run: cmake --build build -j "$(nproc)"
-      - name: Check the expected kernel set was compiled in
+      - name: Check the expected kernel tier is selected
         run: |
           kernels=$(build/nibble info build/tests/data/small.gguf | sed -n 's/^kernels: //p')
           echo "kernels: $kernels"
@@ -214,6 +216,13 @@ jobs:
       - name: Test (everything except the end-to-end tests)
         # ctest writes the JUnit report relative to the test directory: build/junit.xml.
         run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900 --output-junit junit.xml
+      # The default run uses the strongest tier the runner has; force the others so each tier runs on every push
+      # (NIBBLE_KERNELS=avx2+vnni errors on a runner without AVX-VNNI, so only the tiers every runner has).
+      - name: Test with the AVX2 tier and the scalar kernels forced
+        if: matrix.flag == 'portable-gcc'
+        run: |
+          NIBBLE_KERNELS=avx2 ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+          NIBBLE_KERNELS=scalar build/nibble info build/tests/data/small.gguf | grep -x 'kernels: scalar'
       # Codecov Test Analytics: per-test pass/fail history and flaky-test detection. Runs when tests fail too.
       - name: Upload test results to Codecov
         if: ${{ !cancelled() && env.CODECOV_TOKEN != '' }}
@@ -255,8 +264,14 @@ jobs:
           cmake --build build -j "$(nproc)"
       - name: Test
         run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
+      # Again with the scalar kernels forced, so the backend's scalar branches (taken on CPUs without AVX2) are
+      # exercised and counted too; gcov accumulates both runs.
+      - name: Test with the scalar kernels forced
+        run: NIBBLE_KERNELS=scalar ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 1800
       - name: Coverage report
         run: |
+          # --merge-lines: the SIMD kernels are compiled once per tier, so each source line has one copy per tier; a
+          # line counts as covered when any copy ran (the runners have no AVX-VNNI, so the vnni copy never runs).
           # no_working_dir_found/source_not_found only come from CMake's compiler-id probes and Catch2, which the
           # --filter flags exclude from the report anyway.
           set -o pipefail  # a gcovr failure (or the threshold) must fail the step, not be masked by tee
@@ -265,6 +280,7 @@ jobs:
                 --exclude-directories '.*\.deps-cache' \
                 --gcov-ignore-parse-errors=negative_hits.warn \
                 --gcov-ignore-errors=no_working_dir_found --gcov-ignore-errors=source_not_found \
+                --merge-lines \
                 --print-summary --xml-pretty --xml coverage/coverage.xml --html-details coverage/index.html \
                 --fail-under-line "${MIN_LINE_COVERAGE}" | tee coverage/summary.txt
           { echo '### Coverage (src/ and cli/)'; echo '```'; cat coverage/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

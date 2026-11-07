@@ -799,23 +799,25 @@ TEST_CASE("golden: dequantize_row Q4_K/Q5_K/Q6_K bitwise equals dequantize_row_q
   }
 }
 
-#include "backend/cpu/simd/simd.h"
-#ifdef NIBBLE_HAVE_AVX2
+#include "backend/cpu/simd/dispatch.h"
+#include "simd_test_util.h"
 // Decision 3: the AVX2 quantizer must reproduce quantize_row_q8_0_ref bytes, including the tie cases
 // that _mm256_round_ps(nearest) would round to even.
 // The AVX2 Q8_0 quantizer reproduces the reference, including exact ties that a round-to-nearest-even
 // instruction would get wrong.
 TEST_CASE("golden: simd quantize_row_q8_0 matches quantize_row_q8_0_ref bytes", "[quant][golden][simd]") {
-  for (const auto& c : golden::kQuantCases) {
-    CAPTURE(c.name);
-    BlockQ8_0 y;
-    simd::quantize_row_q8_0(c.x, &y, 32);
-    REQUIRE(y.d == c.q8_d);
-    for (int j = 0; j < 32; ++j) {
-      CAPTURE(j);
-      REQUIRE(int{y.qs[j]} == int{c.q8_qs[j]});
+  test::for_each_tier([&](const simd::Kernels& k) {
+    for (const auto& c : golden::kQuantCases) {
+      CAPTURE(c.name);
+      BlockQ8_0 y;
+      k.quantize_row_q8_0(c.x, &y, 32);
+      REQUIRE(y.d == c.q8_d);
+      for (int j = 0; j < 32; ++j) {
+        CAPTURE(j);
+        REQUIRE(int{y.qs[j]} == int{c.q8_qs[j]});
+      }
     }
-  }
+  });
 }
 
 // Q8_0 x Q8_0 is not checked here: the golden activations are random bytes that include -128, which the
@@ -823,16 +825,17 @@ TEST_CASE("golden: simd quantize_row_q8_0 matches quantize_row_q8_0_ref bytes", 
 // the golden-pinned scalar dot instead.
 // The AVX2 Q4_0 dot equals ggml's generic dot bit for bit.
 TEST_CASE("golden: simd dot_q4_0_q8_0 bitwise equals ggml generic dot", "[quant][golden][simd]") {
-  for (const auto& c : golden::kDotCases) {
-    CAPTURE(c.seed, c.n);
-    const int nb = c.n / 32;
-    std::vector<BlockQ8_0> w8(static_cast<size_t>(nb)), a8(w8.size());
-    std::vector<BlockQ4_0> w4(static_cast<size_t>(nb));
-    golden::Rng r{c.seed};
-    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(w8.data()), nb);
-    golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(a8.data()), nb);
-    golden::fill_q4_0(r, reinterpret_cast<uint8_t*>(w4.data()), nb);
-    REQUIRE(f32_bits(simd::dot_q4_0_q8_0(w4.data(), a8.data(), nb)) == c.q4q8_bits);
-  }
+  test::for_each_tier([&](const simd::Kernels& k) {
+    for (const auto& c : golden::kDotCases) {
+      CAPTURE(c.seed, c.n);
+      const int nb = c.n / 32;
+      std::vector<BlockQ8_0> w8(static_cast<size_t>(nb)), a8(w8.size());
+      std::vector<BlockQ4_0> w4(static_cast<size_t>(nb));
+      golden::Rng r{c.seed};
+      golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(w8.data()), nb);
+      golden::fill_q8_0(r, reinterpret_cast<uint8_t*>(a8.data()), nb);
+      golden::fill_q4_0(r, reinterpret_cast<uint8_t*>(w4.data()), nb);
+      REQUIRE(f32_bits(k.dot_q4_0_q8_0(w4.data(), a8.data(), nb)) == c.q4q8_bits);
+    }
+  });
 }
-#endif

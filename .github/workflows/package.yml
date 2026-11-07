@@ -17,31 +17,26 @@ on:
 
 jobs:
   binaries:
-    name: binary (${{ matrix.suffix }})
+    # One binary for plain x86-64: it picks the AVX-VNNI, AVX2 or scalar kernels at startup (runtime dispatch).
+    name: binary (linux-x86_64)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     timeout-minutes: 30
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          # AVX2 + FMA + F16C kernels: x86-64-v3 CPUs (Intel Haswell / AMD Excavator or newer; older parts die with SIGILL).
-          - suffix: linux-x86_64-avx2
-            march: x86-64-v3
-          # Scalar kernels only: runs anywhere, much slower.
-          - suffix: linux-x86_64-portable
-            march: x86-64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_BUILD_TESTS=OFF -DNIBBLE_NATIVE=OFF \
-                -DCMAKE_CXX_FLAGS="-march=${{ matrix.march }}"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_BUILD_TESTS=OFF -DNIBBLE_NATIVE=OFF
           cmake --build build --target nibble_cli -j "$(nproc)"
           strip build/nibble
-      - name: Smoke test
-        run: build/nibble --version && build/nibble --help > /dev/null
+      - name: Smoke test (runs, and reports a known kernel tier; the scalar tier can be forced)
+        run: |
+          build/nibble --version
+          build/nibble --help > /dev/null
+          printf 'GGUF\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > empty.gguf  # v3, no tensors, no metadata
+          build/nibble info empty.gguf | grep -Ex 'kernels: (scalar|avx2\+fma\+f16c(\+avxvnni)?)'
+          NIBBLE_KERNELS=scalar build/nibble info empty.gguf | grep -x 'kernels: scalar'
       - name: Package
         id: pkg
         env:
@@ -49,7 +44,7 @@ jobs:
         run: |
           version="$INPUT_VERSION"
           [ -n "$version" ] || version="$(git rev-parse --short HEAD)"
-          name="nibble-${version}-${{ matrix.suffix }}"
+          name="nibble-${version}-linux-x86_64"
           mkdir -p "dist/$name"
           cp build/nibble LICENSE README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
@@ -89,6 +84,13 @@ jobs:
           tags: nibble:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: The image selects a kernel tier, and runs with the scalar kernels forced
+        run: |
+          printf 'GGUF\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > empty.gguf  # v3, no tensors, no metadata
+          docker run --rm -v "$PWD/empty.gguf:/empty.gguf:ro" nibble:ci info /empty.gguf \
+            | grep -Ex 'kernels: (scalar|avx2\+fma\+f16c(\+avxvnni)?)'
+          docker run --rm -e NIBBLE_KERNELS=scalar -v "$PWD/empty.gguf:/empty.gguf:ro" nibble:ci info /empty.gguf \
+            | grep -x 'kernels: scalar'
       - name: The image must report this commit (not "unknown")
         run: test "$(docker run --rm nibble:ci --version)" = "nibble ${GITHUB_SHA::7}"
       - name: Log in to ghcr.io

@@ -15,7 +15,7 @@ how to build and use it see [README.md](README.md); for how to work on it see [C
 | language | C++20; run-time errors are `nibble::Error` exceptions |
 | build | CMake ≥ 3.25, one static library, one CLI executable, Catch2 tests |
 | runtime dependencies | the C++ standard library and pthreads, nothing else |
-| compute | scalar C++ reference kernels plus AVX2 + FMA + F16C kernels (AVX-VNNI where present), chosen at compile time |
+| compute | scalar C++ reference kernels plus AVX2 + FMA + F16C kernels (AVX-VNNI where present), chosen at startup |
 | model format | GGUF v2/v3, memory-mapped; F32, F16 and the quantized types Q4_0, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K |
 | architectures | `qwen2` (Qwen2.5) and `llama` (Llama 3.x, TinyLlama) |
 | test oracle | a pinned [llama.cpp](https://github.com/ggml-org/llama.cpp) release, used only by tests and tools, never linked into nibble |
@@ -36,7 +36,8 @@ src/                 the engine
   model/               LlamaConfig, Weights (tensor binding), Transformer (the forward pass)
   backend/             Backend interface and the CPU implementation
     cpu/                 CpuBackend, ref_ops (scalar kernels)
-    cpu/simd/            AVX2 kernels: float matmul, quantized dots, tiled GEMM, elementwise ops
+    cpu/simd/            AVX2 kernels (float matmul, quantized dots, tiled GEMM, elementwise ops), one copy per
+                         CPU tier, and dispatch.{h,cpp}, which picks a tier at runtime
   bench/               memory-bandwidth probe used by `nibble bench --mem`
   util/                escape_control (safe printing), FunctionRef
 cli/                 the `nibble` command: info, run, chat, bench
@@ -137,6 +138,24 @@ tile over a packed, interleaved copy of the activations (`gemm.cpp`); float weig
 k-quants use a 4-row × 4-token tile (`gemm_k` in `kquant_avx2.cpp`) that unpacks each weight super-block once per
 tile. Q5_1 and decode (`n < 4`) use the row kernels.
 
+### Kernel selection at runtime
+
+The kernel sources in `cpu/simd/` are compiled twice, as the tiers `avx2` (`-mavx2 -mfma -mf16c`) and `vnni` (the
+same plus `-mavxvnni`), each into its own namespace (`nibble::simd::avx2`, `nibble::simd::vnni`), and each tier
+exports one `Kernels` table of function pointers (`table.cpp`). The rest of the program is compiled for the build's
+target (`-march=native` by default, plain x86-64 for releases) and reaches the kernels only through
+`simd::select()`, which `CpuBackend` calls once at construction: it checks the CPU (`__builtin_cpu_supports` for
+AVX2/FMA/F16C, CPUID leaf 7.1 for AVX-VNNI) and
+returns the strongest table the CPU can run, or `nullptr` for the scalar `ref_ops` kernels. `NIBBLE_KERNELS`
+(`scalar`, `avx2`, `avx2+vnni`) forces a tier and is an error if the CPU cannot run it. `nibble info` prints the
+tier in use. Because the tiers never take `-march=native`, native and release builds run the same kernel code.
+
+One rule keeps this safe: a tier object must not define any symbol outside its namespace. An inline function or
+template instantiation shared with baseline code would be compiled with the tier's instruction set, and the linker
+may keep that copy for the whole program. The tier sources therefore throw through `simd::throw_error` instead of
+constructing `Error`, the helpers they share are always inlined, and `tools/check_simd_symbols.sh` rejects any such
+symbol: it runs as a CTest test in every build with tests, and in the container image's build stage.
+
 ## Numerical fidelity: the oracle design
 
 The central engineering decision is *bit-exactness by construction*, in three links:
@@ -206,8 +225,9 @@ multi-gigabyte model files and are not run in CI; everything else is.
 
 ## Key decisions and trade-offs
 
-* **Compile-time ISA selection.** A binary built with `-march=native` runs only on CPUs at least as capable as the
-  build host. This keeps the dispatch cost zero and the code simple; runtime dispatch is future work.
+* **Runtime tier selection, per call through a table.** One binary runs on any x86-64 CPU. The cost is one indirect
+  call per matmul or op call, each of which does thousands of operations; the kernels themselves are unchanged and
+  bit-identical across tiers.
 * **Scalar twins instead of intrinsics-only.** Every optimized kernel keeps a readable twin. This costs code but makes
   correctness checkable and keeps non-AVX2 targets working.
 * **The k-quant tile shares the row kernel's arithmetic.** `tile_k<W, R, T>` is the only implementation; decode runs it
@@ -219,4 +239,4 @@ multi-gigabyte model files and are not run in CI; everything else is.
 
 ## Where to go next
 
-Planned work is a CUDA backend behind the existing `Backend` interface and runtime CPU dispatch.
+Planned work is a CUDA backend behind the existing `Backend` interface.

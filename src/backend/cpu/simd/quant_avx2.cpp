@@ -14,9 +14,8 @@
 #include "fp16.h"
 #include "quant.h"
 #include "tensor.h"
-#include <nibble/error.h>
 
-namespace nibble::simd {
+namespace nibble::simd::NIBBLE_SIMD_TIER {
 namespace {
 
 using u8 = unsigned char;
@@ -169,7 +168,7 @@ void matmul_t(const u8* w, int64_t nb, int64_t out, const A* xq, float* y, int64
 // (round_half_away_ps) and pack to int8 with saturating packs. A block containing a NaN gets a NaN scale and
 // all-zero quants, as in the scalar quantizer.
 void quantize_row_q8_0(const float* x, BlockQ8_0* y, int64_t n) {
-  if (n < 0 || n % kQK != 0) throw Error("quant: length must be a multiple of 32");
+  if (n < 0 || n % kQK != 0) throw_error("quant: length must be a multiple of 32");
   const __m256 sign = _mm256_set1_ps(-0.0f);
   u8* out = reinterpret_cast<u8*>(y);
   for (int64_t b = 0; b < n / kQK; ++b, x += kQK, out += sizeof(BlockQ8_0)) {
@@ -237,9 +236,9 @@ void matmul_rows_q(const Tensor& w, const QuantActs& xq, float* y, int64_t n, in
     case DType::Q4_K:
     case DType::Q5_K:
     case DType::Q6_K: return matmul_rows_k(w, xq.q8_K, y, n, row_begin, row_end);
-    default: throw Error("simd::matmul_rows_q: not a quantized weight type");
+    default: throw_error("simd::matmul_rows_q: not a quantized weight type");
   }
 }
 
-}  // namespace nibble::simd
+}  // namespace nibble::simd::NIBBLE_SIMD_TIER
 #endif

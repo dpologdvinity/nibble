@@ -5,7 +5,7 @@
 #include "fp16.h"
 #include "tensor.h"
 
-namespace nibble::simd {
+namespace nibble::simd::NIBBLE_SIMD_TIER {
 namespace {
 
 // y[t*out + r] for r in [rb, re): 4 rows share each x load; 8-wide FMA accumulators per row.
@@ -75,5 +75,5 @@ void embed_row_f16(const uint16_t* row, float* out, int64_t d) {
   for (; k < d; ++k) out[k] = fp16_to_fp32(row[k]);
 }
 
-}  // namespace nibble::simd
+}  // namespace nibble::simd::NIBBLE_SIMD_TIER
 #endif

@@ -8,7 +8,7 @@
 
 #include "tensor.h"
 
-namespace nibble::simd {
+namespace nibble::simd::NIBBLE_SIMD_TIER {
 namespace {
 
 // Horizontal sum of the 4 double lanes.
@@ -138,5 +138,5 @@ void attention_heads(const float* q, const float* k, const float* v, float* out,
   }
 }
 
-}  // namespace nibble::simd
+}  // namespace nibble::simd::NIBBLE_SIMD_TIER
 #endif

@@ -17,7 +17,7 @@
 #include "quant.h"
 #include "tensor.h"
 
-namespace nibble::simd {
+namespace nibble::simd::NIBBLE_SIMD_TIER {
 namespace {
 
 using u8 = unsigned char;
@@ -295,5 +295,5 @@ void gemm_q(const Tensor& w, const BlockQ8_0x8* xp, float* y, int64_t n, int64_t
   }
 }
 
-}  // namespace nibble::simd
+}  // namespace nibble::simd::NIBBLE_SIMD_TIER
 #endif

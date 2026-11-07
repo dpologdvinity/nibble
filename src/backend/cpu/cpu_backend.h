@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "backend/backend.h"
-#include "backend/cpu/simd/simd.h"
+#include "backend/cpu/simd/dispatch.h"
 #include "quant.h"
 #include "thread_pool.h"
 
@@ -81,9 +81,11 @@ class CpuBackend final : public Backend {
   std::vector<BlockQ8_1> xq1_;
   std::vector<BlockQ8_K> xqk_;
   uint64_t quantize_calls_ = 0;
-  // xq_ interleaved 8 tokens per block for the prefill GEMM (n >= 4, SIMD builds); sized by reserve() to
+  // xq_ interleaved 8 tokens per block for the prefill GEMM (n >= 4, when k_ is set); sized by reserve() to
   // ceil(max_rows / 8) * max_width / 32 blocks, same growth rule as xq_.
   std::vector<simd::BlockQ8_0x8> xp_;
+  // The kernel tier chosen at construction (simd::select()); nullptr runs the scalar ref_ops kernels.
+  const simd::Kernels* k_;
 };
 
 }  // namespace nibble::cpu

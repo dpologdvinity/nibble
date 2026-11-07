@@ -56,8 +56,9 @@ struct Tensor {
   std::array<int64_t, 4> ne{1, 1, 1, 1};  // ne[0] is the contiguous dimension
   const void* data = nullptr;             // first byte; for weights, inside the mapped file
 
-  // Number of rows: the product of all dimensions above ne[0] (1 for a vector).
-  int64_t rows() const { return ne[1] * ne[2] * ne[3]; }
+  // Number of rows: the product of all dimensions above ne[0] (1 for a vector). Always inlined, like fp16.h, because
+  // the SIMD tier sources call it.
+  [[gnu::always_inline]] int64_t rows() const { return ne[1] * ne[2] * ne[3]; }
   // Bytes in one row: ne[0] / block_size blocks of block_bytes. Throws Error if the product overflows
   // (a corrupt file can claim an enormous ne[0]). ne[0] must be a multiple of block_size; the GGUF loader
   // enforces that before any Tensor is handed out.

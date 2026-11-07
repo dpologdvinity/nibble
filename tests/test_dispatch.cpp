@@ -1,0 +1,57 @@
+// Tests for runtime kernel selection (src/backend/cpu/simd/dispatch.cpp): which tier select_for() picks for a
+// given set of CPU features, how NIBBLE_KERNELS overrides it, and the errors for values that cannot be honoured.
+// select_for() takes the features as a parameter, so CPUs this machine is not can be covered too.
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+#include <string>
+
+#include "backend/cpu/simd/dispatch.h"
+
+using namespace nibble::simd;
+using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::StartsWith;
+
+namespace {
+const CpuFeatures kNone{}, kAvx2{true, true, true, false}, kVnni{true, true, true, true};
+// True when this build compiled the SIMD tiers (x86-64 with NIBBLE_SIMD=ON).
+bool tiers_built() { return select_for(nullptr, kVnni) != nullptr; }
+std::string name_of(const Kernels* k) { return k ? k->name : "scalar"; }
+}  // namespace
+
+TEST_CASE("select_for picks the strongest tier the CPU allows", "[dispatch]") {
+  CHECK(select_for(nullptr, kNone) == nullptr);
+  if (!tiers_built()) SKIP("no SIMD tiers in this build");
+  CHECK(name_of(select_for(nullptr, kAvx2)) == "avx2+fma+f16c");
+  CHECK(name_of(select_for("", kVnni)) == "avx2+fma+f16c+avxvnni");
+  CHECK(select_for(nullptr, CpuFeatures{true, false, true, false}) == nullptr);  // AVX2 without FMA
+  CHECK(select_for(nullptr, CpuFeatures{true, true, false, false}) == nullptr);  // AVX2 without F16C
+  CHECK(select_for(nullptr, CpuFeatures{false, true, true, true}) == nullptr);   // VNNI without AVX2
+}
+
+TEST_CASE("NIBBLE_KERNELS forces a tier by short or full name", "[dispatch]") {
+  CHECK(select_for("scalar", kVnni) == nullptr);
+  if (!tiers_built()) SKIP("no SIMD tiers in this build");
+  CHECK(name_of(select_for("avx2", kVnni)) == "avx2+fma+f16c");
+  CHECK(name_of(select_for("avx2+fma+f16c", kVnni)) == "avx2+fma+f16c");
+  CHECK(name_of(select_for("avx2+vnni", kVnni)) == "avx2+fma+f16c+avxvnni");
+  CHECK(name_of(select_for("avx2+fma+f16c+avxvnni", kVnni)) == "avx2+fma+f16c+avxvnni");
+}
+
+TEST_CASE("bad NIBBLE_KERNELS values throw with the valid choices", "[dispatch]") {
+  CHECK_THROWS_WITH(select_for("avx512", kVnni),
+                    StartsWith("NIBBLE_KERNELS=\"avx512\" is not one of: scalar, avx2, avx2+vnni"));
+  CHECK_THROWS_WITH(select_for(" AVX2", kVnni), StartsWith("NIBBLE_KERNELS=\" AVX2\" is not one of"));
+  if (!tiers_built()) {
+    CHECK_THROWS_WITH(select_for("avx2", kVnni), ContainsSubstring("this build has no SIMD kernels"));
+    return;
+  }
+  CHECK_THROWS_WITH(select_for("avx2+vnni", kAvx2),
+                    ContainsSubstring("needs a CPU with AVX-VNNI; this CPU supports: scalar, avx2"));
+  CHECK_THROWS_WITH(select_for("avx2", kNone),
+                    ContainsSubstring("needs a CPU with AVX2, FMA and F16C; this CPU supports: scalar"));
+}
+
+TEST_CASE("kernel_set reports the selected tier", "[dispatch]") {
+  CHECK(std::string(kernel_set()) == name_of(select()));
+  for (const Kernels* k : available()) CHECK(k != nullptr);
+}

@@ -8,7 +8,7 @@
 #include <variant>
 
 #include "commands.h"
-#include "backend/cpu/simd/simd.h"
+#include "backend/cpu/simd/dispatch.h"
 #include "gguf/gguf.h"
 #include "nibble/error.h"
 #include "tensor.h"
