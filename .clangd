@@ -1,0 +1,9 @@
+# clangd settings (compile flags come from compile_commands.json, a link to build/compile_commands.json).
+#
+# simd.h is only compiled inside the SIMD tier sources (CMakeLists.txt: nibble_simd_tier), which define the tier
+# and its instruction-set flags. Opened on its own, clangd borrows flags from an ordinary source file and greys
+# the whole header out, so give it the vnni tier's flags (a superset of avx2's).
+If:
+  PathMatch: src/backend/cpu/simd/simd\.h
+CompileFlags:
+  Add: [-DNIBBLE_SIMD_TIER=vnni, -DNIBBLE_SIMD_ENABLED=1, -mavx2, -mfma, -mf16c, -mavxvnni]

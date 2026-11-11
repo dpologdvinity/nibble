@@ -1,0 +1,2 @@
+# False positive: the GGUF tensor name "token_embd.weight" matches the generic-api-key rule (commit 16ab652).
+16ab652914b6a02e40bb7f73665140be41cb3c4a:tests/test_model.cpp:generic-api-key:135
