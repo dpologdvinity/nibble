@@ -269,7 +269,8 @@ then until the 1-minute load average is below 2 (at most 10 minutes). The block
 ratio is the mean of the two llama.cpp medians divided by the mean of the two nibble
 medians; above 1 means llama.cpp is faster. Each run measures pp512 and tg128, so one
 block yields both. Blocks are interleaved: every (model, t) gets its first block
-before any gets its second. Qwen2.5-0.5B Q4_0 has 3 blocks at t = 1 and t = 8, the
+before any gets its second. When a (model, t) has blocks from several nibble commits, only the newest session's
+commit counts (`bench/plot.py`), so a ratio never blends old and new code. Qwen2.5-0.5B Q4_0 has 3 blocks at t = 1 and t = 8, the
 other models 2 each. The tables give the median block ratio and its range. All 184
 runs (nibble at commits `39ec442` for the M6 files and `2a0ab2c` for the k-quant files, whose engine code
 is identical) started with load average below 2 except four, whose blocks are marked † and drawn hollow.

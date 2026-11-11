@@ -5,7 +5,8 @@ usage: bench/plot.py [--results DIR] [--out DIR] [--markdown]
 
 Writes OUT/ladder.svg, OUT/vs-llamacpp.svg and OUT/roofline.svg (default docs/bench), or with --markdown
 prints the README tables instead. Rows with load1 > 2 are noisy: drawn hollow, marked † in tables.
-nibble vs llama.cpp comes from the paired ABBA blocks in abba.jsonl (tools/bench_final.sh --abba); the
+nibble vs llama.cpp comes from the paired ABBA blocks in abba.jsonl (tools/bench_final.sh --abba), newest
+nibble commit only per (model, test, threads) (see abba()); the
 thread sweep and roofline come from the single session in m6-final.jsonl / llamacpp-b11715-final.jsonl.
 Other files (session2-discarded.jsonl, llamacpp-b11715.jsonl) are read but not plotted.
 Rows without a "model" (the hand-recorded dispatch-empty timings) are left out.
@@ -98,20 +99,29 @@ def session(final: dict[tuple[str, str, str, int], Row]) -> str:
 
 
 def abba(data: dict[str, list[Row]]) -> dict[tuple[str, str, int], list[Block]]:
-    """{(model, test, threads): [block]} from complete ABBA blocks; block = (ratio, nibble, llama.cpp, noisy).
-    ratio = mean(llama.cpp A1, A2) / mean(nibble B1, B2), each run's median tok/s."""
+    """{(model, test, threads): [block]} from complete ABBA blocks, in date order; block = (ratio, nibble,
+    llama.cpp, noisy). ratio = mean(llama.cpp A1, A2) / mean(nibble B1, B2), each run's median tok/s.
+    Only the newest session counts: of a key's complete blocks, those whose nibble runs (B1, B2) carry the nibble
+    commit of the latest-dated block are kept. Blocks from different nibble builds measure different code, so
+    mixing them would report a blend of old and new performance."""
     runs: dict[tuple[str, str, int, str], dict[str, Row]] = {}
     for r in data.get("abba", []):
         m = ABBA_NOTE.match(r.get("note", ""))
         if m and r["unit"] == "tok/s":
             runs.setdefault((r["model"], r["test"], r["threads"], m[1]), {})[m[2]] = r
-    out: dict[tuple[str, str, int], list[Block]] = {}
+    complete: dict[tuple[str, str, int], list[dict[str, Row]]] = {}
     for (model, test, t, _), pos in sorted(runs.items(), key=lambda kv: min(r["date"] for r in kv[1].values())):
-        if len(pos) < 4:
-            continue  # incomplete block
-        a = (pos["A1"]["median"] + pos["A2"]["median"]) / 2
-        b = (pos["B1"]["median"] + pos["B2"]["median"]) / 2
-        out.setdefault((model, test, t), []).append((a / b, b, a, any(noisy(r) for r in pos.values())))
+        if len(pos) == 4:  # incomplete blocks are dropped
+            complete.setdefault((model, test, t), []).append(pos)
+    out: dict[tuple[str, str, int], list[Block]] = {}
+    for key, blocks in complete.items():
+        newest = blocks[-1]["B1"]["commit"]
+        for pos in blocks:
+            if pos["B1"]["commit"] != newest or pos["B2"]["commit"] != newest:
+                continue  # an older nibble build
+            a = (pos["A1"]["median"] + pos["A2"]["median"]) / 2
+            b = (pos["B1"]["median"] + pos["B2"]["median"]) / 2
+            out.setdefault(key, []).append((a / b, b, a, any(noisy(r) for r in pos.values())))
     return out
 
 
