@@ -78,6 +78,9 @@ shellcheck tools/*.sh
 ruff check bench tools && ruff format --check bench tools && mypy bench tools
 ```
 
+Editors using clangd: link `build/compile_commands.json` (configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`) to
+`compile_commands.json` in the repository root; `.clangd` supplies the tier flags `simd.h` needs.
+
 The build itself uses `-Wall -Wextra -Wpedantic -Werror`; warnings are errors.
 
 ## Writing code
