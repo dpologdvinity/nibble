@@ -32,6 +32,7 @@ Useful variants (each in its own build directory):
 |---|---|
 | release-shaped build (plain x86-64, kernels chosen at runtime) | `-DNIBBLE_NATIVE=OFF` |
 | no SIMD kernels at all | `-DNIBBLE_SIMD=OFF` |
+| no AVX-VNNI tier (what a compiler without `-mavxvnni` gets) | `-DNIBBLE_SIMD_VNNI=OFF` |
 | force a kernel tier at run time | environment `NIBBLE_KERNELS=scalar`, `avx2` or `avx2+vnni` |
 | AddressSanitizer + UBSan | `-DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=address,undefined` (run tests with `setarch -R`) |
 | ThreadSanitizer | `-DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=thread` (with `setarch -R`) |

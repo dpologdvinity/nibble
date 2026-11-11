@@ -4,7 +4,7 @@
 #   lint             clang-format, ruff, mypy, shellcheck           (fails fast: the build jobs wait for it)
 #   static-analysis  clang-tidy over src/ and cli/
 #   test             build + unit/integration tests in a matrix: portable (runtime-dispatched, as released; also run
-#                    with NIBBLE_KERNELS=avx2), native gcc/clang, scalar kernels,
+#                    with NIBBLE_KERNELS=avx2), native gcc (no AVX-VNNI tier)/clang, scalar kernels,
 #                    AddressSanitizer + UBSan, ThreadSanitizer; JUnit results go to Codecov Test Analytics
 #   coverage         gcc --coverage build, gcovr report (artifact + job summary + Codecov) with a minimum line coverage
 #   fuzz             60 s each of the GGUF-parser and full-load libFuzzer targets on a seeded corpus
@@ -130,6 +130,8 @@ jobs:
           cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF
           cmake --build build --target nibble_git_header
       - name: clang-tidy
+        # The tier sources (src/backend/cpu/simd) have one compile entry per tier; clang-tidy analyses every entry of
+        # a file, so the NIBBLE_HAVE_AVXVNNI branches (vnni entry, -mavxvnni) are checked as well as the avx2 ones.
         run: |
           mapfile -t files < <(git ls-files 'src/*.cpp' 'cli/*.cpp' | sed "s|^|^$PWD/|; s|\$|\$|")
           run-clang-tidy.py -p build -j "$(nproc)" -quiet "${files[@]}"
@@ -150,9 +152,11 @@ jobs:
             flag: portable-gcc
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
             kernels: avx2
+          # Also the build without the AVX-VNNI tier (as with a compiler lacking -mavxvnni): the other cells compile
+          # that tier, this one checks that dispatch and the tests still work without it.
           - name: native gcc
             flag: native-gcc
-            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
+            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON -DNIBBLE_SIMD_VNNI=OFF
             kernels: avx2
           - name: native clang
             flag: native-clang
@@ -294,7 +298,7 @@ jobs:
           files: coverage/coverage.xml
           disable_search: true
           fail_ci_if_error: true
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage
           path: coverage/

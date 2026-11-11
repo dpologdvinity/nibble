@@ -145,10 +145,14 @@ same plus `-mavxvnni`), each into its own namespace (`nibble::simd::avx2`, `nibb
 exports one `Kernels` table of function pointers (`table.cpp`). The rest of the program is compiled for the build's
 target (`-march=native` by default, plain x86-64 for releases) and reaches the kernels only through
 `simd::select()`, which `CpuBackend` calls once at construction: it checks the CPU (`__builtin_cpu_supports` for
-AVX2/FMA/F16C, CPUID leaf 7.1 for AVX-VNNI) and
+AVX2/FMA/F16C, CPUID leaf 7.1 for AVX-VNNI, read only when the CPU's maximum leaf is at least 7) and
 returns the strongest table the CPU can run, or `nullptr` for the scalar `ref_ops` kernels. `NIBBLE_KERNELS`
 (`scalar`, `avx2`, `avx2+vnni`) forces a tier and is an error if the CPU cannot run it. `nibble info` prints the
 tier in use. Because the tiers never take `-march=native`, native and release builds run the same kernel code.
+The `vnni` tier is built only when the compiler accepts `-mavxvnni` and `NIBBLE_SIMD_VNNI` is ON (CMake prints a
+status line otherwise); `dispatch.cpp` and the tests see which tiers exist through `NIBBLE_SIMD_TIER_AVX2` and
+`NIBBLE_SIMD_TIER_VNNI`, and a build without the `vnni` tier never selects it (`NIBBLE_KERNELS=avx2+vnni` is then an
+error naming the missing tier).
 
 One rule keeps this safe: a tier object must not define any symbol outside its namespace. An inline function or
 template instantiation shared with baseline code would be compiled with the tier's instruction set, and the linker

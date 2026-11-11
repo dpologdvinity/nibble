@@ -91,6 +91,8 @@ release binaries and the container image are built. `-DNIBBLE_SIMD=OFF` leaves t
 only). `-DNIBBLE_BUILD_TESTS=OFF` skips the tests (and the Catch2 download). `nibble info <model.gguf>` prints the
 tier in use, e.g. `kernels: avx2+fma+f16c+avxvnni`, `kernels: avx2+fma+f16c` or `kernels: scalar`, and the
 environment variable `NIBBLE_KERNELS=scalar|avx2|avx2+vnni` forces a tier (an error if the CPU lacks it).
+The AVX-VNNI tier is skipped, with a CMake status message, when the compiler does not accept `-mavxvnni` or with
+`-DNIBBLE_SIMD_VNNI=OFF`; such a build uses the AVX2 tier on AVX-VNNI CPUs too.
 
 Prebuilt binaries: each [release](https://github.com/dpologdvinity/nibble/releases) has one
 `nibble-<version>-linux-x86_64.tar.gz` (with a `.sha256` file) and an image `ghcr.io/dpologdvinity/nibble:<version>`.
