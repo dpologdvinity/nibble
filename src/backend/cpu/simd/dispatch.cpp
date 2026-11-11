@@ -58,10 +58,17 @@ CpuFeatures cpu_features() {
   f.f16c = __builtin_cpu_supports("f16c");
   // AVX-VNNI is CPUID leaf 7, sub-leaf 1, EAX bit 4. Read it directly: clang 18's __builtin_cpu_supports does not
   // know "avxvnni". It uses the same YMM register state as AVX2, whose OS support the avx2 check already covers.
+  // Leaf 7 is queried only when the CPU has it (old CPUs and some VMs stop below leaf 7).
+  const unsigned max_leaf = __get_cpuid_max(0, nullptr);
   unsigned eax = 0, ebx = 0, ecx = 0, edx = 0;
-  f.avxvnni = __get_cpuid_count(7, 1, &eax, &ebx, &ecx, &edx) != 0 && (eax & (1u << 4)) != 0;
+  if (max_leaf >= 7) __cpuid_count(7, 1, eax, ebx, ecx, edx);
+  f.avxvnni = avxvnni_from_cpuid(max_leaf, eax);
 #endif
   return f;
+}
+
+bool avxvnni_from_cpuid(unsigned max_leaf, unsigned leaf7_1_eax) {
+  return max_leaf >= 7 && (leaf7_1_eax & (1u << 4)) != 0;
 }
 
 const Kernels* select_for(const char* env, const CpuFeatures& f) {

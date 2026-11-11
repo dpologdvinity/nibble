@@ -55,3 +55,11 @@ TEST_CASE("kernel_set reports the selected tier", "[dispatch]") {
   CHECK(std::string(kernel_set()) == name_of(select()));
   for (const Kernels* k : available()) CHECK(k != nullptr);
 }
+
+TEST_CASE("AVX-VNNI needs CPUID leaf 7 and bit 4 of leaf 7.1 EAX", "[dispatch]") {
+  CHECK(avxvnni_from_cpuid(7, 1u << 4));
+  CHECK(avxvnni_from_cpuid(0x20, 0xFFFFFFFFu));
+  CHECK_FALSE(avxvnni_from_cpuid(6, 0xFFFFFFFFu));  // max leaf below 7: leaf 7 data is meaningless
+  CHECK_FALSE(avxvnni_from_cpuid(0, 1u << 4));
+  CHECK_FALSE(avxvnni_from_cpuid(7, ~(1u << 4)));
+}

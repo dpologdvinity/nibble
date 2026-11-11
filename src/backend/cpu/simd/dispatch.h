@@ -68,6 +68,9 @@ struct Kernels {
 
 // The features of the CPU this runs on (all false when the build has no SIMD tiers).
 CpuFeatures cpu_features();
+// Whether CPUID reports AVX-VNNI: CPUID leaf 7, sub-leaf 1, EAX bit 4. max_leaf is the highest basic leaf
+// (CPUID leaf 0 EAX); below 7, leaf 7 does not exist and leaf7_1_eax is meaningless, so the answer is false.
+bool avxvnni_from_cpuid(unsigned max_leaf, unsigned leaf7_1_eax);
 // The table to use for CPU features f and an NIBBLE_KERNELS value env (nullptr or "" = the strongest tier f
 // allows; "scalar", "avx2", "avx2+vnni" or a full tier name = that tier). nullptr means the scalar kernels.
 // Throws nibble::Error for an unknown value, a tier f does not allow, or any tier when none was built. Uncached.
