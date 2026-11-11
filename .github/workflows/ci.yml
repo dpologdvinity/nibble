@@ -4,7 +4,7 @@
 #   lint             clang-format, ruff, mypy, shellcheck           (fails fast: the build jobs wait for it)
 #   static-analysis  clang-tidy over src/ and cli/
 #   test             build + unit/integration tests in a matrix: portable (runtime-dispatched, as released; also run
-#                    with NIBBLE_KERNELS=avx2), native gcc/clang, scalar kernels,
+#                    with NIBBLE_KERNELS=avx2), native gcc (no AVX-VNNI tier)/clang, scalar kernels,
 #                    AddressSanitizer + UBSan, ThreadSanitizer; JUnit results go to Codecov Test Analytics
 #   coverage         gcc --coverage build, gcovr report (artifact + job summary + Codecov) with a minimum line coverage
 #   fuzz             60 s each of the GGUF-parser and full-load libFuzzer targets on a seeded corpus
@@ -152,9 +152,11 @@ jobs:
             flag: portable-gcc
             cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF
             kernels: avx2
+          # Also the build without the AVX-VNNI tier (as with a compiler lacking -mavxvnni): the other cells compile
+          # that tier, this one checks that dispatch and the tests still work without it.
           - name: native gcc
             flag: native-gcc
-            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON
+            cmake: -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=ON -DNIBBLE_SIMD_VNNI=OFF
             kernels: avx2
           - name: native clang
             flag: native-clang
