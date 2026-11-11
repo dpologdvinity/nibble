@@ -130,6 +130,8 @@ jobs:
           cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF
           cmake --build build --target nibble_git_header
       - name: clang-tidy
+        # The tier sources (src/backend/cpu/simd) have one compile entry per tier; clang-tidy analyses every entry of
+        # a file, so the NIBBLE_HAVE_AVXVNNI branches (vnni entry, -mavxvnni) are checked as well as the avx2 ones.
         run: |
           mapfile -t files < <(git ls-files 'src/*.cpp' 'cli/*.cpp' | sed "s|^|^$PWD/|; s|\$|\$|")
           run-clang-tidy.py -p build -j "$(nproc)" -quiet "${files[@]}"
