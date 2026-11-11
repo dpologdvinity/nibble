@@ -1,7 +1,7 @@
 # Continuous integration for nibble. Runs on every push and pull request to the default branch.
 #
 #   environment      provisions the toolchain and the pinned Python tools (cached) and fetches Catch2 once
-#   lint             clang-format, ruff, mypy, shellcheck           (fails fast: the build jobs wait for it)
+#   lint             clang-format, ruff, mypy, bench/ unit tests, shellcheck (fails fast: the build jobs wait for it)
 #   static-analysis  clang-tidy over src/ and cli/
 #   test             build + unit/integration tests in a matrix: portable (runtime-dispatched, as released; also run
 #                    with NIBBLE_KERNELS=avx2), native gcc (no AVX-VNNI tier)/clang, scalar kernels,
@@ -100,6 +100,8 @@ jobs:
           ruff check bench tools
           ruff format --check bench tools
           mypy
+      - name: bench/ unit tests
+        run: python -m unittest discover -s bench -p 'test_*.py'
       - name: shellcheck
         run: shellcheck tools/*.sh
       - name: Conventional-commit subjects (pull requests)
