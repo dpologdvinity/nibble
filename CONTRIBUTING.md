@@ -105,12 +105,19 @@ The build itself uses `-Wall -Wextra -Wpedantic -Werror`; warnings are errors.
   Describe *why* in the body when it is not obvious.
 * Keep commits small and focused: one logical change each (a mechanical reformat is its own commit and is listed in
   `.git-blame-ignore-revs`).
-* Never commit secrets, models, golden binaries, or local tooling files (`.claude/`, `CLAUDE.md`, `.env`, ...).
+* Never commit secrets, models, golden binaries, or machine-local files (`.env*`, `*.local.md`, `.claude/settings.local.json`, ...).
 * Open pull requests against `master`. Fill in the template: what and why, how it was tested, whether numerics or
   performance can change (attach before/after numbers if so). CI must be green; reviews look at correctness first, then
   tests, then clarity.
 * Performance claims need numbers from `nibble bench` / `tools/bench_final.sh` on a quiet machine, with the protocol
   described in the README.
+
+## Working with coding agents
+
+[AGENTS.md](AGENTS.md) holds the instructions coding agents follow in this repository (`CLAUDE.md` imports it).
+Design specs and task-by-task plans for each milestone are in `docs/superpowers/`; they show how larger changes
+are planned and executed. The same rules apply to agent-written changes: small Conventional Commits, tests first,
+green CI, a pull request.
 
 ## Reporting bugs and security issues
 
