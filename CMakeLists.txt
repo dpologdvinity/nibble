@@ -8,6 +8,7 @@
 # - fuzz_gguf, fuzz_load, make_seed (NIBBLE_FUZZ=ON, clang only): libFuzzer targets and their seed generator.
 #
 # Options: NIBBLE_NATIVE (-march=native), NIBBLE_SIMD (use the AVX2 kernels when the target supports them),
+# NIBBLE_SIMD_VNNI (build the AVX-VNNI tier; default ON, skipped when the compiler lacks -mavxvnni),
 # NIBBLE_SANITIZE (value for -fsanitize=, e.g. address,undefined or thread), NIBBLE_BUILD_TESTS (default ON;
 # OFF skips Catch2 and every test target, e.g. for container or release builds), NIBBLE_FUZZ.
 #
@@ -23,6 +24,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Build options (see the header comment).
 option(NIBBLE_NATIVE "Build with -march=native" ON)
 option(NIBBLE_SIMD "Enable hand-written SIMD kernels when the target supports them" ON)
+option(NIBBLE_SIMD_VNNI "Build the AVX-VNNI kernel tier (skipped anyway when the compiler lacks -mavxvnni)" ON)
 set(NIBBLE_SANITIZE "" CACHE STRING "Value for -fsanitize=")
 
 # Compile settings are split in two so the SIMD kernel tiers can take everything except the target architecture:
@@ -93,10 +95,31 @@ function(nibble_simd_tier name tier)
   target_compile_definitions(${name} PRIVATE NIBBLE_SIMD_TIER=${tier})
   target_link_libraries(${name} PRIVATE nibble_warnings)
 endfunction()
+# The vnni tier needs -mavxvnni (GCC 11+, clang 12+); without it, or with NIBBLE_SIMD_VNNI=OFF, only the avx2 tier
+# is built and dispatch.cpp never offers AVX-VNNI kernels.
 set(NIBBLE_SIMD_TIERS "")
 if(NIBBLE_SIMD AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-  set(NIBBLE_SIMD_TIERS avx2 vnni)
+  set(NIBBLE_SIMD_TIERS avx2)
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag(-mavxvnni NIBBLE_CXX_HAS_AVXVNNI)
+  if(NOT NIBBLE_SIMD_VNNI)
+    message(STATUS "nibble: AVX-VNNI tier not built (NIBBLE_SIMD_VNNI=OFF)")
+  elseif(NOT NIBBLE_CXX_HAS_AVXVNNI)
+    message(STATUS "nibble: AVX-VNNI tier not built (the compiler does not accept -mavxvnni)")
+  else()
+    list(APPEND NIBBLE_SIMD_TIERS vnni)
+  endif()
 endif()
+# Which tiers exist, for dispatch.cpp and the tests: NIBBLE_SIMD_TIERS=1 when any tier is built, and
+# NIBBLE_SIMD_TIER_AVX2=1 / NIBBLE_SIMD_TIER_VNNI=1 per built tier.
+set(NIBBLE_SIMD_TIER_DEFINITIONS "")
+if(NIBBLE_SIMD_TIERS)
+  list(APPEND NIBBLE_SIMD_TIER_DEFINITIONS NIBBLE_SIMD_TIERS=1)
+endif()
+foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
+  string(TOUPPER ${tier} tier_upper)
+  list(APPEND NIBBLE_SIMD_TIER_DEFINITIONS NIBBLE_SIMD_TIER_${tier_upper}=1)
+endforeach()
 
 # The engine library; its public include directory is include/ (the API), src/ stays private.
 add_library(nibble STATIC ${NIBBLE_SOURCES})
@@ -106,9 +129,7 @@ foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
   nibble_simd_tier(nibble_simd_${tier} ${tier})
   target_sources(nibble PRIVATE $<TARGET_OBJECTS:nibble_simd_${tier}>)
 endforeach()
-if(NIBBLE_SIMD_TIERS)
-  target_compile_definitions(nibble PRIVATE NIBBLE_SIMD_TIERS=1)
-endif()
+target_compile_definitions(nibble PRIVATE ${NIBBLE_SIMD_TIER_DEFINITIONS})
 
 # CLI
 # The CLI. nibble_git.h (the build's git SHA, with a -dirty marker) is generated on every build by
@@ -143,7 +164,7 @@ enable_testing()
 file(GLOB NIBBLE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/test_*.cpp)
 add_executable(nibble_tests ${NIBBLE_TEST_SOURCES})
 target_include_directories(nibble_tests PRIVATE include src cli)
-target_compile_definitions(nibble_tests PRIVATE NIBBLE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(nibble_tests PRIVATE NIBBLE_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ${NIBBLE_SIMD_TIER_DEFINITIONS})
 target_link_libraries(nibble_tests PRIVATE nibble Catch2::Catch2WithMain)
 
 catch_discover_tests(nibble_tests TEST_SPEC "~[e2e]")
