@@ -3,3 +3,14 @@ models/
 third_party/
 .env
 .venv/
+
+# Machine-local agent and editor state (shared agent config lives in AGENTS.md, CLAUDE.md and .claude/settings.json)
+.claude/settings.local.json
+CLAUDE.local.md
+*.local.md
+.superpowers/
+.worktrees/
+.playwright-mcp/
+.cache/
+.env.*
+!.env.example
