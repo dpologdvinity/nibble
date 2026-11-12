@@ -271,10 +271,10 @@ medians; above 1 means llama.cpp is faster. Each run measures pp512 and tg128, s
 block yields both. Blocks are interleaved: every (model, t) gets its first block
 before any gets its second. When a (model, t) has blocks from several nibble commits, only the newest session's
 commit counts (`bench/plot.py`), so a ratio never blends old and new code. Qwen2.5-0.5B Q4_0 has 3 blocks at t = 1 and t = 8, the
-other models 2 each. The tables give the median block ratio and its range. All 280
-runs (nibble at commit `39ec442` for the M6 files and `3b702e5` for the k-quant files; the k-quant blocks recorded
-earlier at `2a0ab2c` stay in `abba.jsonl` but are no longer reported) started with load average below 2 except
-four, whose blocks are marked † and drawn hollow.
+other models 2 each. The tables give the median block ratio and its range. All 184
+reported runs (nibble at commit `39ec442` for the M6 files and `3b702e5` for the k-quant files) started with load
+average below 2. The k-quant blocks recorded earlier at `2a0ab2c` stay in `abba.jsonl` but are no longer reported;
+four of their runs started under load, which is the only reason the † mark below is not used in the tables.
 
 **Target (tg128 on Qwen2.5-0.5B Q4_0 within 1.5× of llama.cpp): met at t = 8, missed
 at t = 1.** At t = 8, the default thread count, llama.cpp ÷ nibble is 1.19× (range

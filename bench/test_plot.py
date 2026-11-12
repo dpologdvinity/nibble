@@ -7,6 +7,8 @@ llama.cpp and B runs are nibble.
 
 from __future__ import annotations
 
+import os
+import re
 import unittest
 
 import plot
@@ -62,6 +64,31 @@ class AbbaTest(unittest.TestCase):
     def test_abba_skips_incomplete_blocks(self) -> None:
         rows = [r for r in block("1", "bbbbbbb", 20, 40, "2026-11-12") if not r["note"].endswith("A2")]
         self.assertNotIn(KEY, plot.abba({"abba": rows}))
+
+
+class ReadmeProtocolTest(unittest.TestCase):
+    """The README's protocol paragraph must describe the runs plot.py actually reports."""
+
+    def setUp(self) -> None:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "README.md"), encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("**Protocol**")
+        self.protocol = " ".join(text[start : text.index("\n\n", start)].split())
+        blocks = plot.abba(plot.load(os.path.join(root, "bench", "results")))
+        pp = [b for (_, test, _), bs in blocks.items() if test == plot.PP for b in bs]
+        self.reported_runs = 4 * len(pp)  # each ABBA block is four runs, and each run yields one pp512 row
+        self.reported_noisy = sum(1 for b in pp if b[3])
+
+    def test_readme_protocol_states_reported_run_count(self) -> None:
+        m = re.search(r"All (\d+)(?: reported)? runs", self.protocol)
+        self.assertIsNotNone(m, "protocol paragraph has no 'All N runs' sentence")
+        assert m is not None
+        self.assertEqual(int(m[1]), self.reported_runs)
+
+    def test_readme_protocol_marks_noisy_blocks_only_if_reported(self) -> None:
+        claims_marked = "marked †" in self.protocol
+        self.assertEqual(claims_marked, self.reported_noisy > 0)
 
 
 if __name__ == "__main__":
