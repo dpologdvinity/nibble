@@ -100,12 +100,22 @@ endfunction()
 set(NIBBLE_SIMD_TIERS "")
 if(NIBBLE_SIMD AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
   set(NIBBLE_SIMD_TIERS avx2)
-  include(CheckCXXCompilerFlag)
-  check_cxx_compiler_flag(-mavxvnni NIBBLE_CXX_HAS_AVXVNNI)
+  # Compile the intrinsic the tier uses, not just the flag: a compiler can accept -mavxvnni while its assembler
+  # cannot encode vpdpbusd (GCC 11/12 with binutils < 2.36), and the tier would then fail to build.
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "-mavx2 -mavxvnni")
+  check_cxx_source_compiles("
+    #include <immintrin.h>
+    int main() {
+      __m256i a = _mm256_setzero_si256();
+      a = _mm256_dpbusd_avx_epi32(a, a, a);
+      return _mm256_extract_epi32(a, 0);
+    }" NIBBLE_CXX_HAS_AVXVNNI)
+  unset(CMAKE_REQUIRED_FLAGS)
   if(NOT NIBBLE_SIMD_VNNI)
     message(STATUS "nibble: AVX-VNNI tier not built (NIBBLE_SIMD_VNNI=OFF)")
   elseif(NOT NIBBLE_CXX_HAS_AVXVNNI)
-    message(STATUS "nibble: AVX-VNNI tier not built (the compiler does not accept -mavxvnni)")
+    message(STATUS "nibble: AVX-VNNI tier not built (the toolchain cannot compile the AVX-VNNI intrinsic with -mavxvnni)")
   else()
     list(APPEND NIBBLE_SIMD_TIERS vnni)
   endif()
@@ -169,6 +179,15 @@ target_link_libraries(nibble_tests PRIVATE nibble Catch2::Catch2WithMain)
 
 catch_discover_tests(nibble_tests TEST_SPEC "~[e2e]")
 catch_discover_tests(nibble_tests TEST_SPEC "[e2e]" EXTRA_ARGS --allow-running-no-tests TEST_SUFFIX " [e2e]" PROPERTIES LABELS e2e TIMEOUT 7200)
+
+# A toolchain that accepts -mavxvnni but cannot encode the instruction must be detected at configure time and leave
+# the vnni tier out (tests/vnni_probe_check.cmake uses a stand-in compiler that fails on the intrinsic).
+if(NIBBLE_SIMD AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  add_test(NAME vnni_probe_skips_tier_without_assembler_support
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DWORK=${CMAKE_BINARY_DIR}/vnni-probe-work
+            -DWRAPPER=${CMAKE_SOURCE_DIR}/tests/fake_cxx_no_vnni_intrinsic.sh
+            -P ${CMAKE_SOURCE_DIR}/tests/vnni_probe_check.cmake)
+endif()
 
 # The SIMD tier objects must define no symbol outside their own namespace (tools/check_simd_symbols.sh).
 foreach(tier IN LISTS NIBBLE_SIMD_TIERS)
