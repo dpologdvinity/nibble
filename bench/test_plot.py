@@ -7,6 +7,8 @@ llama.cpp and B runs are nibble.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import re
 import unittest
@@ -64,6 +66,33 @@ class AbbaTest(unittest.TestCase):
     def test_abba_skips_incomplete_blocks(self) -> None:
         rows = [r for r in block("1", "bbbbbbb", 20, 40, "2026-11-12") if not r["note"].endswith("A2")]
         self.assertNotIn(KEY, plot.abba({"abba": rows}))
+
+
+class MixedCommitBlockTest(unittest.TestCase):
+    def mixed_block(self, block_id: str, day: str) -> list[plot.Row]:
+        """A complete block whose B1 ran on one nibble build and B2 on another (rebuilt mid-block)."""
+        rows = block(block_id, "ccccccc", 30, 40, day)
+        for r in rows:
+            if r["note"].endswith("B2"):
+                r["commit"] = "ddddddd"
+        return rows
+
+    def test_abba_skips_blocks_with_mixed_commits_and_warns(self) -> None:
+        rows = block("ok", "bbbbbbb", 20, 40, "2026-11-12") + self.mixed_block("mixed", "2026-11-13")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            blocks = plot.abba({"abba": rows})[KEY]
+        self.assertEqual(
+            [b[1] for b in blocks], [20.0]
+        )  # the consistent block survives; the mixed one never decides "newest"
+        self.assertIn("mixed", err.getvalue())
+
+    def test_abba_with_only_mixed_blocks_reports_nothing_and_warns(self) -> None:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            result = plot.abba({"abba": self.mixed_block("mixed", "2026-11-13")})
+        self.assertNotIn(KEY, result)
+        self.assertIn("mixed", err.getvalue())
 
 
 class ReadmeProtocolTest(unittest.TestCase):
