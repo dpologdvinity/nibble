@@ -8,7 +8,7 @@ prints the README tables instead. Rows with load1 > 2 are noisy: drawn hollow, m
 nibble vs llama.cpp comes from the paired ABBA blocks in abba.jsonl (tools/bench_final.sh --abba), newest
 nibble commit only per (model, test, threads) (see abba()); the
 thread sweep and roofline come from the single session in m6-final.jsonl / llamacpp-b11715-final.jsonl.
-Other files (session2-discarded.jsonl, llamacpp-b11715.jsonl) are read but not plotted.
+Other files (session2-discarded.jsonl, llamacpp-b11715.jsonl, release-vs-native.jsonl) are read but not plotted.
 Rows without a "model" (the hand-recorded dispatch-empty timings) are left out.
 """
 
@@ -103,7 +103,9 @@ def abba(data: dict[str, list[Row]]) -> dict[tuple[str, str, int], list[Block]]:
     llama.cpp, noisy). ratio = mean(llama.cpp A1, A2) / mean(nibble B1, B2), each run's median tok/s.
     Only the newest session counts: of a key's complete blocks, those whose nibble runs (B1, B2) carry the nibble
     commit of the latest-dated block are kept. Blocks from different nibble builds measure different code, so
-    mixing them would report a blend of old and new performance."""
+    mixing them would report a blend of old and new performance. A block whose B1 and B2 carry different commits
+    (nibble was rebuilt mid-block) measures no single build: it is skipped with a warning on stderr and never
+    decides which commit is the newest."""
     runs: dict[tuple[str, str, int, str], dict[str, Row]] = {}
     for r in data.get("abba", []):
         m = ABBA_NOTE.match(r.get("note", ""))
@@ -114,10 +116,23 @@ def abba(data: dict[str, list[Row]]) -> dict[tuple[str, str, int], list[Block]]:
         if len(pos) == 4:  # incomplete blocks are dropped
             complete.setdefault((model, test, t), []).append(pos)
     out: dict[tuple[str, str, int], list[Block]] = {}
-    for key, blocks in complete.items():
+    for key, all_blocks in complete.items():
+        blocks = []
+        for pos in all_blocks:
+            if pos["B1"]["commit"] == pos["B2"]["commit"]:
+                blocks.append(pos)
+                continue
+            note = pos["B1"].get("note", "")
+            print(
+                f"warning: skipping ABBA block ({note!r}): nibble commits differ "
+                f"({pos['B1']['commit']} vs {pos['B2']['commit']})",
+                file=sys.stderr,
+            )
+        if not blocks:
+            continue
         newest = blocks[-1]["B1"]["commit"]
         for pos in blocks:
-            if pos["B1"]["commit"] != newest or pos["B2"]["commit"] != newest:
+            if pos["B1"]["commit"] != newest:
                 continue  # an older nibble build
             a = (pos["A1"]["median"] + pos["A2"]["median"]) / 2
             b = (pos["B1"]["median"] + pos["B2"]["median"]) / 2

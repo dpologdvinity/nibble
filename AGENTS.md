@@ -36,7 +36,7 @@ ctest --test-dir build -LE e2e --output-on-failure   # everything except the end
 git ls-files '*.cpp' '*.h' | grep -v '^third_party' | xargs clang-format --dry-run -Werror
 ruff check bench tools && ruff format --check bench tools && mypy
 python -m unittest discover -s bench -p 'test_*.py'
-shellcheck tools/*.sh
+shellcheck tools/*.sh tests/*.sh
 ```
 
 clang-tidy: configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF` and run it as in the
@@ -73,7 +73,7 @@ build or run anything else while one is running: a rebuild replaces `build/nibbl
 
 ## Agent workflow
 
-Larger changes follow spec -> plan -> execution -> review, and the design record is committed:
+Larger changes follow spec -> plan -> execution -> review, and the design record is committed (a plan that points at private material stays local until it can be shared):
 
 - `docs/superpowers/specs/` holds design specs and `docs/superpowers/plans/` the task-by-task plans written from them
   (with the `superpowers` skills: brainstorming, writing-plans, executing-plans). Plans spell out files, test cases,

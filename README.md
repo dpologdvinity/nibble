@@ -355,8 +355,9 @@ nibble `5245b34`, ABBA blocks of native, release, release, native on Qwen2.5-0.5
 (3 rounds at t = 1, 8 rounds at t = 8; `bench/results/release-vs-native.jsonl`), the median ratio of native to
 release tok/s is 0.99–1.02 for `pp512` and `tg128` at both thread counts (above 1 means the release build is slower),
 so the release build is not measurably slower. Single rounds at t = 8 vary much more than that: the first three
-Llama-3.2 rounds had native ahead by up to 1.48×, and the next five did not (0.94–1.02), so only the medians mean
-anything.
+Llama-3.2 rounds had native ahead by up to 1.48×, and the next five did not (0.94–1.02). Those five rounds, and the
+same five for Qwen, were added after the first three showed that gap, to tell noise from a real difference, so only
+the medians mean anything.
 
 **Roofline** (single session, nibble `2ca56ef`, the one the thread sweep comes from). Decode reads every
 weight once per token, so `model bytes × tg128 tok/s` is the weight-read bandwidth
