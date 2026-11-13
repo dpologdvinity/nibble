@@ -103,6 +103,16 @@ struct Q6K {
   }
 };
 
+// acc + madd_epi16(prod, sc). With AVX-VNNI that is one vpdpwssd; both forms add in int32 with wraparound, so
+// they agree for every input (and the operands here cannot overflow anyway, see Saturation above).
+inline __m256i madd_acc(__m256i acc, __m256i prod, __m256i sc) {
+#if defined(NIBBLE_HAVE_AVXVNNI)
+  return _mm256_dpwssd_avx_epi32(acc, prod, sc);
+#else
+  return _mm256_add_epi32(acc, _mm256_madd_epi16(prod, sc));
+#endif
+}
+
 struct RowAcc {
   __m256 sums8 = _mm256_setzero_ps();
   float sumf = 0.f;
@@ -164,7 +174,7 @@ inline void apply45(const Prep& p, const u8* a, const __m256i (&ap)[8], RowAcc& 
   __m256i acc = _mm256_setzero_si256();
   for (int g = 0; g < 8; ++g) {
     const __m256i prod = _mm256_maddubs_epi16(p.wp[g], ap[g]);  // unsigned weights x signed activations
-    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, p.sc[g]));
+    acc = madd_acc(acc, prod, p.sc[g]);
   }
   // Lane k = (bsums[2k] + bsums[2k+1]) * mn[k]; the eight lanes summed give the scalar sumi exactly.
   const __m256i m = _mm256_madd_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + 260)), p.mn);
@@ -185,7 +195,7 @@ inline void apply6(const Prep& p, const u8* a, const __m256i (&ap)[8], RowAcc& r
     const __m256i wp = p.wp[g];
     // |w| as the unsigned operand, a negated where w < 0: exact because a != -128 (Q8_K output is in [-127, 127]).
     const __m256i prod = _mm256_maddubs_epi16(_mm256_sign_epi8(wp, wp), _mm256_sign_epi8(ap[g], wp));
-    acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, p.sc[g]));
+    acc = madd_acc(acc, prod, p.sc[g]);
   }
   const float d = p.d * act_d(a);
   r.sums8 = _mm256_add_ps(r.sums8, _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(acc)));
