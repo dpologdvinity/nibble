@@ -73,7 +73,7 @@ build or run anything else while one is running: a rebuild replaces `build/nibbl
 
 ## Agent workflow
 
-Larger changes follow spec -> plan -> execution -> review, and the design record is committed:
+Larger changes follow spec -> plan -> execution -> review, and the design record is committed (a plan that points at private material stays local until it can be shared):
 
 - `docs/superpowers/specs/` holds design specs and `docs/superpowers/plans/` the task-by-task plans written from them
   (with the `superpowers` skills: brainstorming, writing-plans, executing-plans). Plans spell out files, test cases,

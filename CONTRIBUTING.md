@@ -75,7 +75,7 @@ cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF 
 
 # Shell scripts, Python scripts
 shellcheck tools/*.sh tests/*.sh
-ruff check bench tools && ruff format --check bench tools && mypy bench tools
+ruff check bench tools && ruff format --check bench tools && mypy
 ```
 
 Editors using clangd: link `build/compile_commands.json` (configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`) to
