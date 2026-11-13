@@ -40,6 +40,10 @@ TEST_CASE("NIBBLE_KERNELS forces a tier by short or full name", "[dispatch]") {
   if (!tiers_built()) SKIP("no SIMD tiers in this build");
   CHECK(name_of(select_for("avx2", kVnni)) == "avx2+fma+f16c");
   CHECK(name_of(select_for("avx2+fma+f16c", kVnni)) == "avx2+fma+f16c");
+}
+
+// Its own case, so a build without the vnni tier reports only this one as skipped, not the avx2 half above.
+TEST_CASE("NIBBLE_KERNELS forces the vnni tier by short or full name", "[dispatch]") {
   if (!kVnniBuilt) SKIP("no AVX-VNNI tier in this build");
   CHECK(name_of(select_for("avx2+vnni", kVnni)) == "avx2+fma+f16c+avxvnni");
   CHECK(name_of(select_for("avx2+fma+f16c+avxvnni", kVnni)) == "avx2+fma+f16c+avxvnni");
@@ -51,7 +55,14 @@ TEST_CASE("bad NIBBLE_KERNELS values throw with the valid choices", "[dispatch]"
   CHECK_THROWS_WITH(select_for(" AVX2", kVnni), StartsWith("NIBBLE_KERNELS=\" AVX2\" is not one of"));
   if (!tiers_built()) {
     CHECK_THROWS_WITH(select_for("avx2", kVnni), ContainsSubstring("this build has no SIMD kernels"));
+    // The list of choices says which of them this build cannot honour.
+    CHECK_THROWS_WITH(select_for("avx512", kVnni), ContainsSubstring("(this build has no SIMD kernels)"));
     return;
+  }
+  if (kVnniBuilt) {
+    CHECK_THROWS_WITH(select_for("avx512", kVnni), !ContainsSubstring("this build has no"));
+  } else {
+    CHECK_THROWS_WITH(select_for("avx512", kVnni), ContainsSubstring("(this build has no AVX-VNNI kernels)"));
   }
   CHECK_THROWS_WITH(select_for("avx2", kNone),
                     ContainsSubstring("needs a CPU with AVX2, FMA and F16C; this CPU supports: scalar"));

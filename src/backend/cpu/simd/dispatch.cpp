@@ -55,6 +55,15 @@ std::string supported_list(const CpuFeatures& f) {
 // The value as the user wrote it, for messages.
 std::string quoted(const char* env) { return std::string("NIBBLE_KERNELS=\"") + env + "\""; }
 
+// Appended to the list of valid NIBBLE_KERNELS values: which of them this build cannot honour ("" when none).
+const char* unbuilt_note() {
+#ifdef NIBBLE_SIMD_TIERS
+  return vnni_table() == nullptr ? " (this build has no AVX-VNNI kernels)" : "";
+#else
+  return " (this build has no SIMD kernels)";
+#endif
+}
+
 // The cached outcome of select(): a table, or the error to rethrow.
 struct Choice {
   const Kernels* kernels = nullptr;
@@ -91,7 +100,9 @@ const Kernels* select_for(const char* env, const CpuFeatures& f) {
   const bool want_avx2 = !automatic && (std::strcmp(env, "avx2") == 0 || std::strcmp(env, "avx2+fma+f16c") == 0);
   const bool want_vnni =
       !automatic && (std::strcmp(env, "avx2+vnni") == 0 || std::strcmp(env, "avx2+fma+f16c+avxvnni") == 0);
-  if (!automatic && !want_avx2 && !want_vnni) throw Error(quoted(env) + " is not one of: scalar, avx2, avx2+vnni");
+  if (!automatic && !want_avx2 && !want_vnni) {
+    throw Error(quoted(env) + " is not one of: scalar, avx2, avx2+vnni" + unbuilt_note());
+  }
 #ifdef NIBBLE_SIMD_TIERS
   if (automatic) return allows_vnni(f) ? vnni_table() : allows_avx2(f) ? &avx2::kTable : nullptr;
   if (want_avx2 && !allows_avx2(f))
