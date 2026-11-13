@@ -235,15 +235,16 @@ at the end of M7.)
 
 ## Performance
 
-The Q4_K_M and Q6_K files of all three models were re-recorded as paired ABBA blocks after the prefill tiles for
-Q5_0 and the k-quants (`gemm.cpp`, `kquant_avx2.cpp`) existed (nibble `3b702e5`; the table below). The files made
-only of k-quants, Llama-3.2-1B and TinyLlama-1.1B, still prefill 2.3–3.2× slower than llama.cpp: `pp512` is
-2.27–2.58× slower at t = 1 and 2.53–3.17× slower at t = 8 (llama.cpp ÷ nibble). The tiles helped at t = 1, where the
-blocks recorded before them (nibble `2a0ab2c`) put the same four files at 4.0–4.7×. Those earlier blocks are no
-baseline at t = 8: llama.cpp's own speed varied more than 3× inside single blocks. The Qwen2.5-0.5B `Q4_K_M` and
-`Q6_K` files are mostly not k-quants (71% of the weights in their layers are Q5_0 or Q8_0; see Supported models), so
-their `pp512` at t = 8, 1.06× and 1.15× slower, says little about k-quant speed. Decode on these six files is slower
-than llama.cpp at t = 1 (1.14–1.25× on Qwen, 1.61–1.83× on the other two) and at t = 8 (1.07–1.27×).
+The Q4_K_M and Q6_K files of all three models were re-recorded as paired ABBA blocks after the prefill tiles for Q5_0
+and the k-quants (`gemm.cpp`, `kquant_avx2.cpp`) existed (nibble `3b702e5`; the table below). The files made only of
+k-quants, Llama-3.2-1B and TinyLlama-1.1B, still prefill 2.3–3.2× slower than llama.cpp: `pp512` is 2.27–2.58× slower
+at t = 1 and 2.53–3.17× slower at t = 8 (llama.cpp ÷ nibble). The tiles helped at t = 1, where the blocks recorded
+before them (nibble `2a0ab2c`) put the same four files at 4.0–4.7× (two of those blocks include a run started under
+load; without them the range is 4.0–4.9×). Those earlier blocks are no baseline at t = 8: llama.cpp's own speed varied
+more than 3× inside single blocks. The Qwen2.5-0.5B `Q4_K_M` and `Q6_K` files are mostly not k-quants (71% of the
+weights in their layers are Q5_0 or Q8_0; see Supported models), so their `pp512` at t = 8, 1.06× and 1.15× slower,
+says little about k-quant speed. Decode on these six files is slower than llama.cpp at t = 1 (1.14–1.25× on Qwen,
+1.61–1.83× on the other two) and at t = 8 (1.07–1.27×).
 
 All numbers come from `bench/results/*.jsonl`; the charts and the tables below are
 generated from them by `bench/plot.py` (`bench/plot.py` writes `docs/bench/*.svg`,
@@ -278,8 +279,8 @@ commit counts (`bench/plot.py`), so a ratio never blends old and new code. Qwen2
 other models 2 each. The tables give the median block ratio and its range. All 184
 reported runs (nibble at commit `39ec442` for the M6 files and `3b702e5` for the Q4_K_M and Q6_K files) started with
 load average below 2. The blocks of those six files recorded earlier at `2a0ab2c` stay in `abba.jsonl` but are left
-out of the tables (the paragraph above cites only their t = 1 ratios); four of their runs started under load, which
-is the only reason the † mark below is not used in the tables.
+out of the tables (the paragraph above cites only their t = 1 ratios); four of their runs started under load, and
+the † mark below is unused only because those blocks are left out.
 
 **Target (tg128 on Qwen2.5-0.5B Q4_0 within 1.5× of llama.cpp): met at t = 8, missed
 at t = 1.** At t = 8, the default thread count, llama.cpp ÷ nibble is 1.19× (range
