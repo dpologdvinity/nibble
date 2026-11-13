@@ -103,7 +103,7 @@ jobs:
       - name: bench/ unit tests
         run: python -m unittest discover -s bench -p 'test_*.py'
       - name: shellcheck
-        run: shellcheck tools/*.sh
+        run: shellcheck tools/*.sh tests/*.sh
       - name: Conventional-commit subjects (pull requests)
         if: github.event_name == 'pull_request'
         env:

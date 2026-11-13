@@ -36,7 +36,7 @@ ctest --test-dir build -LE e2e --output-on-failure   # everything except the end
 git ls-files '*.cpp' '*.h' | grep -v '^third_party' | xargs clang-format --dry-run -Werror
 ruff check bench tools && ruff format --check bench tools && mypy
 python -m unittest discover -s bench -p 'test_*.py'
-shellcheck tools/*.sh
+shellcheck tools/*.sh tests/*.sh
 ```
 
 clang-tidy: configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNIBBLE_BUILD_TESTS=OFF` and run it as in the
