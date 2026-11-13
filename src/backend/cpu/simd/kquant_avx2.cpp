@@ -103,8 +103,9 @@ struct Q6K {
   }
 };
 
-// acc + madd_epi16(prod, sc). With AVX-VNNI that is one vpdpwssd; both forms add in int32 with wraparound, so
-// they agree for every input (and the operands here cannot overflow anyway, see Saturation above).
+// acc + madd_epi16(prod, sc). With AVX-VNNI that is one vpdpwssd (not the saturating vpdpwssds); both forms add
+// in int32 with wraparound, so they agree for every input. Here no step wraps: over a super-block |acc| stays
+// below 8 * 2 * 8128 * 128 < 2^25.
 inline __m256i madd_acc(__m256i acc, __m256i prod, __m256i sc) {
 #if defined(NIBBLE_HAVE_AVXVNNI)
   return _mm256_dpwssd_avx_epi32(acc, prod, sc);
