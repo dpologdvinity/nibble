@@ -12,8 +12,11 @@
 // generic aux32[l] contribution. Q6_K has a scale per 16 elements: l and l+8 share scale 2g and l+16, l+24
 // share 2g+1, so its scale vector alternates (s0, s1) per int16 pair.
 // Saturation: maddubs pair sums are at most 2*15*127 (Q4_K), 2*31*127 (Q5_K), 2*32*127 (Q6_K), all
-// < 32767. The float part uses mul then add (no FMA; this TU builds with -ffp-contract=off) and the final
-// eight lanes are added to sumf one at a time, in order, like the scalar.
+// < 32767. The Q4_K/Q5_K minimum term sum_k (bsums[2k] + bsums[2k+1]) * mn[k] is integer arithmetic, so it is
+// computed as one madd_epi16 of the 16 bsums against the minimums duplicated per pair, then a horizontal sum:
+// with any int16 bsums and mn <= 63 no int32 step can overflow (|lane| <= 2 * 32768 * 63, |sum| < 2^25). The float part
+// uses mul then add (no FMA; this TU builds with -ffp-contract=off) and the final eight lanes are added to sumf one at
+// a time, in order, like the scalar.
 #include "backend/cpu/simd/simd.h"
 
 #ifdef NIBBLE_HAVE_AVX2
@@ -122,15 +125,17 @@ inline float act_d(const u8* a) {
 struct Prep {
   __m256i wp[8];  // lane_perm of the weight groups (Q4_K/Q5_K: unsigned 0..31, Q6_K: signed -32..31)
   __m256i sc[8];  // madd operand: the group's scale in every int16 (Q4_K/Q5_K) or alternating pairs (Q6_K)
-  uint8_t mn[8];  // Q4_K/Q5_K sub-block minimums (unused for Q6_K)
+  __m256i mn;     // Q4_K/Q5_K sub-block minimums as int16 pairs (mn0, mn0, mn1, mn1, ...); unused for Q6_K
   float d, dmin;  // fp16 super-block scales as float (dmin unused for Q6_K)
 };
 
 // Q4_K/Q5_K super-block at w.
 template <class W>
 inline void prep45(const u8* w, Prep& p) {
-  uint8_t sc[8];
-  unpack_scales(w + 4, sc, p.mn);
+  uint8_t sc[8], mn[8];
+  unpack_scales(w + 4, sc, mn);
+  const __m128i m16 = _mm_cvtepu8_epi16(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(mn)));
+  p.mn = _mm256_set_m128i(_mm_unpackhi_epi16(m16, m16), _mm_unpacklo_epi16(m16, m16));
   __m256i wv[8];
   W::groups(w, wv);
   for (int g = 0; g < 8; ++g) {
@@ -161,13 +166,12 @@ inline void apply45(const Prep& p, const u8* a, const __m256i (&ap)[8], RowAcc& 
     const __m256i prod = _mm256_maddubs_epi16(p.wp[g], ap[g]);  // unsigned weights x signed activations
     acc = _mm256_add_epi32(acc, _mm256_madd_epi16(prod, p.sc[g]));
   }
-  int sumi = 0;
-  for (int k = 0; k < 8; ++k) {
-    int16_t b0, b1;
-    std::memcpy(&b0, a + 260 + 4 * k, 2);
-    std::memcpy(&b1, a + 262 + 4 * k, 2);
-    sumi += (b0 + b1) * p.mn[k];
-  }
+  // Lane k = (bsums[2k] + bsums[2k+1]) * mn[k]; the eight lanes summed give the scalar sumi exactly.
+  const __m256i m = _mm256_madd_epi16(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + 260)), p.mn);
+  __m128i s = _mm_add_epi32(_mm256_castsi256_si128(m), _mm256_extracti128_si256(m, 1));
+  s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0x4E));
+  s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0xB1));
+  const int sumi = _mm_cvtsi128_si32(s);
   const float ad = act_d(a);
   const float d = p.d * ad;
   r.sums8 = _mm256_add_ps(r.sums8, _mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(acc)));

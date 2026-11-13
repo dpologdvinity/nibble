@@ -232,6 +232,50 @@ TEST_CASE("gemm_k equals the k-quant row path bitwise", "[gemm][simd]") {
   });
 }
 
+// The Q4_K/Q5_K minimum term multiplies the activation bsums by the 6-bit sub-block minimums. bsums from
+// quantize_row_q8_K stay within +-2032, but the kernels take any int16: activation blocks with bsums at the int16
+// extremes (and maximal minimums in every other row) must still match the scalar oracle bit for bit, through both
+// the prefill tile and the row kernel.
+TEST_CASE("k-quant tiles match the scalar oracle on extreme activation bsums", "[gemm][simd]") {
+  test::for_each_tier([&](const simd::Kernels& ks) {
+    const int16_t extremes[] = {32767, -32768, 32767, 32767, -32768, -32768, 1, -1};
+    for (DType type : {DType::Q4_K, DType::Q5_K}) {
+      const int64_t in = 512, rows = 9, n = 7, nb = in / 256;
+      auto bytes = test_weight_rows(type, 77, rows, in);
+      Tensor w;
+      w.type = type;
+      w.n_dims = 2;
+      w.ne = {in, rows, 1, 1};
+      w.data = bytes.data();
+      const size_t bs = type == DType::Q5_K ? 176 : 144;
+      for (int64_t r = 0; r < rows; r += 2)  // scales and minimums all 63
+        for (int64_t b = 0; b < nb; ++b)
+          std::memset(bytes.data() + size_t(r) * size_t(w.row_bytes()) + size_t(b) * bs + 4, 0xFF, 12);
+      std::mt19937 g(9);
+      const auto x = rnd(size_t(n * in), g);
+      std::vector<BlockQ8_K> xq(size_t(n * nb));
+      for (int64_t t = 0; t < n; ++t) quantize_row_q8_K(x.data() + t * in, xq.data() + t * nb, in);
+      for (size_t i = 0; i < xq.size(); ++i)
+        for (int k = 0; k < 16; ++k) xq[i].bsums[k] = extremes[(i + size_t(k)) % 8];
+      std::vector<float> tile(size_t(n * rows), -7.f), row(tile);
+      ks.gemm_k(w, xq.data(), tile.data(), n, 0, rows);
+      ks.matmul_rows_k(w, xq.data(), row.data(), n, 0, rows);
+      for (int64_t t = 0; t < n; ++t)
+        for (int64_t r = 0; r < rows; ++r) {
+          const auto* wr = bytes.data() + size_t(r) * size_t(w.row_bytes());
+          const float ref = type == DType::Q4_K
+                                ? dot_q4_K_q8_K(reinterpret_cast<const BlockQ4_K*>(wr), xq.data() + t * nb, nb)
+                                : dot_q5_K_q8_K(reinterpret_cast<const BlockQ5_K*>(wr), xq.data() + t * nb, nb);
+          const size_t i = size_t(t * rows + r);
+          INFO("type=" << int(type) << " t=" << t << " r=" << r << " ref=" << ref << " tile=" << tile[i]
+                       << " row=" << row[i]);
+          CHECK(std::bit_cast<uint32_t>(tile[i]) == std::bit_cast<uint32_t>(ref));
+          CHECK(std::bit_cast<uint32_t>(row[i]) == std::bit_cast<uint32_t>(ref));
+        }
+    }
+  });
+}
+
 // Hostile weight blocks (every byte 0xFF, or zero) with NaN, Inf, zero and large fp16 scales through the Q5_0 and
 // k-quant prefill tiles: bitwise equal to the scalar oracle, NaN where the oracle is NaN.
 TEST_CASE("prefill tiles match the scalar oracle on hostile blocks", "[gemm][simd]") {
