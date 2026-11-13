@@ -197,8 +197,8 @@ void CpuBackend::matmul_multi(std::span<const Tensor* const> ws, const float* x,
     const int64_t nb = in / kQK_K;
     const size_t blocks = static_cast<size_t>(n * nb);
     if (xqk_.size() < blocks) xqk_.resize(blocks);
-    // Rows are independent, so prefill quantizes them on the pool (the result does not depend on who runs a
-    // row); decode's one row stays on the caller and skips a pool round trip.
+    // Rows are independent, so prefill (n >= 4) quantizes them on the pool (the result does not depend on who runs
+    // a row); fewer rows, decode included, stay on the caller and skip a pool round trip.
     BlockQ8_K* xk = xqk_.data();
     const auto quantize = [&](int64_t b, int64_t e) {
       for (int64_t t = b; t < e; ++t) quantize_row_q8_K(x + t * in, xk + t * nb, in);
