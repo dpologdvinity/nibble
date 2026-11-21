@@ -84,3 +84,19 @@ Larger changes follow spec -> plan -> execution -> review, and the design record
 - Finish with a fresh-context review of the whole branch, then a pull request.
 - `.claude/settings.json` enables the shared plugins (clangd LSP, commit commands). Personal permission approvals stay
   in the git-ignored `.claude/settings.local.json`. There are no project MCP servers.
+
+### Claude on GitHub
+
+Workflows in `.github/workflows/` run Claude Code on the repository (they need the `CLAUDE_CODE_OAUTH_TOKEN` secret and
+skip with a notice without it):
+
+- `claude.yml`: a comment, review or new issue that contains `@claude`, written by an owner, member or collaborator,
+  starts a session with the build and lint tools installed. It works on an `agent/<topic>` branch (or on the pull
+  request's own branch), runs the lint block and `ctest -LE e2e`, and opens a pull request labelled `agent`. It cannot
+  merge, approve or close anything.
+- `claude-triage.yml`: a failing scheduled job's `ci-failure` issue gets a diagnosis comment, and, with a reproducer and
+  high confidence, an `agent/fix-issue-<n>` pull request whose first commit is the failing test.
+- `claude-review.yml`: owner, Dependabot and `agent` pull requests get inline review comments only (no approval, no
+  change requests).
+- Agent pull requests carry the `agent` label and are never auto-merged. `automerge.yml` only enables auto-merge for the
+  owner's own pull requests and Dependabot's minor and patch updates, and switches it off when `agent` is added.

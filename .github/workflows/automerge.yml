@@ -1,0 +1,75 @@
+# Reason: the owner's own pull requests and Dependabot's minor and patch updates should merge as soon as the required
+# checks are green, without the owner clicking. This only turns on GitHub auto-merge (`gh pr merge --auto --merge`);
+# branch protection still decides when the merge happens. Never for agent pull requests (label `agent`): they wait for
+# the owner, and adding the label to a pull request later switches its auto-merge off.
+# Runs on pull_request_target so Dependabot's pull requests get a write token; it never checks out or runs pull request
+# code, and the only values it uses (the URL, the author and the labels) come from the event payload.
+# Needs the repository setting allow_auto_merge (set; `gh api repos/dpologdvinity/nibble --jq .allow_auto_merge`).
+# By hand: not runnable (it needs a pull request event); close and reopen the pull request, or run
+# `gh pr merge --auto --merge <number>`.
+name: automerge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, labeled]
+
+permissions: {}
+
+jobs:
+  owner:
+    # Not a draft, from a branch of this repository, written by the owner, and not an agent pull request.
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'dpologdvinity' &&
+      !contains(github.event.pull_request.labels.*.name, 'agent')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --merge "$PR_URL"
+
+  dependabot:
+    if: |
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      !contains(github.event.pull_request.labels.*.name, 'agent')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Checks that the pull request really is Dependabot's (commit signatures included) before trusting its metadata.
+      - name: Read the update type
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Enable auto-merge for minor and patch updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-minor' || steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --merge "$PR_URL"
+
+  # An `agent` label added after auto-merge was switched on must stop the merge.
+  agent-hold:
+    if: github.event.action == 'labeled' && github.event.label.name == 'agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # --disable-auto fails when auto-merge is not on, which is the usual case here.
+          if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            gh pr merge --disable-auto "$PR_URL"
+          fi
