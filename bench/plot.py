@@ -455,12 +455,16 @@ def line_chart(
         step = hi / 5
         first_tick = lo
     if y_max is not None:
-        if y_max <= lo:
+        negative = y_min is None and min(ys) < 0  # the bottom is re-aligned below, so only the other cases check it
+        if y_max <= lo and not negative:
             raise ValueError(f"y_max ({y_max:g}) must be above the axis bottom ({lo:g})")
         hi = y_max  # a fixed top: re-pick a nice step for the span; the top tick may then sit below the edge
-        if y_min is None and min(ys) < 0:  # negative data: re-align the floor to a multiple of the final step
-            step = nice_step(hi - min(ys))
-            lo = first_tick = math.floor(min(ys) / step + 1e-9) * step
+        if negative:  # re-align the floor to a multiple of the final step
+            floor = min(min(ys), hi)
+            if hi - floor <= 0:  # every point is at or above a cap that is at or below them: a positive span anyway
+                floor = hi - (abs(hi) or 1.0)
+            step = nice_step(hi - floor)
+            lo = first_tick = math.floor(floor / step + 1e-9) * step
         else:
             step = nice_step(hi - lo)
     ph = h - top - bottom

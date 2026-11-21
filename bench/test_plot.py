@@ -249,6 +249,30 @@ class LineChartTest(unittest.TestCase):
         self.assertLessEqual(values[0], -0.3)  # the axis still reaches the lowest point
         self.assertIn(0.0, values)
 
+    def test_line_chart_negative_cap_at_or_below_the_data_still_renders(self) -> None:
+        # Regression: a cap equal to the lowest value made the realigned span 0 (math domain error), and a cap
+        # below it made the span negative. Points above the cap are drawn hollow on the top edge.
+        cases = [
+            ([-0.375, 0.5], -0.375),  # cap == lowest value
+            ([-0.375, 0.5], -0.38),  # cap just below it
+            ([-0.1, -0.05], -0.375),  # every point above a negative cap
+            ([-0.1, -0.05], -0.5),
+        ]
+        for values, cap in cases:
+            pts = [(T0 + i * DAY, v) for i, v in enumerate(values)]
+            svg = plot.line_chart("t", "y", [("a", "#000", pts)], y_max=cap)
+            labels = [float(v) for v in self.y_labels(svg)]
+            self.assertGreaterEqual(len(labels), 2, (values, cap))
+            self.assertLessEqual(max(labels), cap + 1e-9, (values, cap))  # no tick above the cap
+            step = labels[1] - labels[0]
+            self.assertGreater(step, 0, (values, cap))
+            self.assertGreater(labels[-1] + step, cap - 1e-9, (values, cap))  # the top tick is the last on the grid
+            hollow = len(re.findall(r'<circle [^>]*fill="white"', svg))
+            self.assertEqual(hollow, sum(v > cap for v in values), (values, cap))
+            self.assertEqual("above the axis maximum" in svg, hollow > 0, (values, cap))
+            for c in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg):
+                self.assertTrue(40 <= float(c) <= 400, (values, cap, c))
+
     def test_line_chart_y_max_is_the_top_with_y_min_and_negative_data(self) -> None:
         svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.991), (T0 + DAY, 0.992)])], y_min=0.99, y_max=1.0)
         self.assertEqual(self.y_labels(svg)[-1], "1.000")
