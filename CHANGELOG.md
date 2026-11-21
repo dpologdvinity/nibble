@@ -35,6 +35,41 @@ All notable changes to nibble are listed here, newest first. The file is generat
 
 ### Changed
 
+- **gemm:** k-quant tiles on extreme activation bsums ([77c4e73](https://github.com/dpologdvinity/nibble/commit/77c4e73acc111deef57740a6583b1d8d6814bb98))
+- **claude:** enable project-scope plugins ([a22c606](https://github.com/dpologdvinity/nibble/commit/a22c606bff17deb03eac0a5f4e315bac562f2b6e))
+- add .clangd for the SIMD tier headers ([9d783e2](https://github.com/dpologdvinity/nibble/commit/9d783e23ab2796e04bd405ca7a177a76b806d09b))
+- allowlist the token_embd.weight gitleaks false positive ([6e5bd52](https://github.com/dpologdvinity/nibble/commit/6e5bd52fde8bd8dd9dc6927f59e72183ccbcb816))
+- **agents:** share plugin settings at project scope and ignore local agent files ([841003c](https://github.com/dpologdvinity/nibble/commit/841003cf0922be4a09c6fd4014973365f4f1ecb0))
+- enable typos in lefthook ([1974345](https://github.com/dpologdvinity/nibble/commit/19743454efd23b39f8c77f57e5ebd3631e5fb6cd))
+- **typos:** configure false positives ([ad9b058](https://github.com/dpologdvinity/nibble/commit/ad9b0581bdfd434efd277c1c9fa8415fe80b4351))
+- add lefthook git hooks ([a72504c](https://github.com/dpologdvinity/nibble/commit/a72504c4f6313a143c5eaa28182a41913b423615))
+
+### Documentation
+
+- regenerate the CHANGELOG, listing CI changes under Changed ([0c43997](https://github.com/dpologdvinity/nibble/commit/0c4399780111d2928ca48713fbb04b812d162dc3))
+- add a CHANGELOG generated from Conventional Commits ([0de919e](https://github.com/dpologdvinity/nibble/commit/0de919e59692f5242b70ede8f8068135e06a1bda))
+- **ci:** name both sides of the NaN note in the PR report ([2e551d4](https://github.com/dpologdvinity/nibble/commit/2e551d484281fa6cd7e8cb146f1031b40302e959))
+- **ci:** say that job_status rows are recorded before the Report step ([bae8591](https://github.com/dpologdvinity/nibble/commit/bae859162747aede9d7ba481bc9975242daabea8))
+- **plan:** exclude deleted test cases from the fix-proof selection ([323a447](https://github.com/dpologdvinity/nibble/commit/323a447e549fbbbbbed68b5df0a19d7c128cf01a))
+- **plan:** pin deletion mapping and job-status recording ([5785daa](https://github.com/dpologdvinity/nibble/commit/5785daa773ac1c7a6735577d62b22e7f07518c77))
+- **plan:** fold in the PR #49 review findings ([8ed251c](https://github.com/dpologdvinity/nibble/commit/8ed251c760a128d9eacda314626564a2d649d6c0))
+- **github:** add bug and feature issue forms ([34206ad](https://github.com/dpologdvinity/nibble/commit/34206adce1aba728bdceeff9e24a9e5fa2c40e5a))
+- **plan:** task-by-task plan for the CI and automation suite ([211877d](https://github.com/dpologdvinity/nibble/commit/211877dbfab68f0330f957b016de69c6f38fc1d9))
+- **spec:** design for nightly checks, PR reports, agents and dashboard ([eacb3eb](https://github.com/dpologdvinity/nibble/commit/eacb3eb4ffe3651a7262f462e2ad800216e03907))
+- **cpu:** state the k-quant accumulator bound in madd_acc ([54ea9ff](https://github.com/dpologdvinity/nibble/commit/54ea9ff41f9cd5a0398f5cfd2ed40bae72449306))
+- **cpu:** say which row counts quantize on the pool ([d4fa9ee](https://github.com/dpologdvinity/nibble/commit/d4fa9ee0a28ddeea47101f93e9d261d5373991d7))
+- flag the noisy baseline blocks in the k-quant claim ([8152781](https://github.com/dpologdvinity/nibble/commit/81527819d45b02f950819221dc0dfd02b6e3a819))
+- correct the k-quant prefill claim ([11d98e6](https://github.com/dpologdvinity/nibble/commit/11d98e6a0d981630ac1f885ebc66c67600b8f482))
+- disclose the added benchmark rounds, align mypy and plan wording ([74d0936](https://github.com/dpologdvinity/nibble/commit/74d0936c1907003bc076188073ef990104b2e31f))
+- describe the reported benchmark runs accurately ([8617f68](https://github.com/dpologdvinity/nibble/commit/8617f68258bd264e82cfde29db679fdb4373f7d2))
+- release build performance ([0050dcc](https://github.com/dpologdvinity/nibble/commit/0050dcce3c1a0b71fbb060ec2d60a41bcd852472))
+- add design specs and milestone plans ([dbd8fc4](https://github.com/dpologdvinity/nibble/commit/dbd8fc4b7aafec28a37bbf4f05701af1a77b2cf8))
+- make AGENTS.md canonical ([5913dc5](https://github.com/dpologdvinity/nibble/commit/5913dc5dc39b26059365afc45a1f01a4753eb1b8))
+- k-quant performance with the prefill tiles ([9bc07c9](https://github.com/dpologdvinity/nibble/commit/9bc07c9cb9623a6521345a640f4fd1c032b043b9))
+- list NIBBLE_SIMD_VNNI=OFF in CONTRIBUTING ([daf137a](https://github.com/dpologdvinity/nibble/commit/daf137a874e30b74188b210304004b7b6d166f4a))
+
+### CI and tooling
+
 - attest release artifacts with provenance and SBOMs ([84f7d1f](https://github.com/dpologdvinity/nibble/commit/84f7d1ff2f8853541ab9b2efcd4463c0b9068311))
 - **ci:** cap the dashboard's coverage axis at 100 % ([955fee0](https://github.com/dpologdvinity/nibble/commit/955fee062d7b066d9f8cd62e25e8058553608c82))
 - **ci:** mark a timed-out accuracy attempt and start the first fix-proof case on a tight budget ([58cc7af](https://github.com/dpologdvinity/nibble/commit/58cc7af3ab18e5ed85f18cdb32dda2cc0298f4df))
@@ -115,43 +150,12 @@ All notable changes to nibble are listed here, newest first. The file is generat
 - publish an OpenSSF Scorecard ([ba6e798](https://github.com/dpologdvinity/nibble/commit/ba6e798287419c0fee7692863a435c710f279350))
 - scan for committed secrets with gitleaks ([a6fdf07](https://github.com/dpologdvinity/nibble/commit/a6fdf078968246b500dbe762a6968de275ba3a46))
 - scan C++ and workflows with CodeQL ([1c294c4](https://github.com/dpologdvinity/nibble/commit/1c294c46a3063f289f2e55b31aa7f6192b622e66))
-- **gemm:** k-quant tiles on extreme activation bsums ([77c4e73](https://github.com/dpologdvinity/nibble/commit/77c4e73acc111deef57740a6583b1d8d6814bb98))
 - shellcheck the scripts in tests/ too ([dfd9cf4](https://github.com/dpologdvinity/nibble/commit/dfd9cf4fd0211f1842ddae81ffe5339bcc4e1003))
-- **claude:** enable project-scope plugins ([a22c606](https://github.com/dpologdvinity/nibble/commit/a22c606bff17deb03eac0a5f4e315bac562f2b6e))
-- add .clangd for the SIMD tier headers ([9d783e2](https://github.com/dpologdvinity/nibble/commit/9d783e23ab2796e04bd405ca7a177a76b806d09b))
-- allowlist the token_embd.weight gitleaks false positive ([6e5bd52](https://github.com/dpologdvinity/nibble/commit/6e5bd52fde8bd8dd9dc6927f59e72183ccbcb816))
-- **agents:** share plugin settings at project scope and ignore local agent files ([841003c](https://github.com/dpologdvinity/nibble/commit/841003cf0922be4a09c6fd4014973365f4f1ecb0))
 - run the bench/ unit tests ([6c54b45](https://github.com/dpologdvinity/nibble/commit/6c54b45e026cf39e28540ca509a4e0a5cef6d619))
 - build one test cell without the AVX-VNNI tier ([5a59429](https://github.com/dpologdvinity/nibble/commit/5a594293275ff6a37a9519abaae7d73076bb4dd0))
 - note that clang-tidy covers the AVX-VNNI kernel branches ([5f56a01](https://github.com/dpologdvinity/nibble/commit/5f56a0150a6be596e8c7840d8fb0d990779dc0c4))
-- enable typos in lefthook ([1974345](https://github.com/dpologdvinity/nibble/commit/19743454efd23b39f8c77f57e5ebd3631e5fb6cd))
-- **typos:** configure false positives ([ad9b058](https://github.com/dpologdvinity/nibble/commit/ad9b0581bdfd434efd277c1c9fa8415fe80b4351))
 - add dependabot config ([bfe9c78](https://github.com/dpologdvinity/nibble/commit/bfe9c7802ac4779d4d4d890c8a8cffa09254df61))
 - pin actions to commit SHAs ([2ea3027](https://github.com/dpologdvinity/nibble/commit/2ea3027208cceb94521834dc69bcdfd606c01e25))
-- add lefthook git hooks ([a72504c](https://github.com/dpologdvinity/nibble/commit/a72504c4f6313a143c5eaa28182a41913b423615))
-
-### Documentation
-
-- add a CHANGELOG generated from Conventional Commits ([0de919e](https://github.com/dpologdvinity/nibble/commit/0de919e59692f5242b70ede8f8068135e06a1bda))
-- **ci:** name both sides of the NaN note in the PR report ([2e551d4](https://github.com/dpologdvinity/nibble/commit/2e551d484281fa6cd7e8cb146f1031b40302e959))
-- **ci:** say that job_status rows are recorded before the Report step ([bae8591](https://github.com/dpologdvinity/nibble/commit/bae859162747aede9d7ba481bc9975242daabea8))
-- **plan:** exclude deleted test cases from the fix-proof selection ([323a447](https://github.com/dpologdvinity/nibble/commit/323a447e549fbbbbbed68b5df0a19d7c128cf01a))
-- **plan:** pin deletion mapping and job-status recording ([5785daa](https://github.com/dpologdvinity/nibble/commit/5785daa773ac1c7a6735577d62b22e7f07518c77))
-- **plan:** fold in the PR #49 review findings ([8ed251c](https://github.com/dpologdvinity/nibble/commit/8ed251c760a128d9eacda314626564a2d649d6c0))
-- **github:** add bug and feature issue forms ([34206ad](https://github.com/dpologdvinity/nibble/commit/34206adce1aba728bdceeff9e24a9e5fa2c40e5a))
-- **plan:** task-by-task plan for the CI and automation suite ([211877d](https://github.com/dpologdvinity/nibble/commit/211877dbfab68f0330f957b016de69c6f38fc1d9))
-- **spec:** design for nightly checks, PR reports, agents and dashboard ([eacb3eb](https://github.com/dpologdvinity/nibble/commit/eacb3eb4ffe3651a7262f462e2ad800216e03907))
-- **cpu:** state the k-quant accumulator bound in madd_acc ([54ea9ff](https://github.com/dpologdvinity/nibble/commit/54ea9ff41f9cd5a0398f5cfd2ed40bae72449306))
-- **cpu:** say which row counts quantize on the pool ([d4fa9ee](https://github.com/dpologdvinity/nibble/commit/d4fa9ee0a28ddeea47101f93e9d261d5373991d7))
-- flag the noisy baseline blocks in the k-quant claim ([8152781](https://github.com/dpologdvinity/nibble/commit/81527819d45b02f950819221dc0dfd02b6e3a819))
-- correct the k-quant prefill claim ([11d98e6](https://github.com/dpologdvinity/nibble/commit/11d98e6a0d981630ac1f885ebc66c67600b8f482))
-- disclose the added benchmark rounds, align mypy and plan wording ([74d0936](https://github.com/dpologdvinity/nibble/commit/74d0936c1907003bc076188073ef990104b2e31f))
-- describe the reported benchmark runs accurately ([8617f68](https://github.com/dpologdvinity/nibble/commit/8617f68258bd264e82cfde29db679fdb4373f7d2))
-- release build performance ([0050dcc](https://github.com/dpologdvinity/nibble/commit/0050dcce3c1a0b71fbb060ec2d60a41bcd852472))
-- add design specs and milestone plans ([dbd8fc4](https://github.com/dpologdvinity/nibble/commit/dbd8fc4b7aafec28a37bbf4f05701af1a77b2cf8))
-- make AGENTS.md canonical ([5913dc5](https://github.com/dpologdvinity/nibble/commit/5913dc5dc39b26059365afc45a1f01a4753eb1b8))
-- k-quant performance with the prefill tiles ([9bc07c9](https://github.com/dpologdvinity/nibble/commit/9bc07c9cb9623a6521345a640f4fd1c032b043b9))
-- list NIBBLE_SIMD_VNNI=OFF in CONTRIBUTING ([daf137a](https://github.com/dpologdvinity/nibble/commit/daf137a874e30b74188b210304004b7b6d166f4a))
 
 ## [v0.8.0](https://github.com/dpologdvinity/nibble/compare/v0.7.1...v0.8.0) - 2026-11-07
 
@@ -170,39 +174,45 @@ All notable changes to nibble are listed here, newest first. The file is generat
 ### Changed
 
 - **cli:** NIBBLE_KERNELS forces scalar and rejects unknown values ([f6fb2b8](https://github.com/dpologdvinity/nibble/commit/f6fb2b878ec4ed7d05ec53dcde842daca33fdf30))
-- count each kernel source line once across the SIMD tiers in coverage ([d358005](https://github.com/dpologdvinity/nibble/commit/d358005506faacf4dbd86cf835556f6f211dd8b5))
-- measure coverage with the scalar kernels forced as well ([8cea51a](https://github.com/dpologdvinity/nibble/commit/8cea51a34006bf94c18dd11d818937719561a500))
-- ship one x86-64 release binary that dispatches at runtime ([f0e39d3](https://github.com/dpologdvinity/nibble/commit/f0e39d38c2bbbb3aabf2e4b97586a5f7ca359a9d))
 - **simd:** run the kernel tests on every tier the CPU supports ([a90ab01](https://github.com/dpologdvinity/nibble/commit/a90ab015e2d32900cc42d3d95438438400dcf8eb))
 - bump ubuntu from 24.04 to 26.04 ([95b0b29](https://github.com/dpologdvinity/nibble/commit/95b0b29d4625bcb7703f321b224909a18502ae90))
 - bump ruff from 0.17.2 to 0.17.3 ([479f439](https://github.com/dpologdvinity/nibble/commit/479f4391f9c8f7a8e98f10ddeaf5d8b5e651dc6a))
 - bump mypy from 2.4.0 to 2.4.1 ([63e1f27](https://github.com/dpologdvinity/nibble/commit/63e1f279854a2746591425ec68db7e36b62c1980))
-- bump docker/setup-buildx-action from 3.12.0 to 4.4.1 ([995fd34](https://github.com/dpologdvinity/nibble/commit/995fd34b8c96b6e4af9ca1788fa84f05ce053f8d))
-- bump docker/login-action from 4.6.0 to 4.7.0 ([450d01c](https://github.com/dpologdvinity/nibble/commit/450d01c3455dd1b7c5ac01bbde5770a3ad80c62a))
-- bump actions/cache from 4.3.0 to 6.1.0 ([2794558](https://github.com/dpologdvinity/nibble/commit/279455871cda40473b19c63018a86354cd283524))
 - bump gcovr from 8.7 to 8.8 ([1d9f9f5](https://github.com/dpologdvinity/nibble/commit/1d9f9f5b4feae61663a3a20624d6f13b64312e2c))
-- bump docker/metadata-action from 5.10.0 to 6.2.0 ([5e1d39b](https://github.com/dpologdvinity/nibble/commit/5e1d39bc6eeccf1c4315864203276fc209de7a52))
 - bump clang-tidy from 23.1.3 to 23.1.4 ([4967668](https://github.com/dpologdvinity/nibble/commit/4967668ed6799d8b48f5ad03326a59eb1ee7fc11))
-- bump actions/checkout from 5.1.0 to 7.0.1 ([f649bef](https://github.com/dpologdvinity/nibble/commit/f649bef42ce42dbb37516213b76e1b5f0dbf3384))
 - **alloc:** first prefill after construction allocates nothing ([b0c1bfc](https://github.com/dpologdvinity/nibble/commit/b0c1bfcfdaad3d2a759a390d5d75cef30da1fca1))
-- keep the Docker base image on Ubuntu LTS releases ([b7c39b2](https://github.com/dpologdvinity/nibble/commit/b7c39b222d9c9b8cec96226efab55f1d008fbdc8))
-- key ccache by CPU feature flags, not just the model name ([42c682d](https://github.com/dpologdvinity/nibble/commit/42c682dfb7213f4bc5a2505585d912ab184b5ad9))
-- upload test results to Codecov Test Analytics ([deb0d86](https://github.com/dpologdvinity/nibble/commit/deb0d86ce1a6324a51e6c7621c09d3f8792374dd))
-- upload coverage to Codecov and add the badge ([1bdd4ba](https://github.com/dpologdvinity/nibble/commit/1bdd4ba83cfdb001b96be2ed41e471754c025b0e))
 
 ### Documentation
 
 - one release binary that picks its kernels at startup, NIBBLE_KERNELS ([95599c3](https://github.com/dpologdvinity/nibble/commit/95599c37031aa0336e00b631b1550de18360da0d))
 - describe runtime kernel selection ([4c2b7a0](https://github.com/dpologdvinity/nibble/commit/4c2b7a0338ba5a3a4c4bdac60e2667c5e9ec1de7))
 
+### CI and tooling
+
+- count each kernel source line once across the SIMD tiers in coverage ([d358005](https://github.com/dpologdvinity/nibble/commit/d358005506faacf4dbd86cf835556f6f211dd8b5))
+- measure coverage with the scalar kernels forced as well ([8cea51a](https://github.com/dpologdvinity/nibble/commit/8cea51a34006bf94c18dd11d818937719561a500))
+- ship one x86-64 release binary that dispatches at runtime ([f0e39d3](https://github.com/dpologdvinity/nibble/commit/f0e39d38c2bbbb3aabf2e4b97586a5f7ca359a9d))
+- bump docker/setup-buildx-action from 3.12.0 to 4.4.1 ([995fd34](https://github.com/dpologdvinity/nibble/commit/995fd34b8c96b6e4af9ca1788fa84f05ce053f8d))
+- bump docker/login-action from 4.6.0 to 4.7.0 ([450d01c](https://github.com/dpologdvinity/nibble/commit/450d01c3455dd1b7c5ac01bbde5770a3ad80c62a))
+- bump actions/cache from 4.3.0 to 6.1.0 ([2794558](https://github.com/dpologdvinity/nibble/commit/279455871cda40473b19c63018a86354cd283524))
+- bump docker/metadata-action from 5.10.0 to 6.2.0 ([5e1d39b](https://github.com/dpologdvinity/nibble/commit/5e1d39bc6eeccf1c4315864203276fc209de7a52))
+- bump actions/checkout from 5.1.0 to 7.0.1 ([f649bef](https://github.com/dpologdvinity/nibble/commit/f649bef42ce42dbb37516213b76e1b5f0dbf3384))
+- keep the Docker base image on Ubuntu LTS releases ([b7c39b2](https://github.com/dpologdvinity/nibble/commit/b7c39b222d9c9b8cec96226efab55f1d008fbdc8))
+- key ccache by CPU feature flags, not just the model name ([42c682d](https://github.com/dpologdvinity/nibble/commit/42c682dfb7213f4bc5a2505585d912ab184b5ad9))
+- upload test results to Codecov Test Analytics ([deb0d86](https://github.com/dpologdvinity/nibble/commit/deb0d86ce1a6324a51e6c7621c09d3f8792374dd))
+- upload coverage to Codecov and add the badge ([1bdd4ba](https://github.com/dpologdvinity/nibble/commit/1bdd4ba83cfdb001b96be2ed41e471754c025b0e))
+
 ## [v0.7.1](https://github.com/dpologdvinity/nibble/compare/v0.7.0...v0.7.1) - 2026-10-25
 
 ### Changed
 
-- pass the commit to the pushed image build and assert --version ([401658f](https://github.com/dpologdvinity/nibble/commit/401658f410b095156487aba89845effb9e58308a))
-- skip duplicate packaging in releases and avoid shared concurrency groups ([836176a](https://github.com/dpologdvinity/nibble/commit/836176adfb45c1cd11213e594f16c46b3bddb58a))
 - validate and shorten the NIBBLE_GIT_SHA override ([9184547](https://github.com/dpologdvinity/nibble/commit/91845473881f25f7373fd291f01db625c1e0d023))
 - **gemm:** check prefill tiles against the scalar oracle and hostile blocks ([b3fd283](https://github.com/dpologdvinity/nibble/commit/b3fd2831070d42c7db4a1ae102f00830de40bc5c))
+
+### CI and tooling
+
+- pass the commit to the pushed image build and assert --version ([401658f](https://github.com/dpologdvinity/nibble/commit/401658f410b095156487aba89845effb9e58308a))
+- skip duplicate packaging in releases and avoid shared concurrency groups ([836176a](https://github.com/dpologdvinity/nibble/commit/836176adfb45c1cd11213e594f16c46b3bddb58a))
 - attach only the tagged tarballs to the draft release ([6920ed6](https://github.com/dpologdvinity/nibble/commit/6920ed698d80ccb2e2086effefa5f8617d92ac4b))
 
 ## [v0.7.0](https://github.com/dpologdvinity/nibble/releases/tag/v0.7.0) - 2026-10-25
@@ -309,26 +319,12 @@ All notable changes to nibble are listed here, newest first. The file is generat
 
 ### Changed
 
-- give each non-PR commit its own concurrency group ([f6fe975](https://github.com/dpologdvinity/nibble/commit/f6fe97584146543941216ca6c16415099f24b56a))
-- bump docker/build-push-action from 6.19.2 to 7.4.0 ([a6cf04e](https://github.com/dpologdvinity/nibble/commit/a6cf04eeb8b09f8470118650c83a71988bceed14))
-- bump actions/setup-python from 5.6.0 to 7.1.0 ([c46e645](https://github.com/dpologdvinity/nibble/commit/c46e6453162b7c31540e34b713fc7081b194b56c))
-- bump actions/download-artifact from 4.3.0 to 8.0.2 ([a7b6486](https://github.com/dpologdvinity/nibble/commit/a7b64865798a7ee9b6d700ebdeff70b846c44f12))
-- bump actions/cache/restore from 4.3.0 to 6.1.0 ([ac2b3e3](https://github.com/dpologdvinity/nibble/commit/ac2b3e3e79057e4b6a64b358c6aee728b681fd28))
-- bump docker/login-action from 3.7.0 to 4.6.0 ([62b2f37](https://github.com/dpologdvinity/nibble/commit/62b2f3762085c0e99751e5f68b216dbcce651689))
 - **bench:** plot the k-quant model files ([8e0dc56](https://github.com/dpologdvinity/nibble/commit/8e0dc56d889ad81fbfa3e9db5e9c449180618553))
-- gate releases on the full suite and stop cancelling branch runs ([2a0ab2c](https://github.com/dpologdvinity/nibble/commit/2a0ab2ceb024301926d9d8e38e5b2d91fc5635dd))
-- let dependabot update pip tools and the base image ([64db1fd](https://github.com/dpologdvinity/nibble/commit/64db1fd77f50d7c34438dd7f8fa34a09734c1214))
 - **docker:** report git revision in container image via GIT_SHA build arg ([ac3699a](https://github.com/dpologdvinity/nibble/commit/ac3699ac57d814668d2d27d304b9319b742f6410))
 - **simd:** cover NaN at every lane and compare blocks bitwise ([c528d5e](https://github.com/dpologdvinity/nibble/commit/c528d5eac4897ba9c1c3d3f7461558d863f499af))
-- key ccache by CPU model and ignore gcov errors from non-project objects ([80abc00](https://github.com/dpologdvinity/nibble/commit/80abc004beffce13981ea3a7d7d3f0eb0de03961))
-- pin image tags to explicit versions and narrow binary job permissions ([4921cf6](https://github.com/dpologdvinity/nibble/commit/4921cf69afa966ca95834c7b6398d597f5395bd2))
-- make coverage gate and commit-subject check actually run ([a402c78](https://github.com/dpologdvinity/nibble/commit/a402c787f3793b72a08ba3f77a2b7ae74a9c6347))
 - tolerate clang's avx10 feature-combination warning under -march=native ([1d9dbb4](https://github.com/dpologdvinity/nibble/commit/1d9dbb43aaf7efc6ebc72a21fd8b5571501f6075))
-- allow reusable package workflow to inherit caller permissions ([48937d2](https://github.com/dpologdvinity/nibble/commit/48937d2ea8336472923c0e96597fe300521c44be))
-- add .clang-tidy config and ignore gcov parse errors in coverage ([ccc12af](https://github.com/dpologdvinity/nibble/commit/ccc12af432f308da056d67beab24cd692dddc791))
 - **gguf:** suppress signed char misuse warning in scalar reader ([477f580](https://github.com/dpologdvinity/nibble/commit/477f58058bf4bc7f2ce4c3ceb2e83a1cbc960a31))
 - fix clang-tidy findings ([b23c12c](https://github.com/dpologdvinity/nibble/commit/b23c12cd09d00fa309f81caa630be3678add5b6f))
-- add matrix, sanitizers, coverage, fuzz, packaging, release ([c12534c](https://github.com/dpologdvinity/nibble/commit/c12534c29d4542868731752958d628c4e6cc76d2))
 - add Dockerfile and pinned CI tool versions ([6a0b687](https://github.com/dpologdvinity/nibble/commit/6a0b687aded4a2e19e197cffb6b95bb0845ebbd7))
 - add NIBBLE_BUILD_TESTS to skip tests in release builds ([83510a5](https://github.com/dpologdvinity/nibble/commit/83510a5bcecb156868e9da3849d7db08fc19783f))
 - **tools:** satisfy shellcheck in make_quants.sh ([f7d4e04](https://github.com/dpologdvinity/nibble/commit/f7d4e04e510007669f0fe23e73495c1e038a24ba))
@@ -344,8 +340,6 @@ All notable changes to nibble are listed here, newest first. The file is generat
 - **quant:** pair q8_1 golden cases by name; share dequant seed ([57c8658](https://github.com/dpologdvinity/nibble/commit/57c8658db11a37f846bed688b3a588e0851debe8))
 - add float-cast-overflow to undefined sanitizer builds ([1c829b2](https://github.com/dpologdvinity/nibble/commit/1c829b2b7cfb3676881757728318efc8b397d1be))
 - **quant:** q5_0, q5_1 and q8_1 golden vectors from ggml generic ([e2b59a8](https://github.com/dpologdvinity/nibble/commit/e2b59a835f8a3ae8ae847ad2383a0846dc6e3b96))
-- fail native jobs if the build fell back to scalar kernels ([dfe2463](https://github.com/dpologdvinity/nibble/commit/dfe2463c4887bf3fd32738df8b981f625ec6ac54))
-- run clang and sanitize jobs with NIBBLE_NATIVE=ON ([62f5cdb](https://github.com/dpologdvinity/nibble/commit/62f5cdb99f6942fa7203a9599573a2c378da0c62))
 - mark git sha dirty for untracked src, cli or include files ([7a86c14](https://github.com/dpologdvinity/nibble/commit/7a86c14bf50f39e41b36e91840c2a7958a14287a))
 - **model:** quantized prefill is bitwise equal across thread counts ([e543af7](https://github.com/dpologdvinity/nibble/commit/e543af7c9f27b8fe982fc18f0a658b780c98906a))
 - **threads:** widen idle-sleep bound to 2 s against ctest -j flakes ([0d86eac](https://github.com/dpologdvinity/nibble/commit/0d86eac7b51833ed8c556a9a41219affd5eac228))
@@ -368,7 +362,6 @@ All notable changes to nibble are listed here, newest first. The file is generat
 - **tools:** add quant_vectors llama.cpp golden generator ([28b92a8](https://github.com/dpologdvinity/nibble/commit/28b92a8d02118a84e82881183e6693c9c534263d))
 - **e2e:** golden match for q8_0 and q4_0 qwen2.5-0.5b ([5132b92](https://github.com/dpologdvinity/nibble/commit/5132b9227cd0f4a45ae7d27b7a32d82a08e0850d))
 - **tools:** generic llama.cpp reference and quantized model scripts ([7f3cf8e](https://github.com/dpologdvinity/nibble/commit/7f3cf8ecce4d6adc41f1265f27f11f26bef505e7))
-- bump actions/checkout to v5 ([040fb85](https://github.com/dpologdvinity/nibble/commit/040fb8531674bd7497fcc961147207246d10da60))
 - **fuzz:** add fuzz_load target for parse, tokenizer, config, bind ([5100b84](https://github.com/dpologdvinity/nibble/commit/5100b843c57907d778cad1638c5abf8d6ef2bed1))
 - tighten context-full, empty-prompt and prefill assertions ([cba794c](https://github.com/dpologdvinity/nibble/commit/cba794cba10c711b30601acbee99ac081bd63e0c))
 - **e2e:** prompt tokens with parse_special match llama.cpp ([ae0d0c3](https://github.com/dpologdvinity/nibble/commit/ae0d0c3e4e9d94452fe748891381d88474bb8e33))
@@ -405,5 +398,25 @@ All notable changes to nibble are listed here, newest first. The file is generat
 - refresh Q8_0 numbers, document seed and sampler order ([58c7f9b](https://github.com/dpologdvinity/nibble/commit/58c7f9bee7fc12194733356234a230fb60b231b5))
 - describe quantized gate and generic reference setup ([62fdd73](https://github.com/dpologdvinity/nibble/commit/62fdd731a42bc271a0b5cb8c72ea2c8f9d94a176))
 - add README and MIT LICENSE ([59d325f](https://github.com/dpologdvinity/nibble/commit/59d325fed4397843c38482f95578a5a86e7c4bdc))
+
+### CI and tooling
+
+- give each non-PR commit its own concurrency group ([f6fe975](https://github.com/dpologdvinity/nibble/commit/f6fe97584146543941216ca6c16415099f24b56a))
+- bump docker/build-push-action from 6.19.2 to 7.4.0 ([a6cf04e](https://github.com/dpologdvinity/nibble/commit/a6cf04eeb8b09f8470118650c83a71988bceed14))
+- bump actions/setup-python from 5.6.0 to 7.1.0 ([c46e645](https://github.com/dpologdvinity/nibble/commit/c46e6453162b7c31540e34b713fc7081b194b56c))
+- bump actions/download-artifact from 4.3.0 to 8.0.2 ([a7b6486](https://github.com/dpologdvinity/nibble/commit/a7b64865798a7ee9b6d700ebdeff70b846c44f12))
+- bump actions/cache/restore from 4.3.0 to 6.1.0 ([ac2b3e3](https://github.com/dpologdvinity/nibble/commit/ac2b3e3e79057e4b6a64b358c6aee728b681fd28))
+- bump docker/login-action from 3.7.0 to 4.6.0 ([62b2f37](https://github.com/dpologdvinity/nibble/commit/62b2f3762085c0e99751e5f68b216dbcce651689))
+- gate releases on the full suite and stop cancelling branch runs ([2a0ab2c](https://github.com/dpologdvinity/nibble/commit/2a0ab2ceb024301926d9d8e38e5b2d91fc5635dd))
+- let dependabot update pip tools and the base image ([64db1fd](https://github.com/dpologdvinity/nibble/commit/64db1fd77f50d7c34438dd7f8fa34a09734c1214))
+- key ccache by CPU model and ignore gcov errors from non-project objects ([80abc00](https://github.com/dpologdvinity/nibble/commit/80abc004beffce13981ea3a7d7d3f0eb0de03961))
+- pin image tags to explicit versions and narrow binary job permissions ([4921cf6](https://github.com/dpologdvinity/nibble/commit/4921cf69afa966ca95834c7b6398d597f5395bd2))
+- make coverage gate and commit-subject check actually run ([a402c78](https://github.com/dpologdvinity/nibble/commit/a402c787f3793b72a08ba3f77a2b7ae74a9c6347))
+- allow reusable package workflow to inherit caller permissions ([48937d2](https://github.com/dpologdvinity/nibble/commit/48937d2ea8336472923c0e96597fe300521c44be))
+- add .clang-tidy config and ignore gcov parse errors in coverage ([ccc12af](https://github.com/dpologdvinity/nibble/commit/ccc12af432f308da056d67beab24cd692dddc791))
+- add matrix, sanitizers, coverage, fuzz, packaging, release ([c12534c](https://github.com/dpologdvinity/nibble/commit/c12534c29d4542868731752958d628c4e6cc76d2))
+- fail native jobs if the build fell back to scalar kernels ([dfe2463](https://github.com/dpologdvinity/nibble/commit/dfe2463c4887bf3fd32738df8b981f625ec6ac54))
+- run clang and sanitize jobs with NIBBLE_NATIVE=ON ([62f5cdb](https://github.com/dpologdvinity/nibble/commit/62f5cdb99f6942fa7203a9599573a2c378da0c62))
+- bump actions/checkout to v5 ([040fb85](https://github.com/dpologdvinity/nibble/commit/040fb8531674bd7497fcc961147207246d10da60))
 
 <!-- generated by git-cliff from cliff.toml; do not edit by hand -->

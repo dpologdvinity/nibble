@@ -53,13 +53,14 @@ topo_order = false
 commit_parsers = [
   # The dashboard bot's own data commits are not changes to nibble.
   { message = "^chore\\(dashboard\\)", skip = true },
-  # Workflow and CI-tooling changes (feat or fix) are maintenance of the repository, not of the engine, so they are
-  # listed under Changed rather than drowning the user-visible Added/Fixed sections.
-  { message = "^(feat|fix)\\(ci\\)", group = "<!-- 3 -->Changed" },
+  # Workflow and CI-tooling changes are maintenance of the repository, not of the engine or the CLI. They get their
+  # own last group so Added, Fixed, Performance and Changed show only what an engine or CLI user can notice.
+  { message = "^ci", group = "<!-- 9 -->CI and tooling" },
+  { message = "^(feat|fix|refactor|test|chore|build)\\(ci\\)", group = "<!-- 9 -->CI and tooling" },
   { message = "^feat", group = "<!-- 0 -->Added" },
   { message = "^fix", group = "<!-- 1 -->Fixed" },
   { message = "^perf", group = "<!-- 2 -->Performance" },
-  { message = "^(refactor|build|ci|test|style|chore)", group = "<!-- 3 -->Changed" },
+  { message = "^(refactor|build|test|style|chore)", group = "<!-- 3 -->Changed" },
   { message = "^docs", group = "<!-- 4 -->Documentation" },
   { message = "^revert", group = "<!-- 5 -->Reverted" },
 ]
