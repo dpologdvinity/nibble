@@ -265,7 +265,7 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 | weekly | [link-check](.github/workflows/link-check.yml) | Links in the README and docs; one open issue lists the broken ones. |
 | after nightly, portability and ci on `master` | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
 | a failing scheduled job | [claude-triage](.github/workflows/claude-triage.yml) | Claude diagnoses the `ci-failure` issue and, with a reproducer, opens an `agent/` PR (below). |
-| `@claude` from the owner or a collaborator | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or PR; it answers or opens an `agent` PR. |
+| `@claude` from the owner or a collaborator | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or a PR in this repository (fork PRs are skipped); it answers or opens an `agent` PR. |
 | a `v*` tag | [release](.github/workflows/release.yml) | The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
 
 When a scheduled job fails, the fix comes back as a pull request that has to prove itself:
@@ -287,7 +287,7 @@ flowchart LR
   open an `agent/` PR with the failing test as the first commit and the fix as the second; otherwise it stops at a
   diagnosis comment.
 - Agent PRs are never auto-merged: the owner reviews and merges them. The owner can also hand Claude work with
-  `@claude` on any issue or PR, and claude-review comments on every PR the owner, Dependabot or the agent opens.
+  `@claude` on an issue or on a PR from this repository, and claude-review comments on every PR the owner, Dependabot or the agent opens.
 
 The [dashboard](https://dpologdvinity.github.io/nibble/) charts the scheduled runs over time: speed, accuracy, fuzzing
 hours, binary size and coverage, and the latest status of every scheduled job. CI-runner speed numbers are trends; the
