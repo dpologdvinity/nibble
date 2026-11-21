@@ -1,4 +1,4 @@
-"""Unit tests for bench/plot.py's ABBA block selection (abba()).
+"""Unit tests for bench/plot.py: ABBA block selection (abba()) and the time-series line_chart().
 
 Run with: python -m unittest discover -s bench -p 'test_*.py'
 Rows mirror bench/results/abba.jsonl: one row per run, note = "abba block <id> <A1|B1|B2|A2>", where A runs are
@@ -93,6 +93,71 @@ class MixedCommitBlockTest(unittest.TestCase):
             result = plot.abba({"abba": self.mixed_block("mixed", "2026-11-13")})
         self.assertNotIn(KEY, result)
         self.assertIn("mixed", err.getvalue())
+
+
+DAY = 86400
+T0 = 1_795_000_000.0  # 2026-11-18 11:06 UTC, an arbitrary unix time for the series
+
+
+class LineChartTest(unittest.TestCase):
+    def two_series(self) -> list[plot.Series]:
+        pts = [(T0 + i * DAY, 100.0 + i) for i in range(5)]
+        return [("Qwen <Q4_0> & co", "#1f77b4", pts), ("TinyLlama", "#ff7f0e", [(x, y / 2) for x, y in pts])]
+
+    def test_line_chart_is_svg_with_legend(self) -> None:
+        svg = plot.line_chart("decode tok/s", "tok/s", self.two_series())
+        self.assertTrue(svg.startswith("<svg"))
+        self.assertIn("Qwen &lt;Q4_0&gt; &amp; co", svg)  # labels are escaped
+        self.assertNotIn("<Q4_0>", svg)
+        self.assertIn("TinyLlama", svg)
+        self.assertEqual(svg.count("<polyline"), 2)
+        self.assertEqual(svg.count("<circle"), 10)  # every point is marked
+        self.assertRegex(svg, r">\d{4}-\d{2}-\d{2}</text>")  # date ticks on the x axis
+        self.assertIn(">2026-11-19</text>", svg)
+
+    def test_line_chart_single_point_and_empty_series(self) -> None:
+        one = plot.line_chart("t", "y", [("a", "#000", [(T0, 3.0)])])
+        self.assertEqual(one.count("<circle"), 1)
+        self.assertIn("2026-11-18", one)
+        self.assertNotIn("no data yet", one)
+        no_points: list[list[plot.Series]] = [[], [("a", "#000", []), ("b", "#111", [])]]
+        for series in no_points:
+            empty = plot.line_chart("t", "y", series)
+            self.assertIn("no data yet", empty)
+            self.assertNotIn("<polyline", empty)
+            self.assertNotIn("nan", empty)
+        mixed = plot.line_chart("t", "y", [("a", "#000", []), ("b", "#111", [(T0, 1.0), (T0 + DAY, 2.0)])])
+        self.assertEqual(mixed.count("<polyline"), 1)
+        self.assertIn(">a</text>", mixed)  # the empty series keeps its legend entry
+
+    def test_line_chart_y_min(self) -> None:
+        pts = [(T0 + i * DAY, 0.9995 + i * 1e-5) for i in range(4)]
+        svg = plot.line_chart("min cosine", "cosine", [("q4_0", "#000", pts)], y_min=0.99)
+        self.assertIn(">0.99</text>", svg)  # the lowest tick is y_min
+        self.assertNotIn(">0</text>", svg)
+
+    def test_line_chart_default_axis_starts_at_zero(self) -> None:
+        svg = plot.line_chart("t", "y", self.two_series())
+        self.assertIn(">0</text>", svg)
+
+    def test_line_chart_ticks_are_thinned(self) -> None:
+        pts = [(T0 + i * DAY, float(i)) for i in range(400)]
+        svg = plot.line_chart("t", "y", [("a", "#000", pts)])
+        ticks = re.findall(r">(\d{4}-\d{2}-\d{2})</text>", svg)
+        self.assertTrue(2 <= len(ticks) <= 9, ticks)
+        self.assertEqual(len(set(ticks)), len(ticks))
+
+    def test_line_chart_ignores_non_finite_points(self) -> None:
+        pts = [(T0, 1.0), (T0 + DAY, float("nan")), (T0 + 2 * DAY, float("inf")), (T0 + 3 * DAY, 2.0)]
+        svg = plot.line_chart("t", "y", [("a", "#000", pts)])
+        self.assertEqual(svg.count("<circle"), 2)
+        self.assertNotIn("nan", svg)
+        self.assertNotIn("inf", svg)
+
+    def test_line_chart_points_below_y_min_stay_on_the_chart(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.5), (T0 + DAY, 1.0)])], y_min=0.99)
+        for cy in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg):
+            self.assertTrue(0 <= float(cy) <= 460, cy)
 
 
 class ReadmeProtocolTest(unittest.TestCase):
