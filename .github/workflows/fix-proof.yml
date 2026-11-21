@@ -25,11 +25,12 @@ on:
 permissions:
   contents: read
 
-# One run per pull request; a newer event cancels the older one. An event the job skips (see its `if:`) gets a group of
-# its own, so that it cannot cancel a running check and then leave the pull request without a verdict. (The condition
-# is the same as the job's `if:`; the middle operand must be truthy, hence 'check'.)
+# One run per pull request; a newer event cancels the older one. Every listed event (edits and label changes included)
+# runs the whole job and writes a real verdict: a job skipped for an "irrelevant" event would leave a `skipped` check
+# run, which branch protection counts as passing and which the checks list shows instead of the earlier red verdict
+# ("does not reproduce") on the same commit. Re-judging costs a minute or two with a warm cache.
 concurrency:
-  group: fix-proof-${{ github.event.pull_request.number }}-${{ ((github.event.action != 'edited' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || (github.event.action == 'edited' && (github.event.changes.title != null || github.event.changes.base != null)) || (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name == 'no-test-needed')) && 'check' || format('ignored-{0}', github.run_id) }}
+  group: fix-proof-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
@@ -39,12 +40,6 @@ env:
 jobs:
   fix-proof:
     name: fix-proof
-    # opened, synchronize and reopened always run. An edit only matters when the title (it carries `fix:`) or the base
-    # branch changed, and a label only when it is `no-test-needed`; anything else would repeat a sanitizer build.
-    if: >-
-      (github.event.action != 'edited' && github.event.action != 'labeled' && github.event.action != 'unlabeled')
-      || (github.event.action == 'edited' && (github.event.changes.title != null || github.event.changes.base != null))
-      || (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name == 'no-test-needed')
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
