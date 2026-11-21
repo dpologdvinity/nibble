@@ -39,7 +39,8 @@ usage:
     python tools/ci/fix_proof.py gate --title "$PR_TITLE" --base "$BASE_SHA" --head "$HEAD_SHA"
         prints `fix=true|false` and `code=true|false` (`>> "$GITHUB_OUTPUT"`).
     python tools/ci/fix_proof.py select --base "$BASE_SHA" --head "$HEAD_SHA" --out cases.json
-        `--base` is the merge base. Run in a git checkout (or pass `--repo DIR`). Prints `selected=<n>`.
+        `--base` may be the base branch tip or the merge base: both diffs are `base...head`, which starts at the merge
+        base. Run in a git checkout with both commits (or pass `--repo DIR`). Prints `selected=<n>`.
     python tools/ci/fix_proof.py specs --cases cases.json
         one line per selected case: `<index>\\t<binary>\\t<catch2 test spec>` (tab separated); run
         `build/<binary> "<spec>" -r junit -o results/case-<index>.xml` for each.
@@ -617,7 +618,7 @@ def read_results(results_dir: str, selection: Selection) -> dict[str, CaseResult
 def _cmd_gate(args: argparse.Namespace) -> int:
     base, head = _check_ref(args.base), _check_ref(args.head)
     subjects = _git(args.repo, "log", "--format=%s", f"{base}..{head}").splitlines()
-    names = [p for p in _git(args.repo, "diff", "--name-only", "-z", base, head).split("\0") if p]
+    names = [p for p in _git(args.repo, "diff", "--name-only", "-z", f"{base}...{head}").split("\0") if p]
     print(f"fix={str(is_fix(args.title, subjects)).lower()}")
     print(f"code={str(touches_code(names)).lower()}")
     return 0
@@ -625,7 +626,7 @@ def _cmd_gate(args: argparse.Namespace) -> int:
 
 def _cmd_select(args: argparse.Namespace) -> int:
     base, head = _check_ref(args.base), _check_ref(args.head)
-    diff = _git(args.repo, "diff", "-U0", "--no-ext-diff", "--no-color", "-M", base, head, "--", "tests/*.cpp")
+    diff = _git(args.repo, "diff", "-U0", "--no-ext-diff", "--no-color", "-M", f"{base}...{head}", "--", "tests/*.cpp")
     sources: dict[str, str] = {}
     for path in changed_lines(diff):
         try:
