@@ -34,11 +34,14 @@ runs:
     - name: Upload attachments
       id: upload
       if: inputs.attachments != ''
+      # An upload problem (e.g. a 409 on a re-run attempt) must not stop the Report step; the URL is then empty.
+      continue-on-error: true
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: failure-${{ inputs.job }}
         path: ${{ inputs.attachments }}
         if-no-files-found: warn
+        overwrite: true
     - name: Report
       shell: bash
       env:
