@@ -1,0 +1,390 @@
+"""Render the CI dashboard: one static page, five SVG charts and a shields.io badge, from the rows of the data branch.
+
+usage: dashboard_render.py ROWS.jsonl --out DIR --repo OWNER/NAME
+
+ROWS.jsonl holds validated rows (see dashboard_data.py; a missing file counts as empty). DIR receives:
+
+    index.html    the page: status table of every job's latest result plus the charts as inline <img>. No JavaScript,
+                  no external fonts or scripts; it reads fine on a phone.
+    speed.svg     decode/prefill tok/s per `<model>/<test>/t<threads>` (shared CI runners: a trend, not a benchmark)
+    accuracy.svg  min cosine against llama.cpp per model, the minimum over prompts (y axis from 0.99)
+    fuzz.svg      cumulative fuzzing hours per target
+    size.svg      stripped release binary size
+    coverage.svg  line coverage of src/ and cli/
+    badge.json    shields.io endpoint: nightly "passing" iff every job's latest `nightly/*` status is 1
+
+The charts are drawn by bench/plot.py's `line_chart`. Every value that reaches HTML is escaped (the SVG builder escapes
+its own text), and `--repo` is validated before it goes into a URL. A malformed row is skipped and reported on stderr
+as a `::warning`: merge already validated what it stored, so this only guards against a hand-edited data branch.
+Stdlib only. Exit status is 0 on success and 1 (message on stderr) for an unusable `--repo` or an unwritable `--out`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import re
+import sys
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bench"))
+
+import plot
+from dashboard_data import Row, validate
+
+Point = tuple[float, float]  # (x = unix seconds, y = value)
+
+FILES = ("index.html", "speed.svg", "accuracy.svg", "fuzz.svg", "size.svg", "coverage.svg", "badge.json")
+_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+MAX_LABEL = 30  # characters that fit the chart legend (190 px at 11 px sans-serif)
+WORKFLOW_ORDER = ("nightly", "portability", "ci")  # status table order; other workflows follow alphabetically
+# One colour per series, cycling: the first ten of plot.MODELS' palette (Tableau 10).
+PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
+
+
+def parse_rows(text: str) -> tuple[list[Row], list[str]]:
+    """The valid rows of JSONL `text`, and one message per line that was skipped ("line N: why"). Blank lines are
+    ignored silently."""
+    rows: list[Row] = []
+    problems: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+            if not isinstance(obj, dict):
+                raise ValueError("not a JSON object")
+            rows.append(validate(obj))
+        except ValueError as e:
+            problems.append(f"line {number}: {e}"[:200])
+    return rows, problems
+
+
+def _unix(date: object) -> float:
+    """Unix seconds of a row's `YYYY-MM-DDTHH:MM:SSZ` date (validated by parse_rows)."""
+    return datetime.strptime(str(date), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp()
+
+
+def _order(r: Row) -> tuple[float, int]:
+    """Sort key that puts a row after every older one: date first, run id to break ties."""
+    run_id = r["run_id"]
+    return (_unix(r["date"]), run_id if isinstance(run_id, int) else 0)
+
+
+def _num(r: Row) -> float:
+    """The row's `value` (validate made it a float)."""
+    value = r["value"]
+    return float(value) if isinstance(value, int | float) else float("nan")
+
+
+def latest_by_key(rows: Sequence[Row], metric: str) -> dict[str, Row]:
+    """The newest row of `metric` for every key (newest = latest date, then highest run id)."""
+    newest: dict[str, Row] = {}
+    for r in rows:
+        if r["metric"] != metric:
+            continue
+        key = str(r["key"])
+        if key not in newest or _order(r) > _order(newest[key]):
+            newest[key] = r
+    return newest
+
+
+def _clip(label: str) -> str:
+    """`label` cut to MAX_LABEL characters, ending in an ellipsis when it was cut."""
+    return label if len(label) <= MAX_LABEL else label[: MAX_LABEL - 1] + "…"
+
+
+def short_labels(keys: Sequence[str]) -> list[str]:
+    """Legend labels for bench keys `<model file>/<test>/t<threads>`: the model shortened to its last dash-separated
+    part (`qwen2.5-0.5b-instruct-q4_0.gguf` -> `q4_0`), unless that makes two labels equal, in which case the
+    models keep their full stem (`.gguf` removed). Every label is clipped to MAX_LABEL."""
+
+    def build(key: str, short: bool) -> str:
+        model, sep, rest = key.partition("/")
+        stem = model.removesuffix(".gguf")
+        return (stem.rsplit("-", 1)[-1] if short else stem) + sep + rest
+
+    labels = [build(k, True) for k in keys]
+    if len(set(labels)) != len(labels):
+        labels = [build(k, False) for k in keys]
+    return [_clip(label) for label in labels]
+
+
+def _series(points: Mapping[str, Sequence[Point]], labels: Sequence[str]) -> list[plot.Series]:
+    """Chart series for `points` (name -> points), one colour each in PALETTE order, labelled with `labels`."""
+    return [
+        (label, PALETTE[i % len(PALETTE)], pts)
+        for i, (label, pts) in enumerate(zip(labels, points.values(), strict=True))
+    ]
+
+
+def speed_series(rows: Sequence[Row]) -> list[plot.Series]:
+    """One series per bench key, in key order."""
+    by_key: dict[str, list[Point]] = {}
+    for r in rows:
+        if r["metric"] == "bench_tok_s":
+            by_key.setdefault(str(r["key"]), []).append((_unix(r["date"]), _num(r)))
+    by_key = dict(sorted(by_key.items()))
+    return _series(by_key, short_labels(list(by_key)))
+
+
+def min_cosine_by_model(rows: Sequence[Row]) -> dict[str, list[Point]]:
+    """Per model (the key's part before `/`), one point per run: the minimum cosine over that run's prompts, at the
+    run's earliest row date. Points are in time order."""
+    best: dict[tuple[str, object], tuple[float, float]] = {}  # (model, run_id) -> (x, min cosine)
+    for r in rows:
+        if r["metric"] != "min_cosine":
+            continue
+        ident = (str(r["key"]).partition("/")[0], r["run_id"])
+        x, v = _unix(r["date"]), _num(r)
+        if ident in best:
+            x0, v0 = best[ident]
+            best[ident] = (min(x, x0), min(v, v0))
+        else:
+            best[ident] = (x, v)
+    by_model: dict[str, list[Point]] = {}
+    for (model, _run), point in best.items():
+        by_model.setdefault(model, []).append(point)
+    return {m: sorted(p) for m, p in sorted(by_model.items())}
+
+
+def cumulative_fuzz_hours(rows: Sequence[Row]) -> dict[str, list[Point]]:
+    """Per fuzz target, the running sum of `fuzz_seconds` / 3600 at each run, in time order."""
+    runs: dict[str, list[Row]] = {}
+    for r in rows:
+        if r["metric"] == "fuzz_seconds":
+            runs.setdefault(str(r["key"]), []).append(r)
+    out: dict[str, list[Point]] = {}
+    for target, rs in sorted(runs.items()):
+        total = 0.0
+        pts: list[Point] = []
+        for r in sorted(rs, key=_order):
+            total += _num(r) / 3600
+            pts.append((_unix(r["date"]), total))
+        out[target] = pts
+    return out
+
+
+def _simple_series(rows: Sequence[Row], metric: str, scale: float = 1.0) -> list[plot.Series]:
+    """One series per key of `metric`, values divided by `scale`, in key order."""
+    by_key: dict[str, list[Point]] = {}
+    for r in rows:
+        if r["metric"] == metric:
+            by_key.setdefault(str(r["key"]), []).append((_unix(r["date"]), _num(r) / scale))
+    by_key = dict(sorted(by_key.items()))
+    return _series(by_key, [_clip(k) for k in by_key])
+
+
+def charts(rows: Sequence[Row]) -> dict[str, str]:
+    """File name -> SVG text for the five charts."""
+    cosine = min_cosine_by_model(rows)
+    fuzz = cumulative_fuzz_hours(rows)
+    return {
+        "speed.svg": plot.line_chart(
+            "Speed on a shared CI runner: a trend, not a benchmark", "tokens / second", speed_series(rows)
+        ),
+        "accuracy.svg": plot.line_chart(
+            "Accuracy against llama.cpp: min cosine per model",
+            "min cosine",
+            _series(cosine, [_clip(m) for m in cosine]),
+            y_min=0.99,
+        ),
+        "fuzz.svg": plot.line_chart("Cumulative fuzzing time", "hours", _series(fuzz, [_clip(t) for t in fuzz])),
+        "size.svg": plot.line_chart(
+            "Stripped release binary size", "MiB", _simple_series(rows, "binary_bytes", 1024 * 1024)
+        ),
+        "coverage.svg": plot.line_chart(
+            "Line coverage of src/ and cli/", "% of lines", _simple_series(rows, "line_coverage")
+        ),
+    }
+
+
+def badge(rows: Sequence[Row]) -> dict[str, object]:
+    """The shields.io endpoint object: "passing" iff every job's latest `nightly/*` status is 1, "failing" if any is
+    not, and "no data" (grey) while there is none."""
+    nightly = [r for k, r in latest_by_key(rows, "job_status").items() if k.startswith("nightly/")]
+    if not nightly:
+        message, colour = "no data", "lightgrey"
+    elif all(_num(r) == 1.0 for r in nightly):
+        message, colour = "passing", "brightgreen"
+    else:
+        message, colour = "failing", "red"
+    return {"schemaVersion": 1, "label": "nightly", "message": message, "color": colour}
+
+
+def _when(r: Row) -> str:
+    """`2026-11-21 03:17 UTC` for a row's date."""
+    return str(r["date"])[:16].replace("T", " ") + " UTC"
+
+
+def _status_table(rows: Sequence[Row], repo: str) -> str:
+    """The HTML status table: the latest `job_status` per `<workflow>/<job>`, grouped by workflow."""
+    latest = latest_by_key(rows, "job_status")
+    if not latest:
+        return "<p>No job status recorded yet.</p>"
+    groups: dict[str, list[tuple[str, Row]]] = {}
+    for key, r in latest.items():
+        workflow, _, job = key.partition("/")
+        groups.setdefault(workflow, []).append((job or key, r))
+    known = [w for w in WORKFLOW_ORDER if w in groups]
+    ordered = known + sorted(set(groups) - set(known))
+    body: list[str] = []
+    for workflow in ordered:
+        body.append(f'<tbody><tr><th scope="rowgroup" colspan="4">{html.escape(workflow)}</th></tr>')
+        for job, r in sorted(groups[workflow], key=lambda g: g[0]):
+            ok = _num(r) == 1.0
+            run = f"https://github.com/{repo}/actions/runs/{r['run_id']}"
+            body.append(
+                f'<tr><th scope="row">{html.escape(job)}</th>'
+                f"<td>{'✅ passing' if ok else '❌ failing'}</td>"
+                f"<td>{_when(r)}</td>"
+                f'<td><a href="{run}">run {r["run_id"]}</a></td></tr>'
+            )
+        body.append("</tbody>")
+    head = (
+        "<thead><tr>" + "".join(f'<th scope="col">{c}</th>' for c in ("Job", "Result", "When", "Run")) + "</tr></thead>"
+    )
+    return (
+        '<div class="scroll"><table><caption>Latest result of each job</caption>'
+        + head
+        + "".join(body)
+        + "</table></div>"
+    )
+
+
+CSS = """\
+:root { color-scheme: light; }
+body {
+  margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #1f2328; background: #fff;
+}
+main { max-width: 960px; margin: 0 auto; padding: 1rem; }
+h1 { margin: 0.5rem 0; font-size: 1.6rem; }
+h2 { margin-top: 2rem; font-size: 1.25rem; border-bottom: 1px solid #d0d7de; padding-bottom: 0.25rem; }
+a { color: #0969da; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+caption { text-align: left; font-weight: 600; padding-bottom: 0.25rem; }
+th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid #eaeef2; white-space: nowrap; }
+thead th { background: #f6f8fa; }
+tbody th[scope="rowgroup"] {
+  background: #f6f8fa; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em;
+}
+figure { margin: 1.25rem 0; }
+figure img { max-width: 100%; height: auto; border: 1px solid #d0d7de; border-radius: 6px; }
+figcaption { font-size: 0.9rem; color: #57606a; }
+.muted { color: #57606a; font-size: 0.9rem; }
+footer { margin-top: 2rem; }
+"""
+
+# (file, heading, alt text, caption). The alt text describes what the chart shows, since the SVG has no scripts.
+FIGURES = (
+    (
+        "speed.svg",
+        "Speed (trend only)",
+        "Line chart of decode and prefill tokens per second for each model and thread count, one point per nightly run",
+        "Measured on shared GitHub-hosted runners, whose speed varies from run to run: read this as a trend, "
+        "not a benchmark. The README tables come from an idle dedicated machine.",
+    ),
+    (
+        "accuracy.svg",
+        "Accuracy against llama.cpp",
+        "Line chart of the minimum cosine similarity to llama.cpp per model over time, on an axis starting at 0.99",
+        "Minimum cosine over the test prompts, per model and nightly run. Higher is closer to llama.cpp; the axis "
+        "starts at 0.99.",
+    ),
+    (
+        "fuzz.svg",
+        "Fuzzing",
+        "Line chart of cumulative fuzzing hours per fuzz target over time",
+        "Total time each fuzz target has run in the nightly job.",
+    ),
+    (
+        "size.svg",
+        "Binary size",
+        "Line chart of the stripped release binary size in MiB over time",
+        "Size of the stripped nibble binary built each night.",
+    ),
+    (
+        "coverage.svg",
+        "Line coverage",
+        "Line chart of the percentage of src and cli lines covered by the tests, per push to master",
+        "Line coverage of src/ and cli/ from the unit and integration tests, measured on each push to master.",
+    ),
+)
+
+
+def index_html(rows: Sequence[Row], repo: str) -> str:
+    """The dashboard page for `rows`. `repo` must already be validated."""
+    repo_url = f"https://github.com/{repo}"
+    if rows:
+        newest = max(rows, key=_order)
+        sha = str(newest["commit"])
+        updated = (
+            f'<p class="muted">Last updated {_when(newest)}, from commit '
+            f'<a href="{repo_url}/commit/{sha}"><code>{sha[:7]}</code></a>.</p>'
+        )
+    else:
+        updated = '<p class="muted">No results yet: the first nightly run fills this page.</p>'
+    figures = "".join(
+        f'<section><h2>{html.escape(heading)}</h2><figure><img src="{name}" alt="{html.escape(alt, quote=True)}" '
+        f'width="900" height="460"><figcaption>{html.escape(caption)}</figcaption></figure></section>'
+        for name, heading, alt, caption in FIGURES
+    )
+    return (
+        '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>nibble CI dashboard</title>"
+        '<meta name="description" content="Nightly and weekly CI results for nibble, a CPU LLM inference engine.">'
+        f"<style>\n{CSS}</style></head><body><main>\n"
+        "<h1>nibble CI dashboard</h1>\n"
+        f'<p>Results of the scheduled checks for <a href="{repo_url}">{html.escape(repo)}</a>: nightly accuracy, '
+        "fuzzing and trend runs, the weekly portability builds, and line coverage on every push to master. "
+        f'For what nibble is and its benchmark numbers, see the <a href="{repo_url}#readme">README</a>.</p>\n'
+        f"{updated}\n"
+        f"<h2>Status</h2>\n{_status_table(rows, repo)}\n"
+        f"{figures}\n"
+        f'<footer class="muted">The data is <a href="{repo_url}/blob/dashboard-data/data/rows.jsonl">one JSON Lines '
+        "file</a> on the <code>dashboard-data</code> branch. This page is static and needs no JavaScript.</footer>\n"
+        "</main></body></html>\n"
+    )
+
+
+def render_site(rows_jsonl: str, out_dir: str, repo: str) -> list[str]:
+    """Write the dashboard for the rows in `rows_jsonl` (JSONL text) into `out_dir` (created if needed) and return
+    the names of the files written (FILES). Malformed rows are skipped. ValueError if `repo` is not `owner/name`."""
+    if _REPO.fullmatch(repo) is None:
+        raise ValueError(f"repo must look like owner/name, got {repo!r:.60}")
+    rows, _problems = parse_rows(rows_jsonl)
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    pages = {"index.html": index_html(rows, repo), **charts(rows), "badge.json": json.dumps(badge(rows)) + "\n"}
+    for name in FILES:
+        (out / name).write_text(pages[name], encoding="utf-8")
+    return list(FILES)
+
+
+def main(argv: Sequence[str]) -> int:
+    """Command line entry point (see the module docstring). Returns the exit status."""
+    parser = argparse.ArgumentParser(description="Render the CI dashboard site from dashboard rows.")
+    parser.add_argument("rows", type=Path, help="rows JSONL (a missing file counts as empty)")
+    parser.add_argument("--out", type=Path, required=True, help="output directory")
+    parser.add_argument("--repo", required=True, help="OWNER/NAME, used for links")
+    args = parser.parse_args(argv)
+    try:
+        text = args.rows.read_text(encoding="utf-8") if args.rows.exists() else ""
+        _rows, problems = parse_rows(text)
+        for problem in problems:
+            print(f"::warning::dashboard_render: skipped row, {problem}", file=sys.stderr)
+        names = render_site(text, str(args.out), args.repo)
+    except (ValueError, OSError) as e:
+        print(f"dashboard_render: {e}", file=sys.stderr)
+        return 1
+    print(f"wrote {', '.join(names)} to {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

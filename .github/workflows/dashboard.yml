@@ -1,0 +1,163 @@
+# Reason: the nightly, portability and coverage jobs each leave a few measurements behind as `dashboard-rows-*`
+# artifacts, which expire after 7 days. This workflow turns them into a history: after each of those workflows finishes
+# on master it appends the new rows to data/rows.jsonl on the `dashboard-data` branch (created on first use) and
+# publishes a static page with the status of every job and the speed, accuracy, fuzzing, size and coverage charts to
+# GitHub Pages (https://dpologdvinity.github.io/nibble/), plus badge.json for the README's nightly badge. See
+# tools/ci/dashboard_data.py (row schema, merge) and tools/ci/dashboard_render.py (the site).
+# By hand (the workflow file must be on the default branch): `gh workflow run dashboard.yml` re-renders the site from
+# the stored rows. To add the rows of a run whose dashboard run was lost (see the concurrency note below), or whose
+# artifacts are still within retention: `gh workflow run dashboard.yml -f run-id=<run id of nightly/portability/ci>`.
+# Trust: a workflow_run workflow has a write token, so it never checks out or runs code from the run that triggered it.
+# It runs master's tools and treats the downloaded artifacts as data: `dashboard_data.py merge` validates every row, and
+# only runs of this repository started by schedule, push or workflow_dispatch are accepted (not pull requests).
+# Concurrency: runs queue one at a time and are never cancelled, but GitHub keeps only one *pending* run per group, so
+# a third completion arriving while one run is going and another is waiting replaces the waiting one. Its rows are then
+# not merged; the run-id input above puts them back.
+# Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
+name: dashboard
+
+on:
+  workflow_run:
+    workflows: [nightly, portability, ci]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: Optional id of a nightly, portability or ci run whose dashboard rows to add before re-rendering
+        type: string
+        default: ""
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  rows:
+    name: collect rows and render
+    # Not for pull requests, forks or anything started by another event: only the rows of master's own scheduled,
+    # pushed or hand-started runs are trusted.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.head_repository.full_name == github.repository &&
+       contains(fromJSON('["schedule", "push", "workflow_dispatch"]'), github.event.workflow_run.event))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write  # pushes the data branch
+      actions: read  # downloads the artifacts of the triggering run
+    env:
+      # The run whose rows are added: the one that triggered this, else the optional input, else none.
+      SOURCE_RUN: ${{ github.event.workflow_run.id || inputs.run-id }}
+    steps:
+      - name: Check the run id
+        run: |
+          if [[ -n "$SOURCE_RUN" && ! "$SOURCE_RUN" =~ ^[0-9]+$ ]]; then
+            echo "::error title=run-id::'$SOURCE_RUN' is not a run id (digits only)"
+            exit 1
+          fi
+      # Master's code, without credentials: it only runs tools/ci and reads bench/plot.py.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          path: code
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # Data only. Every nightly/portability job (and ci's coverage job) uploads its own `dashboard-rows-<job>` with a
+      # file named rows.jsonl; they must not be merged into one directory, or they would overwrite each other. (With
+      # exactly one match the action extracts straight into `incoming`, with several into incoming/<name>/.)
+      - name: Download the dashboard rows of the run
+        if: ${{ env.SOURCE_RUN != '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+          pattern: dashboard-rows-*
+          path: incoming
+      # The data branch is a checkout of master that is switched to dashboard-data below (or to a new orphan branch),
+      # so this step has the credentials to push and nothing else needs them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          path: data
+      - name: Merge the rows into the data branch
+        run: |
+          set -euo pipefail
+          git -C data config user.name "github-actions[bot]"
+          git -C data config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mapfile -t new < <(find incoming -type f -name rows.jsonl 2>/dev/null | sort)
+          echo "new row files: ${#new[@]}"
+          # Replays the merge and the commit on the newest remote state, so a lost push race never needs conflict
+          # resolution (every writer only appends to the one file); merge drops rows that are already there.
+          apply() {
+            local rc=0
+            git -C data ls-remote --exit-code --heads origin dashboard-data > /dev/null || rc=$?
+            if [[ $rc -eq 0 ]]; then
+              git -C data fetch --depth 1 origin dashboard-data
+              git -C data checkout --force -B dashboard-data FETCH_HEAD
+            elif [[ $rc -eq 2 ]]; then  # the branch does not exist yet: start it
+              if git -C data rev-parse --verify --quiet refs/heads/dashboard-data > /dev/null; then
+                git -C data switch dashboard-data  # a previous attempt already made it
+              else
+                git -C data switch --orphan dashboard-data
+                mkdir -p data/data
+                cat > data/README.md << 'README'
+          # dashboard-data
+
+          Written by `.github/workflows/dashboard.yml`; do not edit by hand. `data/rows.jsonl` holds one measurement per
+          line (the schema is in `tools/ci/dashboard_data.py` on master).
+          README
+                : > data/data/rows.jsonl
+                git -C data add README.md data/rows.jsonl
+                git -C data commit --quiet -m "chore(dashboard): create the data branch"
+              fi
+            else
+              echo "::error title=dashboard-data::git ls-remote failed (exit $rc)"
+              exit 1
+            fi
+            mkdir -p data/data
+            if [[ ${#new[@]} -gt 0 ]]; then
+              python code/tools/ci/dashboard_data.py merge data/data/rows.jsonl "${new[@]}" --out data/data/rows.jsonl
+              git -C data add data/rows.jsonl
+              if ! git -C data diff --cached --quiet; then
+                git -C data commit --quiet -m "chore(dashboard): rows from run ${SOURCE_RUN}"
+              fi
+            fi
+          }
+          for attempt in 1 2 3; do
+            apply
+            if git -C data push origin HEAD:dashboard-data; then
+              exit 0
+            fi
+            echo "::warning title=dashboard-data::push attempt $attempt lost a race; retrying on the new tip"
+            sleep $((attempt * 5))
+          done
+          echo "::error title=dashboard-data::could not push the data branch after 3 attempts"
+          exit 1
+      - name: Render the site
+        run: python code/tools/ci/dashboard_render.py data/data/rows.jsonl --out site --repo "$GITHUB_REPOSITORY"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: publish to GitHub Pages
+    needs: rows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
