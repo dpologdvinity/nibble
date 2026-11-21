@@ -112,6 +112,14 @@ class FakeGitHub:
                 return
         self.comment_as(number, author or self.BOT, body)
 
+    def find_comment(self, number: int, marker: str, author: str) -> str | None:
+        issue = self.issues[number]
+        issue.comment_authors.extend([self.BOT] * (len(issue.comments) - len(issue.comment_authors)))
+        for body, login in zip(issue.comments, issue.comment_authors, strict=True):
+            if marker in body and login == author:
+                return body
+        return None
+
     def pr_for_sha(self, sha: str) -> int | None:
         return self.prs_by_sha.get(sha)
 

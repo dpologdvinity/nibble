@@ -98,6 +98,10 @@ class GitHub(Protocol):
         """
         ...
 
+    def find_comment(self, number: int, marker: str, author: str) -> str | None:
+        """Body of the first comment on `number` that contains `marker` and was written by `author`, or None."""
+        ...
+
     def pr_for_sha(self, sha: str) -> int | None:
         """Number of the open pull request whose head commit is `sha`, or None."""
         ...
@@ -220,6 +224,16 @@ class GhCli:
                 self._send("PATCH", f"repos/{self.repo}/issues/comments/{existing['id']}", {"body": body})
                 return
         self.comment(number, body)
+
+    def find_comment(self, number: int, marker: str, author: str) -> str | None:
+        listing = _json_list(self._get(f"repos/{self.repo}/issues/{number}/comments?per_page=100", paginate=True))
+        for existing in listing:
+            user = existing.get("user")
+            login = user.get("login") if isinstance(user, dict) else None
+            body = str(existing.get("body", ""))
+            if marker in body and login == author:
+                return body
+        return None
 
     def pr_for_sha(self, sha: str) -> int | None:
         # `commits/{sha}/pulls` also lists merged and closed PRs that once contained the commit, so list the open pulls

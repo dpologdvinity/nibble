@@ -71,6 +71,30 @@ class FindOpenIssueTests(unittest.TestCase):
         self.assertEqual(client.find_open_issue("t"), 10)
 
 
+class FindCommentTests(unittest.TestCase):
+    def test_find_comment_returns_the_authors_body_with_the_marker(self) -> None:
+        comments = json.dumps(
+            [
+                {"id": 11, "body": "planted <!-- m -->", "user": {"login": "mallory"}},
+                {"id": 12, "body": "ours <!-- m -->", "user": {"login": "github-actions[bot]"}},
+            ]
+        )
+        runner = ScriptedRunner({"issues/7/comments": comments})
+        client = gh.GhCli(REPO, runner)
+        self.assertEqual(client.find_comment(7, "<!-- m -->", "github-actions[bot]"), "ours <!-- m -->")
+        self.assertIn("--paginate", runner.calls[0][0])
+        self.assertIsNone(client.find_comment(7, "<!-- other -->", "github-actions[bot]"))
+        self.assertIsNone(client.find_comment(7, "<!-- m -->", "someone"))
+
+    def test_fake_find_comment(self) -> None:
+        fake = FakeGitHub()
+        number = fake.add_pull_request("a" * 40)
+        fake.comment_as(number, "mallory", "planted <!-- m -->")
+        self.assertIsNone(fake.find_comment(number, "<!-- m -->", FakeGitHub.BOT))
+        fake.comment(number, "ours <!-- m -->")
+        self.assertEqual(fake.find_comment(number, "<!-- m -->", FakeGitHub.BOT), "ours <!-- m -->")
+
+
 class UpsertCommentTests(unittest.TestCase):
     def test_upsert_comment_edits_existing(self) -> None:
         comments = json.dumps([{"id": 11, "body": "unrelated"}, {"id": 12, "body": "old <!-- m --> text"}])

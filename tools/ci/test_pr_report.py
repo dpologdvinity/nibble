@@ -36,6 +36,7 @@ def make_dict() -> dict[str, Any]:
         "head_sha": HEAD,
         "runner": "ubuntu-24.04 (AMD EPYC 7763 64-Core Processor)",
         "kernels_changed": True,
+        "perf_status": "measured",
         "perf": [
             {
                 "model": MODEL,
@@ -77,6 +78,7 @@ def skipped_dict() -> dict[str, Any]:
     d = make_dict()
     d.update(
         {
+            "perf_status": "skipped-cold-cache",
             "perf": None,
             "size": None,
             "rss": None,
@@ -361,6 +363,41 @@ class RenderTests(unittest.TestCase):
         self.assertIn("changes the model inputs", text)
         self.assertIn("ctest -L e2e", text)
 
+    def test_render_names_the_head_it_describes_in_the_visible_header(self) -> None:
+        text = pr_report.render(make_report())
+        self.assertIn(f"## nibble PR report for `{HEAD[:7]}`", text)
+        self.assertIn(f"<!-- nibble-pr-report-head: {HEAD} -->", text)
+
+    def test_render_a_failed_perf_job_is_failed_not_skipped(self) -> None:
+        # A crash in `nibble bench -t 4` or in the RSS run must not read like a cold cache.
+        d = skipped_dict()
+        d["perf_status"] = "failed"
+        d["accuracy"] = make_dict()["accuracy"]
+        url = "https://github.com/o/r/actions/runs/42"
+        text = pr_report.render(pr_report.load(json.dumps(d)), run_url=url)
+        self.assertIn("perf job failed", text)
+        self.assertIn(f"]({url})", text)
+        self.assertNotIn("skipped", text)
+        self.assertIn("perf job failed", pr_report.render(pr_report.load(json.dumps(d))))  # no link without a URL
+
+    def test_render_skipped_names_the_cold_cache(self) -> None:
+        text = pr_report.render(pr_report.load(json.dumps(skipped_dict())))
+        self.assertIn("**Speed:** skipped (cold model cache)", text)
+        self.assertNotIn("failed", text)
+
+    def test_status_and_sections_must_agree(self) -> None:
+        # A failed or cold perf job measured nothing, so it carries no numbers.
+        for status in ("failed", "skipped-cold-cache"):
+            with self.subTest(status=status):
+                d = make_dict()
+                d["perf_status"] = status
+                with self.assertRaises(ValueError):
+                    pr_report.load(json.dumps(d))
+        d = make_dict()
+        d["perf_status"] = "unknown"
+        with self.assertRaises(ValueError):
+            pr_report.load(json.dumps(d))
+
     def test_render_zero_medians_do_not_divide_by_zero(self) -> None:
         d = make_dict()
         d["perf"][0].update({"base_median": 0.0, "head_median": 0.0, "ratios": [0.0], "verdict": "inconclusive"})
@@ -494,7 +531,7 @@ class PostTests(unittest.TestCase):
         self.assertEqual(pr_report.post(fake, pr_report.load(json.dumps(d)), HEAD), number)
         comments = fake.issues[number].comments
         self.assertEqual(len(comments), 1)
-        self.assertIn("skipped", comments[0])
+        self.assertIn("**Peak memory:** not measured", comments[0])  # measured job, section missing: not "skipped"
 
     def test_post_updates_existing_comment(self) -> None:
         fake = FakeGitHub()
@@ -531,6 +568,15 @@ class PostTests(unittest.TestCase):
         self.assertEqual(fake.issues[mine].comments, [])
         self.assertEqual(fake.issues[other].comments, [])
 
+    def test_post_links_the_run_when_given(self) -> None:
+        fake = FakeGitHub()
+        number = fake.add_pull_request(HEAD)
+        d = skipped_dict()
+        d["perf_status"] = "failed"
+        url = "https://github.com/o/r/actions/runs/7"
+        pr_report.post(fake, pr_report.load(json.dumps(d)), HEAD, run_url=url)
+        self.assertIn(url, fake.issues[number].comments[0])
+
     def test_post_takes_the_pr_from_the_api_not_the_artifact(self) -> None:
         # A forged artifact cannot name a PR: the schema has no such field and the lookup keys on the run's SHA.
         fake = FakeGitHub()
@@ -538,6 +584,82 @@ class PostTests(unittest.TestCase):
         mine = fake.add_pull_request(HEAD)
         self.assertEqual(pr_report.post(fake, make_report(), HEAD), mine)
         self.assertEqual(fake.issues[victim].comments, [])
+
+
+NEW = "c" * 40
+RUN_URL = "https://github.com/o/r/actions/runs/99"
+
+
+class OutdatedTests(unittest.TestCase):
+    """A pr-report run for a newer head that left no report: the older comment must say it is outdated."""
+
+    def setup_pr(self, head: str = NEW) -> tuple[FakeGitHub, int]:
+        """An open pull request now at `head` whose bot comment is the report for HEAD."""
+        fake = FakeGitHub()
+        number = fake.add_pull_request(head)
+        fake.comment(number, pr_report.render(make_report()))
+        return fake, number
+
+    def test_marks_the_older_report_outdated_with_the_new_head_and_the_run(self) -> None:
+        fake, number = self.setup_pr()
+        self.assertEqual(pr_report.mark_outdated(fake, NEW, RUN_URL), number)
+        (body,) = fake.issues[number].comments
+        self.assertTrue(body.startswith(MARKER))
+        banner = body[: body.index("## nibble PR report")]
+        self.assertIn("Outdated", banner)
+        self.assertIn(f"`{NEW[:7]}`", banner)
+        self.assertIn(f"`{HEAD[:7]}`", banner)
+        self.assertIn(f"]({RUN_URL})", banner)
+        self.assertIn("✅ end-to-end tests passed on the head", body)  # the old numbers stay, under the banner
+
+    def test_marking_twice_keeps_one_banner(self) -> None:
+        fake, number = self.setup_pr()
+        pr_report.mark_outdated(fake, NEW, RUN_URL)
+        pr_report.mark_outdated(fake, NEW, "https://github.com/o/r/actions/runs/100")
+        (body,) = fake.issues[number].comments
+        self.assertEqual(body.count("Outdated"), 1)
+        self.assertIn("runs/100", body)
+        self.assertNotIn("runs/99", body)
+
+    def test_a_new_report_replaces_the_banner(self) -> None:
+        fake, number = self.setup_pr(HEAD)
+        fake.prs_by_sha[NEW] = number
+        pr_report.mark_outdated(fake, NEW, RUN_URL)
+        pr_report.post(fake, make_report(), HEAD)
+        self.assertNotIn("Outdated", fake.issues[number].comments[0])
+
+    def test_a_report_for_the_same_head_is_not_outdated(self) -> None:
+        fake, number = self.setup_pr(HEAD)
+        before = list(fake.issues[number].comments)
+        self.assertEqual(pr_report.mark_outdated(fake, HEAD, RUN_URL), 0)
+        self.assertEqual(fake.issues[number].comments, before)
+
+    def test_nothing_to_mark_without_a_pull_request_or_a_bot_comment(self) -> None:
+        fake = FakeGitHub()
+        self.assertEqual(pr_report.mark_outdated(fake, NEW, RUN_URL), 0)  # a superseded head: no open PR at it
+        number = fake.add_pull_request(NEW)
+        fake.comment_as(number, "mallory", f"{MARKER}\nplanted")
+        self.assertEqual(pr_report.mark_outdated(fake, NEW, RUN_URL), 0)
+        self.assertEqual(fake.issues[number].comments, [f"{MARKER}\nplanted"])
+
+    def test_a_report_without_a_head_marker_reads_as_an_earlier_commit(self) -> None:
+        fake = FakeGitHub()
+        number = fake.add_pull_request(NEW)
+        fake.comment(number, f"{MARKER}\n## nibble PR report\nold numbers")
+        self.assertEqual(pr_report.mark_outdated(fake, NEW, RUN_URL), number)
+        body = fake.issues[number].comments[0]
+        self.assertIn("an earlier commit", body)
+        self.assertIn("old numbers", body)
+
+    def test_cli_outdated_validates_its_inputs(self) -> None:
+        fake, number = self.setup_pr()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(pr_report.main(["outdated", "--head-sha", NEW, "--run-url", RUN_URL], gh=fake), 0)
+            self.assertEqual(pr_report.main(["outdated", "--head-sha", "xyz", "--run-url", RUN_URL], gh=fake), 1)
+            bad_url = "https://evil.example/o/r/actions/runs/1) [x](y"
+            self.assertEqual(pr_report.main(["outdated", "--head-sha", NEW, "--run-url", bad_url], gh=fake), 1)
+        self.assertIn("Outdated", fake.issues[number].comments[0])
 
 
 class AssembleTests(unittest.TestCase):
@@ -557,7 +679,7 @@ class AssembleTests(unittest.TestCase):
         parts = [
             json.dumps(self.META),
             json.dumps(full["perf"]),  # perf_ab.py summarize writes a bare list
-            json.dumps({"size": full["size"], "rss": full["rss"]}),
+            json.dumps({"perf_status": "measured", "size": full["size"], "rss": full["rss"]}),
             json.dumps({"accuracy": full["accuracy"]}),
         ]
         merged = pr_report.load(pr_report.assemble(parts))
@@ -565,8 +687,11 @@ class AssembleTests(unittest.TestCase):
         self.assertEqual(merged["size"], full["size"])
         self.assertFalse(merged["kernels_changed"])
 
-    def test_assemble_defaults_perf_size_rss_to_skipped(self) -> None:
+    def test_assemble_without_a_perf_part_reads_as_a_failed_perf_job(self) -> None:
+        # The cold cache is an explicit part ({"perf_status": "skipped-cold-cache"}); no part at all means the perf
+        # job died before writing one.
         merged = pr_report.load(pr_report.assemble([json.dumps(self.META), json.dumps(self.COLD)]))
+        self.assertEqual(merged["perf_status"], "failed")
         self.assertIsNone(merged["perf"])
         self.assertIsNone(merged["size"])
         self.assertIsNone(merged["rss"])
