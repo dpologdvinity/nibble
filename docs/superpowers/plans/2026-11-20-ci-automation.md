@@ -75,7 +75,8 @@ Findings from the PR #49 review (CodeRabbit, each verified against the plan befo
   Step 4 of that task dispatches it. The opening comment gives `gh workflow run scorecard.yml`.
 - **R14. Every nightly job reports its real outcome.** `dashboard_data.py status` and the artifact upload run under
   `if: always()` and record the job's actual result, so a failed job leaves a `job_status` 0 row instead of none
-  (Task 3.5).
+  (Task 3.5). A cancelled job records no row and calls no `report-failure`: a cancellation says nothing about
+  health.
 - **R15. A skipped job never closes an issue.** When a job skipped its work on a cold cache, `report-failure` is
   skipped, not called with `success`. Only a run that actually executed may close that job's issue (Task 3.5).
 - **R16. Dispatch validation happens on `master`.** `workflow_dispatch` needs the workflow file on the default
@@ -86,8 +87,11 @@ Findings from the PR #49 review (CodeRabbit, each verified against the plan befo
 - **R18. The report must belong to the triggering run.** `pr_report.post` takes the `head_sha` of the `workflow_run`
   that produced the artifact and refuses to post when the artifact's own `head_sha` differs, so a stale or forged
   artifact cannot comment on another PR (Tasks 4.2 and 4.3).
-- **R19. Deleting a line selects its case.** `changed_lines` also maps deleted lines to the enclosing case on the
-  head side, so a deletion-only edit to a test still selects that test (Task 4.4).
+- **R19. Deleting a line selects its case.** A pure-deletion hunk (`git diff -U0 --no-ext-diff --no-color`,
+  `@@ -a,b +c,0 @@`) is mapped to head line `c`, the line just before the gap, and so to the case whose span contains `c`.
+  A deletion-only edit to a test therefore still selects that test, and one at a case boundary selects the case it
+  left, not the next one. A deleted `TEST_CASE` header is "deleted: <name>" under `unresolved` and selects nothing
+  (Task 4.4).
 
 ## Global Constraints
 
@@ -158,7 +162,7 @@ Findings from the PR #49 review (CodeRabbit, each verified against the plan befo
 
 1. **A fork PR's report artifact is untrusted input to a job with a write token.** The comment poster must:
    - validate the JSON strictly (types, finite numbers, bounded lengths, model names from an allowlist);
-   - take the PR number from the API (`commits/{sha}/pulls`), never from the artifact;
+   - find the PR from the repository's open pulls by head SHA (`pulls?state=open`, matched on `head.sha`), never from the artifact, and require the artifact's `head_sha` to equal the triggering run's head SHA (R18);
    - render Markdown only from validated fields.
    Pinned by `test_pr_report.py::test_rejects_*`.
 2. **No secret, cold cache, Dependabot or fork.** Every job skips with a summary notice and exits 0, never red and
@@ -468,7 +472,8 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str   # JSONL text; drops d
 ```
 
 - CLI: `python tools/ci/dashboard_data.py <from-bench|from-cosine|from-libfuzzer|from-gcovr|status> ... --out rows.jsonl`
-  (appends). `Meta` comes from the environment: `GITHUB_SHA`, `GITHUB_RUN_ID`, the first `model name` line of
+  (appends). `status` is `status --workflow W --job J --outcome success|failure|cancelled --out F`: `success`
+  calls `status_row(..., ok=True, ...)`, `failure` calls it with `ok=False`, and `cancelled` writes nothing. `Meta` comes from the environment: `GITHUB_SHA`, `GITHUB_RUN_ID`, the first `model name` line of
   `/proc/cpuinfo`, and a UTC `date`.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -478,6 +483,7 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str   # JSONL text; drops d
     - a gcovr `lines: 85.3% (1234 out of 1447)` line.
   - `test_validate_rejects_nan_and_long_key`.
   - `test_merge_is_idempotent`.
+  - `test_status_cli_outcomes`: `success` appends a value-1 row, `failure` a value-0 row and `cancelled` leaves the file unchanged.
 - [ ] **Step 2:** Run the tests. Expected: they fail.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run the tests. Expected: they pass.
@@ -490,8 +496,8 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str   # JSONL text; drops d
 **Interfaces:**
 - Consumes: `setup-models` (3.3), `report-failure` (3.2), `cosine.py` (3.1) and `dashboard_data.py` (3.4).
 - Every job's last steps:
-  - `dashboard_data.py status` with the job's real outcome (`${{ job.status }}`), then upload the artifact `dashboard-rows-<job>` (retention 7 days). Both steps run under `if: always()` (R14).
-  - `report-failure` with `outcome: ${{ job.status == 'success' && 'success' || 'failure' }}` under `if: always() && github.ref == 'refs/heads/master'`. A job that skipped its work on a cold cache (`steps.<models>.outputs.warm != 'true'`) skips this step too, and records no `ok` status row: only a run that executed may close an issue (R15).
+  - `dashboard_data.py status --workflow nightly --job <job> --outcome "$JOB_STATUS" --out rows.jsonl`, with `JOB_STATUS: ${{ job.status }}` passed through `env:`, then upload the artifact `dashboard-rows-<job>` (retention 7 days, `if-no-files-found: ignore`). Both steps run under `if: always() && job.status != 'cancelled'` (R14).
+  - `report-failure` with `outcome: ${{ job.status == 'success' && 'success' || 'failure' }}` under `if: always() && job.status != 'cancelled' && github.ref == 'refs/heads/master'`: a cancelled job neither reports nor closes. A job that skipped its work on a cold cache (`steps.<models>.outputs.warm != 'true'`) skips both this step and the status step, so it records no row: only a run that executed may close an issue (R15).
   - Permissions: `contents: read`, `issues: write`, `actions: write`.
 
 Jobs:
@@ -532,7 +538,7 @@ hand.
 
 **Files:** Create `.github/workflows/portability.yml`
 
-Jobs, each followed by `report-failure` (area `build`) and a status row:
+Jobs, each followed by `report-failure` (area `build`) and a status row, with the same guards as Task 3.5 (never for a cancelled job):
 - **`arm64`** on `ubuntu-24.04-arm`: install `ccache`, then build with `cmake -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF`, then `ctest -LE e2e --output-on-failure --parallel "$(nproc)"`. Also confirm `nibble info build/tests/data/small.gguf` prints `kernels: scalar`.
 - **`newest-gcc`**: install the newest `g++-NN` from the Ubuntu toolchain PPA (`ppa:ubuntu-toolchain-r/test`). Read the highest NN from `apt-cache search '^g\+\+-[0-9]+$'` and print the version to the summary. Build Release with `-DNIBBLE_NATIVE=OFF`, then run `ctest -LE e2e`.
 - **`newest-clang`**: run `apt.llvm.org/llvm.sh` (pin it by SHA-256) for the newest stable release. Build and test as above.
@@ -672,7 +678,7 @@ def main(argv: Sequence[str]) -> int   # subcommands: assemble <parts...> --out 
   - **`assemble`** job: `pr_report.py assemble`, then upload the artifact `pr-report`.
 - **`pr-report-comment.yml`**:
   - Triggers and permissions: `workflow_run` on `pr-report` completed. `permissions: pull-requests: write, actions: read`.
-  - It never checks out PR code. It checks out the default branch (for `tools/ci`), downloads `pr-report` from the triggering run with `run-id`, and runs `pr_report.py post pr-report.json --head-sha "${{ github.event.workflow_run.head_sha }}"` with `GH_TOKEN` (R18).
+  - It never checks out PR code. It checks out the default branch (for `tools/ci`), downloads `pr-report` from the triggering run with `run-id`, and runs `pr_report.py post pr-report.json --head-sha "$HEAD_SHA"` with `GH_TOKEN` and `HEAD_SHA: ${{ github.event.workflow_run.head_sha }}` set through `env:`, never inline in `run:` (R18).
   - It skips when the artifact is missing.
 - Each opening comment states the trust split and gives the manual run: `gh workflow run pr-report.yml` is not
   possible for PRs, so it says "push to the PR".
@@ -695,9 +701,10 @@ class Case(NamedTuple): file: str; name: str | None; start: int; end: int; binar
 def is_fix(title: str, subjects: Sequence[str]) -> bool
 def touches_code(paths: Sequence[str]) -> bool
 def test_cases(path: str, source: str) -> list[Case]      # name None when the first TEST_CASE argument is not one plain string literal; end = line before the next TEST_CASE or EOF
-def changed_lines(diff: str) -> dict[str, set[int]]        # new-side line numbers of added lines, plus, for each deleted line, the new-side line where it was removed (the hunk position), tests/*.cpp only (R19)
+def changed_lines(diff: str) -> dict[str, set[int]]        # tests/*.cpp only, from `git diff -U0 --no-ext-diff --no-color`: head-side numbers of added lines, plus `c` for each pure-deletion hunk `@@ -a,b +c,0 @@` (c = the line before the gap, 0 when at the top of the file) (R19)
+def deleted_case_names(diff: str) -> dict[str, list[str]]  # per file, the names on `TEST_CASE` header lines removed by pure-deletion hunks ("<macro-built>" when not one plain string literal)
 class Selection(NamedTuple): cases: list[Case]; unresolved: list[str]
-def select(diff: str, head_sources: Mapping[str, str]) -> Selection
+def select(diff: str, head_sources: Mapping[str, str]) -> Selection  # a line selects the case whose span contains it; lines outside every span select nothing; each deleted header adds "deleted: <name>" to unresolved
 def catch_spec(name: str) -> str                          # backslash-escapes , [ ] * " ~ and a leading ~ / *
 CaseResult = Literal["passed", "failed", "skipped", "missing"]
 def parse_junit(xml: str, name: str) -> CaseResult         # Catch2 -r junit; xml.etree; "missing" when absent
@@ -720,6 +727,7 @@ def main(argv: Sequence[str]) -> int  # select --base B --head H (runs git diff,
   - `test_test_cases_names_and_spans`: a fixture with three `TEST_CASE`s, one an `E2E_CASE`-style macro body (`TEST_CASE("e2e golden: " PROMPT ...`). That one's name is None.
   - `test_select_added_and_modified_cases`: a unified-diff fixture adding a case and editing inside another.
   - `test_select_deletion_only_edit`: a diff that only deletes lines inside a case selects that case (R19).
+  - `test_select_deletion_at_case_boundary`: deleting the last lines of case A, directly before case B's `TEST_CASE` line, selects A and not B; deleting the lines right after B's `TEST_CASE` line selects B; deleting a whole case selects nothing and lists `deleted: <name>` under `unresolved`.
   - `test_select_macro_case_is_unresolved`
   - `test_catch_spec_escapes`: `catch_spec('a, b [x] *') == r'a\, b \[x\] \*'`
   - `test_parse_junit_states`: fixtures for passed, failed, skipped (a Catch2 SKIP gives `<skipped/>`) and missing.
