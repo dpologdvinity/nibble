@@ -399,13 +399,15 @@ def line_chart(
     the right and 'YYYY-MM-DD' ticks on the x axis. x is unix seconds, y the value.
 
     The y axis starts at 0 (or at the first tick below the data, for negative data), or at `y_min` when given
-    (cosine charts pass 0.99; a non-finite `y_min` raises ValueError). `y_max` caps the axis (a percentage passes
-    100, which the default 1.1 x headroom would overshoot to 200): the top is the first nice tick at or above the
-    data when that is below `y_max`, else `y_max` itself, and no tick lies above it. A non-finite `y_max`, or one
-    not above the axis bottom, raises ValueError. A point outside the axis is drawn hollow on the nearest edge
-    rather than off the chart. Points that are not finite, or whose x is not a date in years 1 to
-    9999 (say, milliseconds instead of seconds), are ignored. With no points at all the chart says "no data yet";
-    a series without points keeps its legend entry.
+    (cosine charts pass 0.99; a non-finite `y_min` raises ValueError). `y_max`, when given, is the axis top
+    whatever the data (a fixed scale: a percentage passes 100, where the default 1.1 x headroom would overshoot
+    to 200); the ticks are nice values from the bottom up to it and none lies above it. A non-finite `y_max`, or
+    one not above the axis bottom (`y_min`, else 0 or the negative data's floor), raises ValueError; a pair
+    `y_min` >= `y_max` or a `y_max` <= 0 is rejected even when there are no points. A point below the axis
+    minimum is drawn hollow on the bottom edge rather than off the chart, and with `y_max` set a point above it
+    is drawn hollow on the top edge; each case gets a footnote. Points that are not finite, or whose x is not a
+    date in years 1 to 9999 (say, milliseconds instead of seconds), are ignored. With no points at all the chart
+    says "no data yet"; a series without points keeps its legend entry.
     """
     if y_min is not None and not math.isfinite(y_min):
         raise ValueError(f"y_min must be finite, got {y_min}")
@@ -455,9 +457,8 @@ def line_chart(
     if y_max is not None:
         if y_max <= lo:
             raise ValueError(f"y_max ({y_max:g}) must be above the axis bottom ({lo:g})")
-        if hi > y_max:  # cap: re-pick a nice step for the shorter span; the top tick may then sit below the edge
-            hi = y_max
-            step = nice_step(hi - lo)
+        hi = y_max  # a fixed top: re-pick a nice step for the span; the top tick may then sit below the edge
+        step = nice_step(hi - lo)
     ph = h - top - bottom
     y_of: Callable[[float], float] = lambda v: top + ph * (1 - (v - lo) / (hi - lo))
     ticks = [first_tick + step * i for i in range(math.floor((hi - first_tick) / step + 1e-9) + 1)]

@@ -221,9 +221,25 @@ class LineChartTest(unittest.TestCase):
         self.assertEqual(self.y_labels(svg), ["0", "20", "40", "60", "80", "100"])
         self.assertNotIn("Hollow", svg)
 
-    def test_line_chart_y_max_keeps_a_tighter_nice_axis(self) -> None:
-        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 10.0), (T0 + DAY, 30.0)])], y_max=100)
-        self.assertEqual(self.y_labels(svg)[-1], "50")  # the data fits well under the cap: no need to reach it
+    def test_line_chart_y_max_is_a_fixed_axis_top(self) -> None:
+        # A percentage reads best on a fixed 0-100 scale, however low the data sits.
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 20.0), (T0 + DAY, 30.0)])], y_max=100)
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertEqual(labels[0], 0.0)
+        self.assertEqual(labels[-1], 100.0)
+        self.assertEqual(len({round(b - a, 9) for a, b in zip(labels, labels[1:], strict=False)}), 1)  # even
+
+    def test_line_chart_y_max_is_the_top_with_y_min_and_negative_data(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.991), (T0 + DAY, 0.992)])], y_min=0.99, y_max=1.0)
+        self.assertEqual(self.y_labels(svg)[-1], "1.000")
+        neg = plot.line_chart("t", "y", [("a", "#000", [(T0, -10.0), (T0 + DAY, -3.0)])], y_max=20.0)
+        labels = [float(v) for v in self.y_labels(neg)]
+        self.assertLessEqual(max(labels), 20.0)
+        self.assertGreaterEqual(
+            max(labels), 20.0 - (labels[1] - labels[0])
+        )  # the top tick sits at the top edge or one step below
+        cy = [float(c) for c in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', neg)]
+        self.assertTrue(all(40 <= c <= 400 for c in cy))
 
     def test_line_chart_y_max_with_y_min(self) -> None:
         svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.9995), (T0 + DAY, 1.0)])], y_min=0.99, y_max=1.0)
@@ -272,6 +288,8 @@ class LineChartTest(unittest.TestCase):
             plot.line_chart("t", "y", [], y_max=0.0)  # the axis would start at 0
         with self.assertRaisesRegex(ValueError, "y_max"):
             plot.line_chart("t", "y", [], y_min=1.0, y_max=0.5)
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [], y_min=1.0, y_max=1.0)  # an empty chart must not hide a bad pair
 
     def test_line_chart_rejects_bad_y_max(self) -> None:
         one = [("a", "#000", [(T0, 1.0)])]
