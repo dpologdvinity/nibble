@@ -14,6 +14,8 @@
 # The four jobs are independent and run the whole non-e2e suite (no models needed).
 # By hand (the workflow file must be on the default branch): `gh workflow run portability.yml`. A run from another
 # branch (`--ref`) never opens an issue.
+# Each job also uploads a job_status dashboard row. It records the job's result before its Report step runs, so a Report
+# step that fails on its own (a GitHub API error) leaves a green row on a red job. See tools/ci/dashboard_data.py.
 # Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
 name: portability
 

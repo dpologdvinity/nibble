@@ -16,6 +16,9 @@
 # By hand (the workflow file must be on the default branch): run everything with `gh workflow run nightly.yml`, or one
 # job with `gh workflow run nightly.yml -f jobs=fuzz` (jobs is all, accuracy, sanitizers-real-model, fuzz or
 # trend-bench). A run from another branch (`--ref`) never saves a cache and never opens an issue.
+# Each job also uploads dashboard rows, including a job_status row. That row records the job's result before its Report
+# step runs, so a Report step that fails on its own (a GitHub API error) leaves a green row on a red job; the run
+# shows that step in red. See tools/ci/dashboard_data.py.
 # Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
 name: nightly
 

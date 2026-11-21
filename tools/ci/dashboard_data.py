@@ -16,7 +16,12 @@ Metrics, their keys and units (METRICS below is the single source for the metric
     corpus_files   "<target>"                        files   passed in by the caller (count of the corpus directory)
     binary_bytes   "nibble"                          bytes   size of the release binary
     line_coverage  "src+cli"                         %       gcovr `lines: 85.3% (1234 out of 1447)`
-    job_status     "<workflow>/<job>"                ok      1 = success, 0 = failure
+    job_status     "<workflow>/<job>"                ok      1 = success, 0 = failure (see below)
+
+`job_status` is written by the job's "Dashboard rows (job status)" step from `job.status`, which covers the job's
+checks up to that step. The `Report` step (issue open/comment/close) runs after it, so a Report step that fails by
+itself (a GitHub API error) leaves a green row on a job GitHub marks red. That is deliberate: the row says whether the
+code and the checks passed, and the red Report step is visible in the run.
 
 `validate` is the gate: every row built here, and every new row `merge` accepts, passes through it.
 `merge` appends rows to existing JSONL text and drops repeats of the same (run_id, metric, key), so re-running a job
