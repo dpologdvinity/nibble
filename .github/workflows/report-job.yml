@@ -46,7 +46,7 @@ jobs:
   # in the caller's run, where dashboard.yml collects it with the other rows. Any ref, like the work jobs' own rows:
   # the dashboard only takes master's runs. No write scope: it only uploads an artifact.
   timeout-row:
-    name: dashboard row ${{ inputs.job }}
+    name: timeout row  # fixed text: a skipped job shows its name unevaluated, and the caller prefixes the job
     if: inputs.status == 'timed-out'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
