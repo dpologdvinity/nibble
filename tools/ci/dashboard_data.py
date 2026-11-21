@@ -80,6 +80,7 @@ METRICS: dict[str, str] = {
 # The keys of a row, in the order they are written.
 FIELDS = ("schema", "date", "commit", "source", "metric", "key", "value", "unit", "runner", "run_id")
 MAX_TEXT = 120  # longest `key` and `runner`
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"  # the layout of a row's `date`, in UTC
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 COVERAGE_KEY = "src+cli"
@@ -101,9 +102,9 @@ class Meta:
 def validate(row: Mapping[str, object]) -> Row:
     """Return `row` as a new dict in schema order with `value` as a float, or raise ValueError naming the bad field.
 
-    Checks: exactly the schema's keys; schema 1; date format; 40-hex commit; known source and metric; a unit that
-    matches the metric; a non-empty key and runner of at most 120 characters; a finite number for `value`; a
-    non-negative int (not a bool) for `run_id`.
+    Checks: exactly the schema's keys; schema 1; date format, and that it is a real date and time; 40-hex commit; known
+    source and metric; a unit that matches the metric; a non-empty key and runner of at most 120 characters; a finite
+    number for `value`; a non-negative int (not a bool) for `run_id`.
     """
     for field in FIELDS:
         if field not in row:
@@ -114,6 +115,10 @@ def validate(row: Mapping[str, object]) -> Row:
     if row["schema"] != SCHEMA or isinstance(row["schema"], bool):
         raise ValueError(f"field 'schema' must be {SCHEMA}, got {row['schema']!r}")
     _check_str("date", row["date"], _DATE)
+    try:
+        datetime.strptime(str(row["date"]), DATE_FORMAT)  # the pattern alone lets 2026-02-30 and 24:00:00 through
+    except ValueError as e:
+        raise ValueError(f"field 'date' must be a real date and time, got {row['date']!r}") from e
     _check_str("commit", row["commit"], _COMMIT)
     if row["source"] not in SOURCES:
         raise ValueError(f"field 'source' must be one of {SOURCES}, got {row['source']!r}")
@@ -370,7 +375,7 @@ def _read_cpuinfo() -> str:
 
 def _utc_now() -> str:
     """The current UTC time as `YYYY-MM-DDTHH:MM:SSZ`."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime(DATE_FORMAT)
 
 
 def _append(out: Path, rows: Iterable[Row]) -> None:

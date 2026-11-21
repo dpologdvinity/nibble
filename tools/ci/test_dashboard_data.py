@@ -88,6 +88,16 @@ class ValidateTests(unittest.TestCase):
     def test_accepts_good_row(self) -> None:
         self.assertEqual(dashboard_data.validate(good_row()), good_row())
 
+    def test_validate_rejects_dates_that_are_not_on_the_calendar(self) -> None:
+        for bad in ("2026-02-30T03:17:00Z", "2026-13-01T03:17:00Z", "2026-11-21T24:00:00Z", "2026-11-21T03:61:00Z"):
+            with self.subTest(date=bad), self.assertRaisesRegex(ValueError, "date"):
+                dashboard_data.validate(good_row(date=bad))
+        dashboard_data.validate(good_row(date="2028-02-29T23:59:59Z"))  # a real leap day is fine
+
+    def test_merge_rejects_a_new_row_with_an_impossible_date(self) -> None:
+        with self.assertRaisesRegex(ValueError, "date"):
+            dashboard_data.merge("", [good_row(date="2026-02-30T03:17:00Z")])
+
     def test_validate_rejects_nan_and_long_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "value"):
             dashboard_data.validate(good_row(value=math.nan))
