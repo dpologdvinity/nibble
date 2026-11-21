@@ -17,7 +17,7 @@ is untrusted input to a privileged job. Three rules keep that safe:
 
 Schema 1 (`null` for a section means "skipped"; numbers are JSON numbers, 0.0 means "no usable value"):
 
-    {"schema": 1, "base_sha": "<40 hex>", "head_sha": "<40 hex>", "runner": "<1-120 chars of [A-Za-z0-9 ._()/:,+-]>",
+    {"schema": 1, "base_sha": "<40 hex>", "head_sha": "<40 hex>", "runner": "<1-120 chars of [A-Za-z0-9 ._()/,+-]>",
      "kernels_changed": bool,
      "perf": [{"model": <allowlisted>, "test": "pp512"|"tg128", "threads": int, "base_median": x,
                "head_median": x, "ratios": [x...], "verdict": "faster"|"slower"|"same"|"inconclusive"}] | null,
@@ -88,8 +88,8 @@ MAX_FLOAT = 1e12  # tokens per second, ratios and cosines
 _SHA = re.compile(r"[0-9a-f]{40}")
 # Allowed text. No `@` and no `#` (mentions and issue links), no markup characters, no control characters.
 _KEY_TEXT = re.compile(r"[A-Za-z0-9._/+-]+")  # `<model>/<prompt>`: ids and prompt names, never whitespace
-_RUNNER_TEXT = re.compile(r"[A-Za-z0-9 ._()/:,+-]+")  # a CPU model name, once `assemble` has made it inert
-_RUNNER_UNSAFE = re.compile(r"[^A-Za-z0-9 ._()/:,+-]")
+_RUNNER_TEXT = re.compile(r"[A-Za-z0-9 ._()/,+-]+")  # a CPU model name, once `assemble` has made it inert
+_RUNNER_UNSAFE = re.compile(r"[^A-Za-z0-9 ._()/,+-]")
 _PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
 
 _TOP_KEYS = frozenset(

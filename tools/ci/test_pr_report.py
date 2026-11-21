@@ -198,7 +198,7 @@ class LoadTests(unittest.TestCase):
                 d = make_dict()
                 d["accuracy"]["rows"][0]["key"] = bad
                 self.reject(d)
-        for bad in ("a|b", "`c`", "<b>x</b>", "[x](http://e)", "*x*", "a\\b", "a;b", "a=b"):
+        for bad in ("a|b", "`c`", "<b>x</b>", "[x](http://e)", "*x*", "a\\b", "a;b", "a=b", "a:b", ":smile:"):
             with self.subTest(runner=bad):
                 d = make_dict()
                 d["runner"] = bad
@@ -516,6 +516,13 @@ class AssembleTests(unittest.TestCase):
     def test_assemble_makes_a_real_runner_name_inert(self) -> None:
         merged = pr_report.load(pr_report.assemble([json.dumps(self.META | self.REAL), json.dumps(self.COLD)]))
         self.assertEqual(merged["runner"], "Intel(R) Xeon(R) Platinum 8370C CPU at 2.80GHz")
+
+    def test_assemble_replaces_colons_in_the_runner_name(self) -> None:
+        # ":smile:" would render as an emoji, and no CPU model name needs a colon.
+        merged = pr_report.load(
+            pr_report.assemble([json.dumps(self.META | {"runner": "cpu :smile: x"}), json.dumps(self.COLD)])
+        )
+        self.assertEqual(merged["runner"], "cpu _smile_ x")
 
     def test_assemble_replaces_other_unsafe_runner_characters_and_truncates(self) -> None:
         runner = "a#b <i>|\u00e9" + "x" * 200
