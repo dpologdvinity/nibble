@@ -12,10 +12,11 @@
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
 # without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
 # Where things come from: the workspace is the MERGE REF (GitHub's preview of the PR merged into its base, the default
-# `actions/checkout` ref for `pull_request`), so tools/ci is the base branch's current copy. The PR's own head would
-# break every branch cut before a tools/ci change (PR #61 predated tools/ci/fix_proof.py and went red with "can't open
-# file", an error that says nothing about its fix). Only tests/ is taken from the PR head (`git archive "$HEAD_SHA"
-# tests`, over the merge base's tests/ tree, which is removed first), never from the merge ref: tests that landed on the
+# `actions/checkout` ref for `pull_request`), so tools/ci is the base branch's current copy with the PR's own changes
+# to it merged in. The PR's own head would break every branch cut before a tools/ci change (PR #61 predated
+# tools/ci/fix_proof.py and went red with "can't open file", an error that says nothing about its fix). Only tests/ is
+# taken from the PR head (`git checkout "$HEAD_SHA" -- tests` into the merge base's worktree, whose tests/ tree is
+# removed first), never from the merge ref: tests that landed on the
 # base branch after the merge base can need code the merge base lacks, and would give a false "proven" (the base does
 # not compile). The diffs (`gate`, `select`) still compare the merge base with the PR head (`$BASE_SHA...$HEAD_SHA`,
 # three dots), not the merge commit, so they list only what the PR changed.
@@ -59,7 +60,7 @@ jobs:
       NO_TEST_NEEDED: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') }}
     steps:
       # No `ref:`: the merge ref (the PR merged into its base), so tools/ci is current whatever the branch's age. Its
-      # second parent is the PR head. Full history for `git merge-base`, the commit subjects and `git archive`.
+      # second parent is the PR head. Full history for `git merge-base`, the commit subjects and the head's tests/.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -109,10 +110,9 @@ jobs:
           # Replace the tree, not overlay it: a test file the PR deleted or renamed must not stay on the base (a
           # renamed file would give duplicate TEST_CASE names, a stale one that no longer compiles a false "proven").
           rm -rf base-src/tests
-          # Two commands, not a pipe: the default shell has no pipefail, and a failed `git archive` must fail the step.
-          git archive --format=tar --output=head-tests.tar "$HEAD_SHA" tests
-          tar -x -C base-src -f head-tests.tar
-          rm head-tests.tar
+          # `git checkout`, not `git archive`: archive drops `export-ignore` paths, so a PR's .gitattributes could hide a
+          # test header from the base and turn "does not compile" into a false "proven".
+          git -C base-src checkout "$HEAD_SHA" -- tests
       - name: Let the sanitizers map memory (lower ASLR entropy)
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
         run: sudo sysctl -w vm.mmap_rnd_bits=28

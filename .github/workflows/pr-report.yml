@@ -310,7 +310,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # The merge ref (no `ref:`): this job only runs tools/ci, which must be the base branch's current copy.
+      # The merge ref (no `ref:`): this job only runs tools/ci, and must run the same copy perf and accuracy ran (the
+      # base branch's current tools/ci with the PR's changes merged in), or a PR that changes a part's format breaks.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
