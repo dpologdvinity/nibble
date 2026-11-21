@@ -88,6 +88,26 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(gh.issues[1].open)
         self.assertFalse(gh.issues[2].open)
 
+    def test_same_title_issue_by_someone_else_is_ignored(self) -> None:
+        # Anyone can open "nightly: fuzz_gguf failing" first; it must neither receive the reports nor be closed.
+        gh = at_tip()
+        planted = gh.open_issue_as("mallory", "nightly: fuzz_gguf failing", ["ci-failure"])
+        self.assertEqual(report_failure.report(gh, make_ctx(), "failure", triage=True), "open")
+        ours = max(gh.issues)
+        self.assertNotEqual(ours, planted)
+        self.assertEqual(gh.dispatches[0][2], {"issue": str(ours)})
+        self.assertEqual(report_failure.report(gh, make_ctx(), "success", triage=False), "close")
+        self.assertFalse(gh.issues[ours].open)
+        self.assertTrue(gh.issues[planted].open)
+        self.assertEqual(gh.issues[planted].comments, [])
+
+    def test_bot_issue_without_the_ci_failure_label_is_ignored(self) -> None:
+        gh = FakeGitHub()
+        other = gh.create_issue("nightly: fuzz_gguf failing", "b", ["ci"])
+        self.assertEqual(report_failure.report(gh, make_ctx(), "failure", triage=False), "open")
+        self.assertEqual(gh.issues[other].comments, [])
+        self.assertEqual(len(gh.issues), 2)
+
     def test_success_closes_only_own_issue(self) -> None:
         gh = at_tip()
         report_failure.report(gh, make_ctx("fuzz_gguf"), "failure", triage=False)

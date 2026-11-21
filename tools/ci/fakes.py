@@ -28,6 +28,8 @@ class FakeIssue:
     comment_authors: list[str] = field(default_factory=list)
     # A pull request shares the issue number space and comment API but is never returned by find_open_issue.
     is_pull_request: bool = False
+    # Login of whoever opened it; find_open_issue only returns the bot's own issues.
+    author: str = "github-actions[bot]"
 
 
 class FakeGitHub:
@@ -65,16 +67,26 @@ class FakeGitHub:
         self.reviews: dict[int, list[Review]] = {}
         self._next_number = 1
 
-    def find_open_issue(self, title: str) -> int | None:
+    def find_open_issue(self, title: str, label: str) -> int | None:
         for number, issue in self.issues.items():
-            if issue.open and not issue.is_pull_request and issue.title == title:
+            if (
+                issue.open
+                and not issue.is_pull_request
+                and issue.title == title
+                and issue.author == self.BOT
+                and label in issue.labels
+            ):
                 return number
         return None
 
     def create_issue(self, title: str, body: str, labels: Sequence[str]) -> int:
+        return self.open_issue_as(self.BOT, title, labels, body)
+
+    def open_issue_as(self, author: str, title: str, labels: Sequence[str], body: str = "") -> int:
+        """Open an issue written by `author` (a login) and return its number; `create_issue` opens as the bot."""
         number = self._next_number
         self._next_number += 1
-        self.issues[number] = FakeIssue(title, body, list(labels))
+        self.issues[number] = FakeIssue(title, body, list(labels), author=author)
         return number
 
     def add_pull_request(self, head_sha: str, *, author: str = "someone", labels: Sequence[str] = ()) -> int:

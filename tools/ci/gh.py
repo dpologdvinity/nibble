@@ -67,11 +67,17 @@ class Review:
     association: str
 
 
+# Login of the GITHUB_TOKEN identity as the REST API reports issue and comment authors.
+BOT_LOGIN = "github-actions[bot]"
+
+
 class GitHub(Protocol):
     """What the CI scripts need from GitHub. Implemented by GhCli and by fakes.FakeGitHub."""
 
-    def find_open_issue(self, title: str) -> int | None:
-        """Number of the open issue whose title equals `title` exactly (search is fuzzy, so never use it), or None."""
+    def find_open_issue(self, title: str, label: str) -> int | None:
+        """Number of the open issue that github-actions[bot] opened with the label `label` and whose title equals
+        `title` exactly (search is fuzzy, so never use it), or None. Anyone can open an issue with that title; only the
+        workflows' own issue counts, so a stranger's copy never receives the reports nor is closed by a recovery."""
         ...
 
     def create_issue(self, title: str, body: str, labels: Sequence[str]) -> int:
@@ -185,11 +191,22 @@ class GhCli:
         argv = ["gh", "api", "-X", method, path, "--input", "-"]
         return self._run(argv, json.dumps(payload))
 
-    def find_open_issue(self, title: str) -> int | None:
-        listing = _json_list(self._get(f"repos/{self.repo}/issues?state=open&per_page=100", paginate=True))
+    def find_open_issue(self, title: str, label: str) -> int | None:
+        query = urllib.parse.urlencode({"state": "open", "creator": BOT_LOGIN, "labels": label, "per_page": 100})
+        listing = _json_list(self._get(f"repos/{self.repo}/issues?{query}", paginate=True))
         for issue in listing:
-            # The issues endpoint also returns pull requests; they carry a "pull_request" key.
-            if "pull_request" not in issue and issue.get("title") == title:
+            # The query already filters on creator and label; both are checked again so that a filter the API ignored
+            # cannot match someone else's issue. The endpoint also returns pull requests ("pull_request" key).
+            user = issue.get("user")
+            labels = issue.get("labels")
+            if (
+                "pull_request" not in issue
+                and issue.get("title") == title
+                and isinstance(user, dict)
+                and user.get("login") == BOT_LOGIN
+                and isinstance(labels, list)
+                and any(isinstance(item, dict) and item.get("name") == label for item in labels)
+            ):
                 return int(issue["number"])
         return None
 

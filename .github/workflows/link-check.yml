@@ -5,7 +5,9 @@
 #   links   runs lychee with a read-only token and uploads its Markdown report. lychee's exit code 2 means broken
 #           links; any other non-zero code (a bad config, a crash) fails this job instead of filing an issue.
 #   report  the only job with `issues: write`; it runs no checked-out code and only on master (a hand run from another
-#           branch, `--ref`, opens no issue). The issue is found by exact title, never by gh's fuzzy search.
+#           branch, `--ref`, opens no issue). The issue is found by exact title, never by gh's fuzzy search, among the
+#           open issues github-actions[bot] opened with the `documentation` label, so a same-titled issue someone else
+#           opened never gets the report nor is closed by a green run.
 # By hand: `gh workflow run link-check.yml`, or locally
 #   lychee --config .lychee.toml README.md ARCHITECTURE.md CONTRIBUTING.md SECURITY.md docs
 # Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
@@ -83,9 +85,12 @@ jobs:
       - name: Open, update or close the issue
         run: |
           set -euo pipefail
-          # Exact title match (gh's --search is fuzzy); the oldest open match if there were ever two.
-          issue=$(gh issue list --state open --limit 500 --json number,title \
-            --jq '[.[] | select(.title == env.TITLE) | .number] | min // empty')
+          # Exact title match (gh's --search is fuzzy) on the bot's own open issues with the documentation label; the
+          # creator and the label are checked again on each item. The oldest open match if there were ever two.
+          issue=$(gh api --paginate \
+            "repos/$GH_REPO/issues?state=open&creator=github-actions%5Bbot%5D&labels=documentation&per_page=100" \
+            --jq '.[] | select(.pull_request == null and .title == env.TITLE and .user.login == "github-actions[bot]"
+                    and any(.labels[]; .name == "documentation")) | .number' | sort -n | sed -n 1p)
           if [ "$BROKEN" = "true" ]; then
             {
               echo "The weekly link check found broken links ([run]($RUN_URL)). This body is replaced by each run that"
