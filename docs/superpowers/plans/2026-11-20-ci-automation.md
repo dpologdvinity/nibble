@@ -121,7 +121,7 @@ Findings from the PR #49 review (CodeRabbit, each verified against the plan befo
   | codeql | `11 6 * * 2` |
   | gitleaks full history | `29 2 * * 3` |
 - **Cache keys:**
-  - `models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt') }}`
+  - `models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt', 'tests/corpus.h') }}`
     over paths `models/` and `!models/hf`.
   - `fuzz-corpus-<target>-${{ github.run_id }}`, with restore-key `fuzz-corpus-<target>-`.
 - **Labels** (name: colour, description). `tools/ci/labels.py` is the source of truth.
@@ -382,7 +382,7 @@ Outcome = Literal["success", "failure"]
 Action = Literal["open", "comment", "close", "none"]
 @dataclass(frozen=True)
 class RunContext: job: str; workflow_file: str; run_url: str; sha: str; repo: str; area: str; attachments_url: str | None
-def issue_title(job: str) -> str                          # f"nightly: {job} failing"
+def issue_title(workflow_file: str, job: str) -> str      # f"{workflow stem}: {job} failing"
 def decide(open_issue: int | None, outcome: Outcome) -> Action
 def failure_body(ctx: RunContext, last_green: str | None) -> str   # run link, sha, compare link last_green...sha, attachments link
 def recovery_body(ctx: RunContext) -> str

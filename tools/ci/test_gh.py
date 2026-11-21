@@ -7,8 +7,10 @@ GhCli is exercised through a scripted Runner that records every call, so no test
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from collections.abc import Sequence
+from pathlib import Path
 
 import gh
 from fakes import FakeGitHub
@@ -166,6 +168,74 @@ class OtherCallTests(unittest.TestCase):
         self.assertEqual(json.loads(stdin or ""), {"body": "hello"})
 
 
+class RunLookupTests(unittest.TestCase):
+    """completed_runs, job_conclusion and download_artifact: how the nightly finds the previous night's numbers."""
+
+    def test_list_completed_runs_lists_ids_newest_first(self) -> None:
+        runs = json.dumps({"workflow_runs": [{"id": 30}, {"id": 20}, {"id": 10}]})
+        runner = ScriptedRunner({"runs": runs})
+        self.assertEqual(gh.GhCli(REPO, runner).list_completed_runs("nightly.yml", "master", 10), [30, 20, 10])
+        self.assertEqual(
+            runner.calls[0][0][-1],
+            f"repos/{REPO}/actions/workflows/nightly.yml/runs?branch=master&status=completed&per_page=10",
+        )
+
+    def test_job_conclusion_matches_the_job_by_name(self) -> None:
+        jobs = json.dumps(
+            {"jobs": [{"name": "fuzz_load", "conclusion": "failure"}, {"name": "accuracy", "conclusion": "success"}]}
+        )
+        runner = ScriptedRunner({"runs/5/jobs": jobs})
+        client = gh.GhCli(REPO, runner)
+        self.assertEqual(client.job_conclusion(5, "accuracy"), "success")
+        self.assertEqual(client.job_conclusion(5, "fuzz_load"), "failure")
+        self.assertIsNone(client.job_conclusion(5, "trend-bench"))
+        self.assertIn("filter=latest", runner.calls[0][0][-1])
+
+    def test_job_conclusion_reads_every_page_and_none_while_running(self) -> None:
+        page1 = json.dumps({"jobs": [{"name": "a", "conclusion": "success"}]})
+        page2 = json.dumps({"jobs": [{"name": "accuracy", "conclusion": None}]})
+        runner = ScriptedRunner({"runs/5/jobs": page1 + "\n" + page2})
+        self.assertIsNone(gh.GhCli(REPO, runner).job_conclusion(5, "accuracy"))
+
+    def test_download_artifact_downloads_when_it_exists(self) -> None:
+        listing = json.dumps({"artifacts": [{"name": "e2e-cosines", "expired": False}]})
+        runner = ScriptedRunner({"runs/9/artifacts": listing})
+        self.assertTrue(gh.GhCli(REPO, runner).download_artifact(9, "e2e-cosines", Path("out dir")))
+        argv = runner.calls[-1][0]
+        self.assertEqual(argv[:3], ["gh", "run", "download"])
+        self.assertEqual(argv[3], "9")
+        self.assertEqual(argv[argv.index("-n") + 1], "e2e-cosines")
+        self.assertEqual(argv[argv.index("-D") + 1], "out dir")
+        self.assertEqual(argv[argv.index("-R") + 1], REPO)
+
+    def test_download_artifact_false_when_absent_or_expired(self) -> None:
+        listings: list[dict[str, list[dict[str, object]]]] = [
+            {"artifacts": []},
+            {"artifacts": [{"name": "e2e-cosines", "expired": True}]},
+            {"artifacts": [{"name": "other", "expired": False}]},
+        ]
+        for listing in listings:
+            with self.subTest(listing=listing):
+                runner = ScriptedRunner({"runs/9/artifacts": json.dumps(listing)})
+                self.assertFalse(gh.GhCli(REPO, runner).download_artifact(9, "e2e-cosines", Path("d")))
+                self.assertEqual(len(runner.calls), 1)  # no download attempted
+
+
+class BranchTipTests(unittest.TestCase):
+    def test_branch_tip_reads_the_commit_sha(self) -> None:
+        runner = ScriptedRunner({"branches/master": json.dumps({"name": "master", "commit": {"sha": "abc123"}})})
+        self.assertEqual(gh.GhCli(REPO, runner).branch_tip("master"), "abc123")
+        self.assertEqual(runner.calls[0][0][-1], f"repos/{REPO}/branches/master")
+
+    def test_branch_tip_keeps_slashes_and_encodes_the_rest(self) -> None:
+        runner = ScriptedRunner({"branches/": json.dumps({"commit": {"sha": "abc123"}})})
+        gh.GhCli(REPO, runner).branch_tip("release/v1#hotfix")
+        self.assertEqual(runner.calls[0][0][-1], f"repos/{REPO}/branches/release/v1%23hotfix")
+
+    def test_branch_tip_none_without_a_commit(self) -> None:
+        self.assertIsNone(gh.GhCli(REPO, ScriptedRunner({"branches/": "{}"})).branch_tip("master"))
+
+
 class SubprocessRunnerTests(unittest.TestCase):
     def test_runner_error_raises(self) -> None:
         # `sh -c 'echo boom >&2; exit 3'` stands in for a failing gh invocation.
@@ -209,6 +279,28 @@ class FakeGitHubTests(unittest.TestCase):
         self.assertEqual(fake.pr_for_sha("def"), 4)
         self.assertIsNone(fake.pr_for_sha("nope"))
         self.assertEqual(fake.dispatches, [("w.yml", "master", {"k": "v"})])
+
+    def test_fake_branch_tip(self) -> None:
+        fake = FakeGitHub()
+        fake.branch_tips["master"] = "abc"
+        self.assertEqual(fake.branch_tip("master"), "abc")
+        self.assertIsNone(fake.branch_tip("other"))
+        fake.fail_tip = True
+        with self.assertRaises(gh.GhError):
+            fake.branch_tip("master")
+
+    def test_fake_run_lookups(self) -> None:
+        fake = FakeGitHub()
+        fake.completed_runs[("nightly.yml", "master")] = [3, 2, 1]
+        fake.job_conclusions[(3, "accuracy")] = "success"
+        fake.artifacts[(3, "snap")] = {"a.json": "{}", "sub/b.txt": "x"}
+        self.assertEqual(fake.list_completed_runs("nightly.yml", "master", 2), [3, 2])
+        self.assertEqual(fake.job_conclusion(3, "accuracy"), "success")
+        self.assertIsNone(fake.job_conclusion(2, "accuracy"))
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertTrue(fake.download_artifact(3, "snap", Path(tmp) / "d"))
+            self.assertEqual((Path(tmp) / "d" / "a.json").read_text(), "{}")
+            self.assertFalse(fake.download_artifact(3, "nope", Path(tmp) / "e"))
 
 
 if __name__ == "__main__":

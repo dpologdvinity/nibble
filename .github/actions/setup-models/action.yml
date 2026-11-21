@@ -1,0 +1,130 @@
+# Reason: the end-to-end accuracy tests compare nibble's logits against llama.cpp "goldens" and need the Qwen2.5-0.5B
+# model family under models/ (git-ignored). Building all of that from scratch takes 45 to 75 minutes, so it lives in
+# one cache entry that this composite action restores, or rebuilds on a miss. The nightly accuracy job on master is
+# the only one that saves (`save: "true"`); every other consumer restores only. The cache budget and the choice of
+# Qwen alone are in the CI automation plan (rulings R4 to R6).
+# Use: after the caller's own checkout (the key hashes files in the repo), before building and running `ctest -L e2e`:
+#   - id: models
+#     uses: ./.github/actions/setup-models
+#     with: {save: "true"}                 # nightly accuracy job only
+#   - id: models
+#     uses: ./.github/actions/setup-models
+#     with: {require-warm: "true"}         # PR jobs: a cold cache means "skip", never a 45-minute rebuild
+# then gate on `steps.models.outputs.warm == 'true'`. The e2e cases skip themselves for models that are absent.
+# Contents of models/: five GGUF files plus the F16 base (about 4 GB) and models/golden/ (six directories, about 0.8 GB).
+name: setup-models
+description: Restore (or rebuild and optionally save) the Qwen2.5-0.5B models and llama.cpp goldens under models/.
+inputs:
+  save:
+    description: '`true` saves the cache after a rebuild. Only the nightly accuracy job on master sets it.'
+    default: "false"
+  require-warm:
+    description: '`true` makes a cache miss set `warm=false` and stop, instead of rebuilding.'
+    default: "false"
+outputs:
+  warm:
+    description: '`true` when models/ is ready (restored or rebuilt); `false` on a miss with `require-warm`.'
+    value: ${{ steps.state.outputs.warm }}
+  models-dir:
+    description: Directory holding the models and goldens, relative to the workspace.
+    value: models
+runs:
+  using: composite
+  steps:
+    # The key covers every input of the data: the llama.cpp pin, the scripts that fetch, quantize and record it, the
+    # reference tool's source, and the prompts and corpora the goldens are generated from.
+    - name: Restore models and goldens
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          models/
+          !models/hf
+        key: models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt', 'tests/corpus.h') }}
+
+    # Decide once: build=true means this run must produce models/ itself; warm is the value handed to the caller.
+    - name: Decide whether to rebuild
+      id: state
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        REQUIRE_WARM: ${{ inputs.require-warm }}
+      run: |
+        if [ "$CACHE_HIT" = "true" ]; then
+          build=false; warm=true
+        elif [ "$REQUIRE_WARM" = "true" ]; then
+          build=false; warm=false
+          echo "::notice title=setup-models::cold model cache; skipping (require-warm). The nightly accuracy job rebuilds it."
+          echo "Model cache is cold: model-dependent steps were skipped." >> "$GITHUB_STEP_SUMMARY"
+        else
+          build=true; warm=true
+        fi
+        echo "build=$build" >> "$GITHUB_OUTPUT"
+        echo "warm=$warm" >> "$GITHUB_OUTPUT"
+
+    # Everything below runs only on a miss that may rebuild. Expected cost on a 4-core hosted runner, from the scripts:
+    # download about 1 GB (a minute or two), llama.cpp native + generic builds about 10 to 20 min each and about 1 to
+    # 2 GB of build tree each, quantizing a few minutes, then goldens (each model: tokenize x2, eog, three 64-token
+    # logit runs, with the generic scalar build for the five quantized ones) which dominate: about 20 to 45 min.
+    - name: Check build tools
+      if: steps.state.outputs.build == 'true'
+      shell: bash
+      run: |
+        # curl, git, cmake and g++ ship on ubuntu-24.04 runners, so this only verifies them.
+        missing=0
+        for tool in curl git cmake g++; do
+          command -v "$tool" > /dev/null || { echo "::error::setup-models needs $tool, which is not installed"; missing=1; }
+        done
+        exit "$missing"
+
+    - name: Download Qwen2.5-0.5B F16
+      if: steps.state.outputs.build == 'true'
+      shell: bash
+      run: tools/download_models.sh qwen2.5-0.5b-f16
+
+    - name: Build llama.cpp (native and generic)
+      if: steps.state.outputs.build == 'true'
+      shell: bash
+      run: |
+        tools/build_llama_cpp.sh
+        tools/build_llama_cpp.sh --generic
+
+    - name: Quantize
+      if: steps.state.outputs.build == 'true'
+      shell: bash
+      run: tools/make_quants.sh
+
+    - name: Record llama.cpp goldens
+      if: steps.state.outputs.build == 'true'
+      shell: bash
+      run: |
+        for name in qwen2.5-0.5b-f16 qwen2.5-0.5b-q8_0 qwen2.5-0.5b-q4_0 qwen2.5-0.5b-q4_k_m qwen2.5-0.5b-q5_k_m qwen2.5-0.5b-q6_k; do
+          tools/make_golden.sh "$name"
+        done
+
+    # The tests need neither the llama.cpp build trees (a few GB) nor models/hf; free the disk before the caller builds.
+    - name: Free disk
+      if: steps.state.outputs.build == 'true'
+      shell: bash
+      run: |
+        rm -rf third_party/build third_party/build-generic models/hf
+
+    - name: Save models and goldens
+      if: steps.state.outputs.build == 'true' && inputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          models/
+          !models/hf
+        key: ${{ steps.restore.outputs.cache-primary-key }}
+
+    - name: Report size
+      if: steps.state.outputs.warm == 'true'
+      shell: bash
+      run: |
+        {
+          echo '### Models and goldens'
+          echo '```'
+          du -sh models models/golden
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

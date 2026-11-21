@@ -1,0 +1,391 @@
+# Reason: the per-PR CI cannot afford what only time and big models reveal, so this workflow runs it every night on
+# master (a failing job opens or updates one "nightly: <job> failing" issue through report-failure):
+#   accuracy               every end-to-end test on the Qwen2.5-0.5B family (F16, Q8_0, Q4_0, Q4_K_M, Q5_K_M, Q6_K)
+#                          against llama.cpp. The min-cosine lines go to the dashboard data, and any change from the
+#                          previous night is flagged in the job summary. It is also the only job that saves the
+#                          model cache (see .github/actions/setup-models).
+#   sanitizers-real-model  an ASan+UBSan build running the Q4_K_M end-to-end tests: the per-PR sanitizer jobs only
+#                          see the tiny synthetic models.
+#   fuzz                   fuzz_gguf and fuzz_load for about 2 h each, in parallel jobs. The corpus persists between
+#                          nights in the cache, minimized with -merge=1 before it is saved. A crash uploads its
+#                          reproducer and opens an issue with it.
+#   trend-bench            `nibble bench` on Qwen Q4_0 and Q8_0 with 1 and all threads, plus the stripped binary size,
+#                          appended to the dashboard data.
+# The four jobs are independent. They need models/ from the cache: sanitizers-real-model and trend-bench skip with a
+# notice when it is cold (the accuracy job rebuilds it, which takes up to 75 minutes).
+# By hand (the workflow file must be on the default branch): run everything with `gh workflow run nightly.yml`, or one
+# job with `gh workflow run nightly.yml -f jobs=fuzz` (jobs is all, accuracy, sanitizers-real-model, fuzz or
+# trend-bench). A run from another branch (`--ref`) never saves a cache and never opens an issue.
+# Each job also uploads dashboard rows, including a job_status row. That row records the job's result before its Report
+# step runs, so a Report step that fails on its own (a GitHub API error) leaves a green row on a red job; the run
+# shows that step in red. See tools/ci/dashboard_data.py.
+# Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: Which job to run
+        type: choice  # GitHub rejects any other value; it is only ever compared in `if:`, never put in a script
+        default: all
+        options: [all, accuracy, sanitizers-real-model, fuzz, trend-bench]
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DEPS_DIR: ${{ github.workspace }}/.deps-cache
+
+# Each job serializes with itself (concurrency group nightly-<job>[-<target>]-<ref>, never cancelling): a scheduled and
+# a hand-started run of the same job on master would otherwise both look up "nightly: <job> failing" before either
+# creates it and open two issues. GitHub keeps at most one run pending per group, so a third run replaces a waiting one.
+jobs:
+  accuracy:
+    name: accuracy
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'accuracy'
+    concurrency:
+      group: nightly-accuracy-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
+    env:
+      MIN_KEYS: "18"  # 6 models x 3 prompts; fewer means models or goldens went missing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Models and goldens
+        id: models
+        uses: ./.github/actions/setup-models
+        with:
+          # Only master keeps the cache (R4); a hand-run from another branch would store a copy nobody else reads.
+          save: ${{ github.ref == 'refs/heads/master' && 'true' || 'false' }}
+      - name: Restore Catch2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Build (release-shaped, portable)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+          { echo '### Disk after the build'; echo '```'; df -h /; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # -V puts the output of passing tests into the log too (ctest keeps it out otherwise), and the min-cosine lines
+      # are printed by tests that pass. The absolute log path is because --test-dir makes ctest change directory.
+      # continue-on-error: a failing case must not hide the parse and the comparison below; "Fail the job" ends it.
+      - name: End-to-end tests (Qwen2.5-0.5B family)
+        id: e2e
+        continue-on-error: true
+        run: ctest --test-dir build -L e2e -j2 -V --output-log "$PWD/e2e.log" --timeout 7200
+      # tools/ci/accuracy.py writes e2e-cosines.json and fails the step when fewer than MIN_KEYS results parsed or a min
+      # cosine is NaN or infinite.
+      - name: Parse the min-cosine lines
+        id: parse
+        if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
+        run: python tools/ci/accuracy.py snapshot e2e.log --out e2e-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
+      # The previous night's numbers come from the newest completed nightly on master whose accuracy JOB succeeded and
+      # that still has the e2e-cosines artifact (the run as a whole may be red because fuzz_load failed, and a
+      # hand-run of one other job leaves no artifact). No such run is a first night, and a GitHub or artifact problem
+      # only costs the comparison: the step never fails the job.
+      - name: Compare with the previous night
+        if: ${{ !cancelled() && hashFiles('e2e-cosines.json') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}  # only this step lists and downloads runs; the build and tests never see it
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python tools/ci/accuracy.py compare e2e-cosines.json --summary "$GITHUB_STEP_SUMMARY" --dest previous
+      - name: Upload the parsed min cosines
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-cosines
+          path: e2e-cosines.json
+          retention-days: 30
+          if-no-files-found: warn
+          overwrite: true
+      - name: Dashboard rows (min cosine)
+        if: always()
+        continue-on-error: true
+        run: python tools/ci/dashboard_data.py from-cosine e2e.log --out rows.jsonl
+      - name: Fail the job if an end-to-end test failed
+        if: ${{ always() && steps.e2e.outcome == 'failure' }}
+        run: |
+          echo "::error title=e2e accuracy::ctest reported failing end-to-end tests (see the End-to-end tests step)"
+          exit 1
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow nightly --job accuracy --outcome "$JOB_STATUS" --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-accuracy
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: accuracy
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: model
+          # Only a failing night attaches the (large) -V log; a green one must not upload anything.
+          attachments: ${{ job.status != 'success' && 'e2e*.*' || '' }}
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+
+  sanitizers-real-model:
+    name: sanitizers-real-model
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'sanitizers-real-model'
+    concurrency:
+      group: nightly-sanitizers-real-model-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      # A cold cache makes the action write a notice and a summary line and set warm=false; every step below that
+      # needs models/ then skips, and the job succeeds without recording anything (the accuracy job rebuilds it).
+      - name: Models and goldens
+        id: models
+        uses: ./.github/actions/setup-models
+        with:
+          require-warm: "true"
+      - name: Restore Catch2
+        if: steps.models.outputs.warm == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Let the sanitizers map memory (lower ASLR entropy)
+        if: steps.models.outputs.warm == 'true'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Build with ASan and UBSan
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_NATIVE=ON -DNIBBLE_SANITIZE=address,undefined \
+                -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+      - name: End-to-end tests on Qwen2.5-0.5B Q4_K_M
+        if: steps.models.outputs.warm == 'true'
+        # --no-tests=error: a renamed case must fail the job, not leave it green with nothing run.
+        run: ctest --test-dir build -L e2e -R '\[q4_k_m\]' --no-tests=error --output-on-failure --timeout 7200
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow nightly --job sanitizers-real-model --outcome "$JOB_STATUS" --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-sanitizers-real-model
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: sanitizers-real-model
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: build
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+
+  fuzz:
+    name: ${{ matrix.target }}
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'fuzz'
+    concurrency:
+      group: nightly-fuzz-${{ matrix.target }}-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
+    strategy:
+      fail-fast: false  # one target crashing must not stop the other's two hours
+      matrix:
+        target: [fuzz_gguf, fuzz_load]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build fuzz targets
+        env:
+          CXX: clang++
+        run: |
+          cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF \
+                -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build build-fuzz -j "$(nproc)" --target fuzz_gguf fuzz_load make_seed
+      # Each attempt's merged corpus is saved under its own run id and attempt number (a cache entry cannot be
+      # replaced, so a re-run reusing the run id would lose its new inputs); the newest earlier one is restored.
+      - name: Restore the corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Seed the corpus
+        run: |
+          mkdir -p corpus crashes
+          build-fuzz/make_seed corpus
+      - name: Fuzz for 2 hours
+        id: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # The pipe would hide the fuzzer's exit status; with pipefail a crash fails the step. The wall time is
+          # measured here because a crash leaves no `Done N runs in S second(s)` line, and the time fuzzed before it
+          # must still reach the dashboard.
+          set -o pipefail
+          start=$SECONDS
+          status=0
+          "build-fuzz/$TARGET" -max_total_time=7200 -print_final_stats=1 -artifact_prefix=crashes/ corpus 2>&1 | tee fuzz.log || status=$?
+          echo "seconds=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      # Minimize into a fresh directory (-merge=1 copies only inputs that add coverage), then replace the corpus.
+      - name: Minimize the corpus
+        id: merge
+        if: ${{ !cancelled() && steps.fuzz.outcome != 'skipped' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir corpus-merged
+          "build-fuzz/$TARGET" -merge=1 corpus-merged corpus
+          rm -rf corpus
+          mv corpus-merged corpus
+          echo "files=$(find corpus -type f | wc -l)" >> "$GITHUB_OUTPUT"
+      - name: Save the corpus
+        if: ${{ !cancelled() && steps.merge.outcome == 'success' && github.ref == 'refs/heads/master' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Dashboard rows (fuzzing)
+        if: always()
+        continue-on-error: true
+        env:
+          TARGET: ${{ matrix.target }}
+          CORPUS_FILES: ${{ steps.merge.outputs.files }}
+          FUZZ_SECONDS: ${{ steps.fuzz.outputs.seconds }}
+        run: |
+          args=(--target "$TARGET")
+          if [ -n "$CORPUS_FILES" ]; then args+=(--corpus-files "$CORPUS_FILES"); fi
+          if [ -n "$FUZZ_SECONDS" ]; then args+=(--seconds "$FUZZ_SECONDS"); fi
+          python tools/ci/dashboard_data.py from-libfuzzer fuzz.log "${args[@]}" --out rows.jsonl
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          TARGET: ${{ matrix.target }}
+        run: python tools/ci/dashboard_data.py status --workflow nightly --job "$TARGET" --outcome "$JOB_STATUS" --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-${{ matrix.target }}
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      # A crash leaves its reproducer (crash-*, oom-*, timeout-*) in crashes/; report-failure uploads it and links
+      # it from the issue.
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: ${{ matrix.target }}
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: gguf
+          attachments: ${{ job.status != 'success' && 'crashes/*' || '' }}
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+
+  trend-bench:
+    name: trend-bench
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'trend-bench'
+    concurrency:
+      group: nightly-trend-bench-${{ github.ref }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Models and goldens
+        id: models
+        uses: ./.github/actions/setup-models
+        with:
+          require-warm: "true"
+      - name: Build (release-shaped, portable)
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build build -j "$(nproc)" --target nibble_cli
+      - name: Benchmark Qwen2.5-0.5B Q4_0 and Q8_0
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          for quant in q4_0 q8_0; do
+            build/nibble bench -m "models/qwen2.5-0.5b-instruct-$quant.gguf" -t "1,$(nproc)" -r 5 --out bench.jsonl
+          done
+      - name: Dashboard rows (benchmark)
+        if: ${{ always() && steps.models.outputs.warm == 'true' }}
+        continue-on-error: true
+        run: python tools/ci/dashboard_data.py from-bench bench.jsonl --out rows.jsonl
+      # The size that matters is the shipped one, so measure a stripped copy.
+      - name: Dashboard rows (binary size)
+        if: ${{ always() && steps.models.outputs.warm == 'true' }}
+        continue-on-error: true
+        run: |
+          cp build/nibble nibble-stripped
+          strip nibble-stripped
+          python tools/ci/dashboard_data.py from-binary-size nibble-stripped --out rows.jsonl
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow nightly --job trend-bench --outcome "$JOB_STATUS" --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-trend-bench
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: trend-bench
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: bench
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on

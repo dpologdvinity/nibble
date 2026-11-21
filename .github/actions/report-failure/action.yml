@@ -1,0 +1,67 @@
+# Reason: scheduled jobs (nightly, portability) must not fail silently, and must not spam either. This composite
+# action turns a job's outcome into one issue: it opens "<workflow>: <job> failing" (e.g. "nightly: fuzz_gguf failing") on the first failure, comments on
+# repeats, and comments and closes on recovery (only when the run tested master's current tip; a stale re-run only comments). With `triage: "true"` it also starts claude-triage.yml (an issue made
+# with GITHUB_TOKEN does not trigger other workflows, but workflow_dispatch is exempt).
+# Use: the last step of the job, with `if: always()`, after the caller's own checkout (and Python 3.12):
+#   - uses: ./.github/actions/report-failure
+#     if: always()
+#     with: {job: fuzz_gguf, outcome: "${{ job.status == 'success' && 'success' || 'failure' }}"}
+# The calling job needs `issues: write`, plus `actions: write` when `triage` is true. Logic: tools/ci/report_failure.py.
+name: report-failure
+description: Open, update or close the single issue for a failing scheduled job.
+inputs:
+  job:
+    description: 'Job name; it is part of the issue title (`<workflow>: <job> failing`), so keep it stable.'
+    required: true
+  outcome:
+    description: '`success` or `failure`.'
+    required: true
+  area:
+    description: Area label put on the issue next to `ci-failure`.
+    default: ci
+  attachments:
+    description: 'Newline-separated paths uploaded as artifact `failure-<job>` and linked from the issue. Empty means none.'
+    default: ""
+  triage:
+    description: '`true` to start claude-triage.yml for a newly opened issue (needs `actions: write`).'
+    default: "false"
+  github-token:
+    description: Token used for the GitHub API.
+    default: ${{ github.token }}
+runs:
+  using: composite
+  steps:
+    - name: Upload attachments
+      id: upload
+      if: inputs.attachments != ''
+      # An upload problem (e.g. a 409 on a re-run attempt) must not stop the Report step; the URL is then empty.
+      continue-on-error: true
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: failure-${{ inputs.job }}
+        path: ${{ inputs.attachments }}
+        if-no-files-found: warn
+        overwrite: true
+    - name: Report
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        JOB: ${{ inputs.job }}
+        OUTCOME: ${{ inputs.outcome }}
+        AREA: ${{ inputs.area }}
+        TRIAGE: ${{ inputs.triage }}
+        ATTACHMENTS_URL: ${{ steps.upload.outputs.artifact-url }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        SHA: ${{ github.sha }}
+      run: |
+        # workflow_ref is "owner/repo/.github/workflows/<file>@<ref>"; keep only <file>.
+        workflow_file="${WORKFLOW_REF%%@*}"
+        workflow_file="${workflow_file##*/}"
+        args=(
+          --job "$JOB" --workflow-file "$workflow_file" --outcome "$OUTCOME"
+          --run-url "$RUN_URL" --sha "$SHA" --area "$AREA" --attachments-url "$ATTACHMENTS_URL"
+        )
+        if [ "$TRIAGE" = "true" ]; then args+=(--triage); fi
+        python tools/ci/report_failure.py "${args[@]}"
