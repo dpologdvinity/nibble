@@ -131,6 +131,9 @@ jobs:
           allow_fork_prs: "false"
           # A topic-named branch under agent/ (issue events; on an open pull request Claude pushes to that PR's branch).
           branch_prefix: agent/
+          # The App token gets no actions access by default, so gh run view (CI logs) would be refused.
+          additional_permissions: |
+            actions: read
           branch_name_template: "{{prefix}}{{entityType}}-{{entityNumber}}-{{description}}"
           # Commit and push go through the action's own wrappers (git-add/commit/push/rm.sh, added by the action and
           # pinned to the session branch), so raw `git add|commit|push|checkout` are deliberately not listed, and
