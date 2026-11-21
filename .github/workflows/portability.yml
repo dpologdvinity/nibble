@@ -1,0 +1,283 @@
+# Reason: the per-PR matrix (ci.yml) builds with one x86-64 toolchain per cell, so it cannot back the portability
+# claims it does not cover. This workflow checks them weekly on master (a failing job opens or updates one
+# "nightly: <job> failing" issue through report-failure, which titles every issue that way; the job names here do
+# not collide with nightly.yml's), and a new compiler's warnings are errors here first
+# (the build uses -Wall -Wextra -Wpedantic -Werror), before they can break a pull request:
+#   arm64             the scalar kernels on a 64-bit ARM runner, built with -DNIBBLE_NATIVE=OFF. NOTE: this checks a
+#                     claim the README does not make yet (ARM64 is unproven, not known-broken); a red run is a
+#                     finding to fix, not a regression. For example aarch64 GCC contracts multiply-adds by default.
+#   newest-gcc        the newest g++-NN the Ubuntu toolchain PPA offers (the version is printed to the job summary).
+#   newest-clang      the newest stable LLVM that apt.llvm.org/llvm.sh installs. The script runs as root, so it is
+#                     pinned by SHA-256 (LLVM_SH_SHA256) and verified before it runs. When LLVM publishes a new
+#                     script the job fails at the check; read the new script, then refresh the pin and the version:
+#                       curl -fsSL https://apt.llvm.org/llvm.sh | sha256sum
+#   simd-off-portable -DNIBBLE_SIMD=OFF -DNIBBLE_NATIVE=OFF: the whole non-e2e suite on the scalar-only build.
+# The four jobs are independent and run the whole non-e2e suite (no models needed).
+# By hand (the workflow file must be on the default branch): `gh workflow run portability.yml`. A run from another
+# branch (`--ref`) never opens an issue.
+# Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
+name: portability
+
+on:
+  schedule:
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DEPS_DIR: ${{ github.workspace }}/.deps-cache
+
+jobs:
+  arm64:
+    name: arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    env:
+      CCACHE_MAXSIZE: 300M
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Restore Catch2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Install ccache
+        run: sudo apt-get install -y --no-install-recommends ccache
+      # NIBBLE_NATIVE=OFF, so the objects do not depend on the runner's CPU and the key needs no CPU id.
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ccache
+          key: ccache-portability-arm64-${{ github.sha }}
+          restore-keys: ccache-portability-arm64-
+      - name: Build (release-shaped, portable)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR" \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build -j "$(nproc)"
+      # There are no SIMD tiers off x86-64, so the scalar kernels must be selected (small.gguf comes from the test build).
+      - name: Check the scalar kernels are selected
+        run: |
+          kernels=$(build/nibble info build/tests/data/small.gguf | sed -n 's/^kernels: //p')
+          echo "kernels: $kernels"
+          [[ "$kernels" == scalar ]]
+      - name: Test (everything except the end-to-end tests)
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow portability --job arm64 --outcome "$JOB_STATUS" --source portability --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-arm64
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: arm64
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: build
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+
+  newest-gcc:
+    name: newest-gcc
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Restore Catch2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      # --names-only: the pattern must match package names, not descriptions. The highest NN is the newest compiler;
+      # it must be newer than the runner's default g++ or this job would only repeat the per-PR gcc cell.
+      - name: Install the newest g++ from the toolchain PPA
+        id: gcc
+        run: |
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+          sudo apt-get update
+          newest=$(apt-cache search --names-only '^g\+\+-[0-9]+$' | sed -n 's/^g++-\([0-9][0-9]*\) .*/\1/p' | sort -n | tail -n 1)
+          default=$(g++ -dumpversion | cut -d. -f1)
+          if [[ -z "$newest" ]]; then
+            echo "::error title=newest-gcc::apt-cache found no g++-NN package after adding ppa:ubuntu-toolchain-r/test"
+            exit 1
+          fi
+          if (( newest <= default )); then
+            echo "::error title=newest-gcc::the newest g++ on offer is g++-$newest, not newer than the runner default g++-$default"
+            exit 1
+          fi
+          sudo apt-get install -y --no-install-recommends "g++-$newest"
+          echo "version=$newest" >> "$GITHUB_OUTPUT"
+          { echo '### Compiler'; echo; echo "g++-$newest (runner default: g++-$default)"; echo '```'; "g++-$newest" --version | head -n 1; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Build (release-shaped, portable)
+        env:
+          CXX: g++-${{ steps.gcc.outputs.version }}
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+      - name: Test (everything except the end-to-end tests)
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow portability --job newest-gcc --outcome "$JOB_STATUS" --source portability --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-newest-gcc
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: newest-gcc
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: build
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+
+  newest-clang:
+    name: newest-clang
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    env:
+      # llvm.sh runs as root, so it is pinned. The hash below is the script whose CURRENT_LLVM_STABLE is 22 (the newest
+      # stable release it knew when it was pinned); the version is passed explicitly so a new default cannot slip in.
+      LLVM_VERSION: "22"
+      LLVM_SH_SHA256: 03878e08f47b66cc95bc4b544b0db3c6d9ce8d60e6cf2492ae357984330a9eae
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Restore Catch2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      # The script is downloaded into its own empty directory, verified, and only then run as root.
+      - name: Install the newest stable clang (llvm.sh, pinned by SHA-256)
+        run: |
+          dir=$(mktemp -d)
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$dir/llvm.sh" https://apt.llvm.org/llvm.sh
+          if ! echo "$LLVM_SH_SHA256  $dir/llvm.sh" | sha256sum --check --strict -; then
+            echo "::error title=newest-clang::apt.llvm.org/llvm.sh changed (now $(sha256sum "$dir/llvm.sh" | cut -d' ' -f1)); review it, then update LLVM_SH_SHA256 and LLVM_VERSION in portability.yml"
+            exit 1
+          fi
+          sudo bash "$dir/llvm.sh" "$LLVM_VERSION"
+          { echo '### Compiler'; echo; echo '```'; "clang++-$LLVM_VERSION" --version | head -n 1; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Build (release-shaped, portable)
+        env:
+          CXX: clang++-${{ env.LLVM_VERSION }}
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+      - name: Test (everything except the end-to-end tests)
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow portability --job newest-clang --outcome "$JOB_STATUS" --source portability --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-newest-clang
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: newest-clang
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: build
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+
+  simd-off-portable:
+    name: simd-off-portable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Restore Catch2
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      - name: Build (SIMD off, portable)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_SIMD=OFF -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+      - name: Check the scalar kernels are selected
+        run: |
+          kernels=$(build/nibble info build/tests/data/small.gguf | sed -n 's/^kernels: //p')
+          echo "kernels: $kernels"
+          [[ "$kernels" == scalar ]]
+      - name: Test (everything except the end-to-end tests)
+        run: ctest --test-dir build -LE e2e --output-on-failure --parallel "$(nproc)" --timeout 900
+      - name: Dashboard rows (job status)
+        if: ${{ always() && job.status != 'cancelled' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: python tools/ci/dashboard_data.py status --workflow portability --job simd-off-portable --outcome "$JOB_STATUS" --source portability --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ always() && job.status != 'cancelled' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-simd-off-portable
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
+      - name: Report
+        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/report-failure
+        with:
+          job: simd-off-portable
+          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
+          area: build
+          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
