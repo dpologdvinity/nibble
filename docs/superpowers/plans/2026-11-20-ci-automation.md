@@ -69,6 +69,26 @@ CMake/ctest, Catch2 v3 JUnit reporter, libFuzzer, the pinned llama.cpp (`tools/l
 - **R12. Phase 4 is one PR.** pr-report and fix-proof ship in one PR (`ci/pr-checks`), so each rollout phase is one
   PR as asked.
 
+Findings from the PR #49 review (CodeRabbit, each verified against the plan before it was adopted):
+
+- **R13. Scorecard can be run by hand.** `scorecard.yml` also listens to `workflow_dispatch` (Task 2.3), because
+  Step 4 of that task dispatches it. The opening comment gives `gh workflow run scorecard.yml`.
+- **R14. Every nightly job reports its real outcome.** `dashboard_data.py status` and the artifact upload run under
+  `if: always()` and record the job's actual result, so a failed job leaves a `job_status` 0 row instead of none
+  (Task 3.5).
+- **R15. A skipped job never closes an issue.** When a job skipped its work on a cold cache, `report-failure` is
+  skipped, not called with `success`. Only a run that actually executed may close that job's issue (Task 3.5).
+- **R16. Dispatch validation happens on `master`.** `workflow_dispatch` needs the workflow file on the default
+  branch, so the by-hand runs of `nightly.yml` and `portability.yml` (Tasks 3.5 and 3.6) move to after the Phase 3
+  merge. Real failures found then go to issues or `fix/<topic>` PRs, as before.
+- **R17. Spread is checked first.** `verdict` returns `inconclusive` when max − min exceeds `SPREAD_MAX`, before it
+  looks at faster or slower, so `[1.03, 1.10, 1.20]` is not "faster" (Task 4.1).
+- **R18. The report must belong to the triggering run.** `pr_report.post` takes the `head_sha` of the `workflow_run`
+  that produced the artifact and refuses to post when the artifact's own `head_sha` differs, so a stale or forged
+  artifact cannot comment on another PR (Tasks 4.2 and 4.3).
+- **R19. Deleting a line selects its case.** `changed_lines` also maps deleted lines to the enclosing case on the
+  head side, so a deletion-only edit to a test still selects that test (Task 4.4).
+
 ## Global Constraints
 
 - Every new workflow file starts with `#` comment lines giving its **reason** and **how to run it by hand**
@@ -302,7 +322,7 @@ class GhCli:  # implements GitHub with `gh api` (repo from $GITHUB_REPOSITORY)
 **Files:** Create `.github/workflows/scorecard.yml`
 
 - [ ] **Step 1:** Write the workflow.
-  - It runs on push to `master`, weekly (`37 5 * * 1`) and on `branch_protection_rule`.
+  - It runs on push to `master`, weekly (`37 5 * * 1`), on `branch_protection_rule` and on `workflow_dispatch` (R13). Its opening comment gives `gh workflow run scorecard.yml`.
   - Steps: `ossf/scorecard-action` with `publish_results: true`, then upload SARIF with `github/codeql-action/upload-sarif`.
   - Top-level `permissions: read-all`, as Scorecard requires. The job adds `security-events: write` and `id-token: write`.
 - [ ] **Step 2:** Run actionlint. Expected: clean.
@@ -405,7 +425,7 @@ def main(argv: Sequence[str]) -> int  # --job --workflow-file --outcome --run-ur
   4. Print `du -sh models models/golden` to the job summary.
 
 - [ ] **Step 1:** Write `action.yml`. Every step uses `shell: bash`.
-- [ ] **Step 2:** Run actionlint. Expected: clean. (It is exercised for real in Task 3.5, Step 4.)
+- [ ] **Step 2:** Run actionlint. Expected: clean. (It is exercised for real in Task 3.6, Step 5, after the merge.)
 - [ ] **Step 3:** Commit `ci: provide Qwen2.5-0.5B models and llama.cpp goldens through one cached action`.
 
 ### Task 3.4: Dashboard rows from nightly outputs
@@ -470,8 +490,8 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str   # JSONL text; drops d
 **Interfaces:**
 - Consumes: `setup-models` (3.3), `report-failure` (3.2), `cosine.py` (3.1) and `dashboard_data.py` (3.4).
 - Every job's last steps:
-  - `report-failure` with `outcome: ${{ job.status == 'success' && 'success' || 'failure' }}` under `if: always() && github.ref == 'refs/heads/master'`.
-  - `dashboard_data.py status`, then upload the artifact `dashboard-rows-<job>` (retention 7 days).
+  - `dashboard_data.py status` with the job's real outcome (`${{ job.status }}`), then upload the artifact `dashboard-rows-<job>` (retention 7 days). Both steps run under `if: always()` (R14).
+  - `report-failure` with `outcome: ${{ job.status == 'success' && 'success' || 'failure' }}` under `if: always() && github.ref == 'refs/heads/master'`. A job that skipped its work on a cold cache (`steps.<models>.outputs.warm != 'true'`) skips this step too, and records no `ok` status row: only a run that executed may close an issue (R15).
   - Permissions: `contents: read`, `issues: write`, `actions: write`.
 
 Jobs:
@@ -506,7 +526,7 @@ hand.
 - [ ] **Step 1:** Write the workflow. Its opening comment says why each job exists (from the spec, item 7) and gives `gh workflow run nightly.yml -f jobs=fuzz`.
 - [ ] **Step 2:** Run actionlint. Expected: clean.
 - [ ] **Step 3:** Commit `ci: run accuracy, real-model sanitizers, long fuzzing and trend benchmarks nightly`.
-- [ ] **Step 4:** Push the branch, then run `gh workflow run nightly.yml --ref ci/nightly -f jobs=accuracy`. Expected: the cache is built (log the cold-run duration in the ledger) and 18 cosine keys appear in the summary. `report-failure` is skipped off `master`.
+- [ ] **Step 4:** No run yet. `workflow_dispatch` needs the file on the default branch, so the first run happens in Task 3.6, Step 5, after the Phase 3 merge (R16).
 
 ### Task 3.6: `portability.yml`
 
@@ -523,10 +543,12 @@ Triggers: weekly (`23 4 * * 0`) and `workflow_dispatch`.
 - [ ] **Step 1:** Write the workflow. Its opening comment says it checks portability claims the per-PR matrix does not cover, and that new compilers' warnings are errors here first.
 - [ ] **Step 2:** Run actionlint. Expected: clean.
 - [ ] **Step 3:** Commit `ci: weekly ARM64, newest-compiler and SIMD-off portability sweep`.
-- [ ] **Step 4:** Run `gh workflow run portability.yml --ref ci/nightly` and record each job's result in the ledger.
-  - For every real failure (R7), the fix goes on its own branch `fix/<topic>`, with a failing test first, a separate PR, and is merged before Phase 3's PR.
+- [ ] **Step 4:** Open the Phase 3 PR, wait for green and merge. Dispatch cannot run before this (R16).
+- [ ] **Step 5:** On `master`, validate both workflows by hand.
+  1. `gh workflow run nightly.yml -f jobs=accuracy`. Expected: the cache is built (log the cold-run duration in the ledger; confirm with `gh cache list | grep models-qwen-v1`) and 18 cosine keys appear in the summary.
+  2. `gh workflow run portability.yml`, and record each job's result in the ledger.
+  - For every real failure (R7), the fix goes on its own branch `fix/<topic>`, with a failing test first, and a separate PR.
   - If a fix is larger than one sitting, file an issue (`build` label) and continue. A red weekly job is acceptable.
-- [ ] **Step 5:** Open the Phase 3 PR, wait for green and merge. Then run `gh workflow run nightly.yml` on `master` and confirm the cache is saved (`gh cache list | grep models-qwen-v1`).
 
 ---
 
@@ -554,6 +576,7 @@ def run(base: str, head: str, models: Sequence[str], threads: Sequence[int], rou
 
 - `verdict` rules:
   - Fewer than 2 ratios, or any ratio that is not finite or is ≤ 0: `inconclusive`.
+  - max − min > SPREAD_MAX: `inconclusive`. This is checked before faster and slower (R17).
   - All ratios > 1 + SAME_BAND: `faster`.
   - All ratios < 1 − SAME_BAND: `slower`.
   - |median − 1| < SAME_BAND and max − min ≤ SPREAD_MAX: `same`.
@@ -566,6 +589,7 @@ def run(base: str, head: str, models: Sequence[str], threads: Sequence[int], rou
   - `test_block_ratio_math`
   - `test_verdict_faster`, `test_verdict_slower`, `test_verdict_same`
   - `test_verdict_noise_is_inconclusive`: ratios `[0.93, 1.08, 1.01]`.
+  - `test_verdict_wide_spread_is_inconclusive`: ratios `[1.03, 1.10, 1.20]` (all above 1 + SAME_BAND, spread 0.17).
   - `test_verdict_nan_zero_single`
 - [ ] **Step 2:** Run the tests. Expected: they fail.
 - [ ] **Step 3:** Implement.
@@ -598,8 +622,8 @@ MODEL_ALLOWLIST = frozenset({"qwen2.5-0.5b-instruct-q4_0.gguf", "qwen2.5-0.5b-in
 def load(text: str) -> Report          # strict validation; raises ValueError (Report is a TypedDict tree)
 def assemble(parts: Sequence[str]) -> str
 def render(r: Report) -> str           # Markdown starting with MARKER
-def post(gh: GitHub, r: Report) -> int # PR number from gh.pr_for_sha(r["head_sha"]); upsert_comment; returns PR or 0 when none
-def main(argv: Sequence[str]) -> int   # subcommands: assemble <parts...> --out F | post F
+def post(gh: GitHub, r: Report, run_head_sha: str) -> int # raises ValueError when r["head_sha"] != run_head_sha; PR number from gh.pr_for_sha(run_head_sha); upsert_comment; returns PR or 0 when none
+def main(argv: Sequence[str]) -> int   # subcommands: assemble <parts...> --out F | post F --head-sha SHA
 ```
 
 - The comment layout, in order:
@@ -621,6 +645,7 @@ def main(argv: Sequence[str]) -> int   # subcommands: assemble <parts...> --out 
   - `test_render_flags_bit_identity_change`
   - `test_post_updates_existing_comment` (FakeGitHub)
   - `test_post_without_pr_returns_0`
+  - `test_post_refuses_mismatched_head_sha`: a report whose `head_sha` names another PR's head raises and posts nothing (R18).
   - `test_markdown_escapes_pipe_in_key`
 - [ ] **Step 2:** Run the tests. Expected: they fail.
 - [ ] **Step 3:** Implement.
@@ -647,7 +672,7 @@ def main(argv: Sequence[str]) -> int   # subcommands: assemble <parts...> --out 
   - **`assemble`** job: `pr_report.py assemble`, then upload the artifact `pr-report`.
 - **`pr-report-comment.yml`**:
   - Triggers and permissions: `workflow_run` on `pr-report` completed. `permissions: pull-requests: write, actions: read`.
-  - It never checks out PR code. It checks out the default branch (for `tools/ci`), downloads `pr-report` from the triggering run with `run-id`, and runs `pr_report.py post` with `GH_TOKEN`.
+  - It never checks out PR code. It checks out the default branch (for `tools/ci`), downloads `pr-report` from the triggering run with `run-id`, and runs `pr_report.py post pr-report.json --head-sha "${{ github.event.workflow_run.head_sha }}"` with `GH_TOKEN` (R18).
   - It skips when the artifact is missing.
 - Each opening comment states the trust split and gives the manual run: `gh workflow run pr-report.yml` is not
   possible for PRs, so it says "push to the PR".
@@ -670,7 +695,7 @@ class Case(NamedTuple): file: str; name: str | None; start: int; end: int; binar
 def is_fix(title: str, subjects: Sequence[str]) -> bool
 def touches_code(paths: Sequence[str]) -> bool
 def test_cases(path: str, source: str) -> list[Case]      # name None when the first TEST_CASE argument is not one plain string literal; end = line before the next TEST_CASE or EOF
-def changed_lines(diff: str) -> dict[str, set[int]]        # new-side line numbers of added lines, tests/*.cpp only
+def changed_lines(diff: str) -> dict[str, set[int]]        # new-side line numbers of added lines, plus, for each deleted line, the new-side line where it was removed (the hunk position), tests/*.cpp only (R19)
 class Selection(NamedTuple): cases: list[Case]; unresolved: list[str]
 def select(diff: str, head_sources: Mapping[str, str]) -> Selection
 def catch_spec(name: str) -> str                          # backslash-escapes , [ ] * " ~ and a leading ~ / *
@@ -694,6 +719,7 @@ def main(argv: Sequence[str]) -> int  # select --base B --head H (runs git diff,
   - `test_is_fix_title_or_subject`: `fix(cpu): x` → True; `feat: x` with a subject `fix: y` → True; `fixup: x` → False.
   - `test_test_cases_names_and_spans`: a fixture with three `TEST_CASE`s, one an `E2E_CASE`-style macro body (`TEST_CASE("e2e golden: " PROMPT ...`). That one's name is None.
   - `test_select_added_and_modified_cases`: a unified-diff fixture adding a case and editing inside another.
+  - `test_select_deletion_only_edit`: a diff that only deletes lines inside a case selects that case (R19).
   - `test_select_macro_case_is_unresolved`
   - `test_catch_spec_escapes`: `catch_spec('a, b [x] *') == r'a\, b \[x\] \*'`
   - `test_parse_junit_states`: fixtures for passed, failed, skipped (a Catch2 SKIP gives `<skipped/>`) and missing.
