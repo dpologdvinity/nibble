@@ -12,8 +12,8 @@
 # and Write are denied on top of that, because `permissions: contents: read` only limits GITHUB_TOKEN, not the Claude
 # GitHub App token the action obtains.
 # The session cannot read the OAuth token: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB strips credentials from the commands it runs
-# (only gh pr diff here) and the deny list keeps Read, Grep and Glob out of /proc, where the Claude process's own
-# environment (which keeps the token) is readable.
+# (only gh pr diff here) and runs them in a PID namespace (bubblewrap, from .github/actions/subprocess-isolation), and
+# the Read(//proc/**) deny keeps Read, Grep and Glob, which run inside the Claude process, out of its /proc/self/environ.
 # How it is triggered: by a pull_request event, never by hand and there is no workflow_dispatch; push to the pull
 # request, mark it ready for review or add the `agent` label.
 name: claude-review
@@ -70,6 +70,10 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      # bubblewrap for the subprocess scrub: Claude Code can refuse to start with the scrub set and no bwrap, and the
+      # smoke check makes the job fail closed if the namespace cannot be created.
+      - uses: ./.github/actions/subprocess-isolation
+        if: steps.secret.outputs.present == 'true'
       # The action reads CLAUDE.md (which imports AGENTS.md) from the checkout.
       - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         if: steps.secret.outputs.present == 'true'

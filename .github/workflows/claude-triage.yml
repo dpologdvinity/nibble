@@ -14,9 +14,11 @@
 # `origin` only, no flags, only the branch named in CLAUDE_PUSH_BRANCH) and opens the pull request; a push made with
 # the App token, unlike one made with GITHUB_TOKEN, starts CI on the branch. The branch is created from master before
 # Claude starts and no force push is possible, so triaging the same issue a second time cannot push (it comments only).
-# The session cannot read the OAuth token: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB strips credentials from every command it runs
-# (GH_TOKEN, the App token gh needs, stays), bubblewrap gives those commands their own PID namespace, and the deny list
-# forbids reading /proc and printing the environment.
+# The OAuth token stays in the Claude process only. Shell commands cannot read it because CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
+# strips credentials from their environment (GH_TOKEN, the App token gh needs, stays) and runs them in a PID namespace of
+# their own (.github/actions/subprocess-isolation installs bubblewrap and fails the job if the namespace does not work).
+# The file tools run inside the Claude process, so for them the `Read(//proc/**)` deny keeps /proc/self/environ closed.
+# The printenv and */proc shell denies only narrow the obvious routes.
 name: claude-triage
 
 on:
@@ -111,18 +113,14 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # bubblewrap for the subprocess scrub's PID namespace, checked to work before the session starts (fails closed).
+      - uses: ./.github/actions/subprocess-isolation
+        if: steps.gate.outputs.proceed == 'true'
       - name: Install the build and lint tools
         if: steps.gate.outputs.proceed == 'true'
         run: |
           python -m pip install -r requirements-ci.txt
-          # bubblewrap (and socat) let the subprocess scrub run each command in a PID namespace of its own, so it cannot
-          # read the Claude process's environment through /proc; Ubuntu 24.04 needs unprivileged user namespaces
-          # allowed for that. The same packages and sysctl the action installs for its untrusted-user mode.
-          sudo apt-get update -qq  # the image's package lists can be older than the archive
-          sudo apt-get install -y --no-install-recommends ccache bubblewrap socat
-          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+          sudo apt-get install -y --no-install-recommends ccache  # lists refreshed by subprocess-isolation
       - name: Restore Catch2
         if: steps.gate.outputs.proceed == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

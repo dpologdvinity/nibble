@@ -12,10 +12,13 @@
 # title and body) into a write-enabled session. Only tag @claude on content you trust (the owner's judgement). Thread
 # comments reach the prompt only from the owner, claude[bot] and github-actions[bot] (include_comments_by_actor), so a
 # stranger's comment on the owner's own issue is left out; the session can still read the others with gh if it is
-# asked to. The session cannot read the OAuth token: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB strips credentials from every
-# command it runs (GH_TOKEN, the App token gh needs, stays), bubblewrap gives those commands their own PID namespace,
-# and the deny list forbids reading /proc and printing the environment. The tool lists limit the damage but do not
-# remove the risk: the App token can still push and comment while the session runs.
+# asked to. The OAuth token stays in the Claude process only. Shell commands cannot read it because
+# CLAUDE_CODE_SUBPROCESS_ENV_SCRUB strips credentials from their environment (GH_TOKEN, the App token gh needs, stays)
+# and runs them in a PID namespace of their own, where the Claude process's /proc entry does not exist
+# (.github/actions/subprocess-isolation installs bubblewrap for it and fails the job if the namespace does not work).
+# The file tools run inside the Claude process, so for them the `Read(//proc/**)` deny is what keeps
+# /proc/self/environ closed. The env, printenv and */proc shell denies only narrow the obvious routes. The tool lists
+# limit the damage but do not remove the risk: the App token can still push and comment while the session runs.
 # How it is triggered: by an event, never by hand and there is no workflow_dispatch; comment `@claude <request>` on
 # an issue or pull request, put it in a review, or in the title or body of a new issue.
 name: claude
@@ -113,18 +116,14 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # bubblewrap for the subprocess scrub's PID namespace, checked to work before the session starts (fails closed).
+      - uses: ./.github/actions/subprocess-isolation
+        if: steps.gate.outputs.proceed == 'true'
       - name: Install the build and lint tools
         if: steps.gate.outputs.proceed == 'true'
         run: |
           python -m pip install -r requirements-ci.txt
-          # bubblewrap (and socat) let the subprocess scrub run each command in a PID namespace of its own, so it cannot
-          # read the Claude process's environment through /proc; Ubuntu 24.04 needs unprivileged user namespaces
-          # allowed for that. The same packages and sysctl the action installs for its untrusted-user mode.
-          sudo apt-get update -qq  # the image's package lists can be older than the archive
-          sudo apt-get install -y --no-install-recommends ccache bubblewrap socat
-          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+          sudo apt-get install -y --no-install-recommends ccache  # lists refreshed by subprocess-isolation
           cmake --version
           g++ --version
           clang++ --version
@@ -159,8 +158,9 @@ jobs:
           # Commit and push go through the action's own wrappers (git-add/commit/push/rm.sh, added by the action and
           # pinned to the session branch), so raw `git add|commit|push|checkout` are deliberately not listed, and
           # `git push` must not be denied wholesale: that rule is mapped onto the push wrapper too.
-          # The /proc, env and printenv denies keep the OAuth token, which the Claude process itself keeps, out
-          # of reach of the file tools (Read covers Grep and Glob, and a symlink's target) and of the shell.
+          # Read(//proc...) keeps the file tools (Read covers Grep and Glob, and a symlink's target) out of the Claude
+          # process's own /proc/self/environ, which holds the OAuth token. The env, printenv and */proc shell denies are
+          # belt and braces: the scrub and its PID namespace are what protect the token from shell commands.
           claude_args: |
             --allowedTools "Bash(cmake:*),Bash(ctest:*),Bash(clang-format:*),Bash(xargs clang-format:*),Bash(grep:*),Bash(python -m unittest:*),Bash(ruff:*),Bash(mypy:*),Bash(shellcheck:*),Bash(build/nibble:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git ls-files:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh run view:*),Bash(gh run list:*)"
             --disallowedTools "Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh pr checkout:*),Bash(gh pr close:*),Bash(gh pr edit:*),Bash(gh issue delete:*),Bash(gh issue transfer:*),Bash(gh issue close:*),Bash(gh issue lock:*),Bash(gh api:*),Bash(git config:*),Bash(git remote:*),Bash(git branch -D:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git push --delete:*),Read(//proc),Read(//proc/**),Bash(*/proc),Bash(*/proc/*),Bash(env:*),Bash(printenv:*)"
