@@ -2,10 +2,16 @@
 # action turns a job's outcome into one issue: it opens "<workflow>: <job> failing" (e.g. "nightly: fuzz_gguf failing") on the first failure, comments on
 # repeats, and comments and closes on recovery (only when the run tested master's current tip; a stale re-run only comments). With `triage: "true"` it also starts claude-triage.yml (an issue made
 # with GITHUB_TOKEN does not trigger other workflows, but workflow_dispatch is exempt).
-# Use: the last step of the job, with `if: always()`, after the caller's own checkout (and Python 3.12):
-#   - uses: ./.github/actions/report-failure
-#     if: always()
-#     with: {job: fuzz_gguf, outcome: "${{ job.status == 'success' && 'success' || 'failure' }}"}
+# Use: through .github/workflows/report-job.yml, from a small job that `needs:` the work job (see nightly.yml), after
+# its own checkout (and Python 3.12). It maps the work job's result: success is success; failure, and a `cancelled`
+# job in a run that was not cancelled (the job hit its timeout-minutes), are failure; a cancelled run and a superseded
+# or skipped job report nothing. A step inside the work job cannot do that: after a timeout it sees `cancelled` like a
+# cancelled run, so `job.status == 'success' && 'success' || 'failure'` would report every cancelled run as a failure.
+#   report-fuzz_gguf:
+#     needs: fuzz
+#     if: ${{ !cancelled() }}
+#     uses: ./.github/workflows/report-job.yml
+#     with: {job: fuzz_gguf, status: "<the work job's recorded status, cancelled mapped to timed-out>", area: gguf}
 # The calling job needs `issues: write`, plus `actions: write` when `triage` is true (nightly and portability call it from the
 # small report-job.yml job, so their long work jobs hold neither). Logic: tools/ci/report_failure.py.
 name: report-failure
