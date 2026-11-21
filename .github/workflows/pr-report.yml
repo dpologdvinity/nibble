@@ -75,11 +75,13 @@ jobs:
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
           cpu=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
           echo "ubuntu-24.04 (${cpu:-unknown CPU})" > runner.txt
+          # Its own part, written before anything can fail, so a perf job that dies later still names its runner.
+          jq -n --arg runner "$(cat runner.txt)" '{runner: $runner}' > part-runner.json
           echo "Base for the comparison: merge base $merge_base of $BASE_SHA and $HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
       - name: Cold model cache, so skip the measurements
         if: steps.models.outputs.warm != 'true'
         run: |
-          jq -n --arg runner "$(cat runner.txt)" '{runner: $runner, perf: null, size: null, rss: null}' > part-perf.json
+          jq -n --arg runner "$(cat runner.txt)" '{perf: null, size: null, rss: null}' > part-perf.json
           echo "::notice title=pr-report perf::cold model cache; speed, size and memory are reported as skipped"
       - name: Check out the base (merge base) as a worktree
         if: steps.models.outputs.warm == 'true'
@@ -114,7 +116,10 @@ jobs:
       - name: Peak memory (RSS)
         if: steps.models.outputs.warm == 'true'
         run: |
-          [ -x /usr/bin/time ] || sudo apt-get install -y --no-install-recommends time
+          if [ ! -x /usr/bin/time ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends time
+          fi
           model=models/qwen2.5-0.5b-instruct-q4_0.gguf
           for side in base head; do
             bin=build/nibble
@@ -126,18 +131,22 @@ jobs:
       - name: Write part-perf.json
         if: steps.models.outputs.warm == 'true'
         run: |
-          jq -n --arg runner "$(cat runner.txt)" --slurpfile perf perf.json \
+          jq -n --slurpfile perf perf.json \
             --argjson bs "$(cat size-base.txt)" --argjson hs "$(cat size-head.txt)" \
             --argjson br "$(cat rss-base.txt)" --argjson hr "$(cat rss-head.txt)" \
-            '{runner: $runner, perf: $perf[0], size: {base_bytes: $bs, head_bytes: $hs}, rss: {base_kib: $br, head_kib: $hr}}' \
+            '{perf: $perf[0], size: {base_bytes: $bs, head_bytes: $hs}, rss: {base_kib: $br, head_kib: $hr}}' \
             > part-perf.json
-      - name: Upload the perf part
+      # Also after a failure: the runner part must reach `assemble`, which reports a missing perf part as skipped.
+      - name: Upload the perf parts
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: part-perf
-          path: part-perf.json
+          path: |
+            part-runner.json
+            part-perf.json
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: warn
 
   accuracy:
     name: accuracy
@@ -203,17 +212,20 @@ jobs:
         id: e2e-base
         if: steps.models.outputs.warm == 'true'
         continue-on-error: true
-        run: ctest --test-dir base-build -L e2e -j2 -V --output-log "$PWD/e2e-base.log" --timeout 7200
+        run: ctest --test-dir base-build -L e2e -j2 -V --output-log "$PWD/e2e-base.log" --timeout 1800
       - name: End-to-end tests on the head
         id: e2e-head
         if: steps.models.outputs.warm == 'true'
         continue-on-error: true
-        run: ctest --test-dir build -L e2e -j2 -V --output-log "$PWD/e2e-head.log" --timeout 7200
+        run: ctest --test-dir build -L e2e -j2 -V --output-log "$PWD/e2e-head.log" --timeout 1800
+      # --lenient: the report must be built whatever the logs hold. A head that breaks argmax, throws or crashes prints
+      # fewer min-cosine lines, a merge base may predate a case, and a NaN cosine is left out of the rows (it shows as
+      # added or removed); none of that may stop the part from being written. The strict gate on the head runs last.
       - name: Parse the min-cosine lines
         if: steps.models.outputs.warm == 'true'
         run: |
-          python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
-          python tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
+          python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected 0 --lenient
+          python tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary /dev/null --expected 0 --lenient
       - name: Write part-accuracy.json
         if: steps.models.outputs.warm == 'true'
         run: python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --out part-accuracy.json
@@ -226,20 +238,25 @@ jobs:
             part-meta.json
           retention-days: 7
           if-no-files-found: error
-      # A head that fails an end-to-end test is the finding the comment exists to show, so the report is still built;
-      # the job itself must still be red. (A failing base is not this pull request's fault and is not an error here.)
+      # A head that fails an end-to-end test, loses min-cosine lines or has a non-finite cosine is the finding the comment
+      # exists to show, so the report is built first; these gates then make the job red. (A failing base is not this
+      # pull request's fault and is not an error here.)
       - name: Fail the job if an end-to-end test failed on the head
-        if: ${{ steps.e2e-head.outcome == 'failure' }}
+        if: ${{ !cancelled() && steps.e2e-head.outcome == 'failure' }}
         run: |
           echo "::error title=e2e accuracy::ctest reported failing end-to-end tests on the head (see the End-to-end tests step)"
           exit 1
+      - name: Fail the job if the head's min-cosine results are incomplete
+        if: ${{ !cancelled() && steps.models.outputs.warm == 'true' }}
+        run: python tools/ci/accuracy.py snapshot e2e-head.log --out head-strict.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
 
   assemble:
     name: assemble
     needs: [perf, accuracy]
-    # An accuracy job that failed only because of a head e2e test still wrote its part; one that died earlier did not,
-    # and `assemble` then fails loudly on the missing part. A failed perf job has no report to build.
-    if: ${{ !cancelled() && needs.perf.result == 'success' && needs.accuracy.result != 'cancelled' }}
+    # Whatever the other jobs concluded: a perf job that failed still uploaded its runner and the report shows speed,
+    # size and memory as skipped (the red job is the signal); an accuracy job that failed only on a head e2e gate still
+    # wrote its part, and one that died earlier did not, which `assemble` rejects loudly (no report, a red job).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -255,7 +272,8 @@ jobs:
           pattern: part-*
           path: parts
           merge-multiple: true
-      # A missing part (an accuracy job that died early) is an error here, never a silent "skipped".
+      # A missing accuracy or meta part (a job that died early) is an error here, never a silent "skipped"; a missing
+      # perf part is just null speed, size and memory.
       - name: Assemble pr-report.json
         run: python tools/ci/pr_report.py assemble parts/part-*.json --out pr-report.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
