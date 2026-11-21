@@ -45,7 +45,7 @@ from typing import Literal
 Side = Literal["base", "head"]
 Verdict = Literal["faster", "slower", "same", "inconclusive"]
 
-SAME_BAND = 0.02  # |median ratio - 1| below this, with spread <= SPREAD_MAX, is "same"
+SAME_BAND = 0.02  # every |ratio - 1| below this, with spread <= SPREAD_MAX, is "same"
 SPREAD_MAX = 0.05  # ratios of one row that differ by more than this (max - min) are noise, not a result
 
 # One ABBA block: (position, side). A is the base build, B the head build.
@@ -115,7 +115,8 @@ def verdict(ratios: Sequence[float]) -> Verdict:
         return "faster"
     if all(r < 1 - SAME_BAND for r in ratios):
         return "slower"
-    if abs(statistics.median(ratios) - 1) < SAME_BAND:
+    # Every block, not just the median: [1.019, 1.019, 1.06] has a block that is 6% faster, which is not "same".
+    if all(abs(r - 1) < SAME_BAND for r in ratios):
         return "same"
     return "inconclusive"
 

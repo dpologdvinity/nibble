@@ -122,6 +122,11 @@ class VerdictTest(unittest.TestCase):
         # All three are above 1 + SAME_BAND, but they disagree by 0.17: not a speed-up to report.
         self.assertEqual(perf_ab.verdict([1.03, 1.10, 1.20]), "inconclusive")
 
+    def test_verdict_same_needs_every_block_in_the_band(self) -> None:
+        # The median (1.019) is inside the same band, but the third block (1.06) is a 6% speed-up: not "same".
+        self.assertEqual(perf_ab.verdict([1.019, 1.019, 1.06]), "inconclusive")
+        self.assertEqual(perf_ab.verdict([0.981, 0.981, 0.95]), "inconclusive")
+
     def test_verdict_tight_but_between_bands_is_inconclusive(self) -> None:
         # Median 1.03 is outside the same band, and one ratio (1.015) is not above 1 + SAME_BAND.
         self.assertEqual(perf_ab.verdict([1.015, 1.03, 1.04]), "inconclusive")
