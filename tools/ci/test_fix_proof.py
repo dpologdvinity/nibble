@@ -654,6 +654,25 @@ class CaseResultTests(unittest.TestCase):
         self.assertEqual(self.result(skipped, status(exit_code=4)), "skipped")  # exit 4 is Catch2's "all skipped"
         self.assertEqual(self.result(skipped, status(exit_code=1)), "skipped")
 
+    def test_junit_of_a_wildcard_name_counts_only_for_a_unique_spec(self) -> None:
+        # Catch2 keeps a leading or trailing `*` a wildcard even escaped, so the spec of `parse*` also runs a case
+        # named `parse*/legacy`, whose <testcase> reads like a section of `parse*`. Its failure is not attributed.
+        other = _junit(FAILED.replace("fails, with [x] &amp; &lt;b> &quot;q&quot;", "parse*/legacy"))
+        for st in (status(exit_code=42, unique=False), None):
+            with self.subTest(status=st):
+                state, note = fix_proof.case_result("parse*", other, st)
+                self.assertEqual(state, "missing")
+                self.assertIn("not attributed", note)
+        passed = _junit(PASSED.replace('"passes"', '"parse*/legacy"'))
+        self.assertEqual(fix_proof.case_result("parse*", passed, status(unique=False))[0], "missing")
+        skipped = _junit(SKIPPED.replace("skips", "*parse"))
+        self.assertEqual(fix_proof.case_result("*parse", skipped, status(exit_code=4, unique=False))[0], "missing")
+        # With the listing showing exactly the one case, a failing section still counts.
+        self.assertEqual(fix_proof.case_result("parse*", other, status(exit_code=42))[0], "failed")
+        # A name without a wildcard matches only itself: its JUnit stands even when the listing failed.
+        failed = _junit(FAILED.replace("fails, with [x] &amp; &lt;b> &quot;q&quot;", "parse"))
+        self.assertEqual(fix_proof.case_result("parse", failed, status(exit_code=42, unique=False))[0], "failed")
+
     def test_passed_junit_with_a_failing_process_is_failed(self) -> None:
         # LeakSanitizer reports at exit, after Catch2 wrote the XML with the case passed (I3).
         passed = _junit(PASSED)

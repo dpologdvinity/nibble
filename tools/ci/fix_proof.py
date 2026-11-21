@@ -36,7 +36,9 @@ binaries with `-r junit`):
 
 * A test spec treats `,` `[` `]` `"` `~` `*` and `\\` specially; each needs a backslash (`catch_spec`), and so does a
   leading `-`, which Catch2 would read as an option. A leading or trailing `*` stays a wildcard even when escaped, so
-  such a name also matches other cases; results are therefore looked up by exact name. A name starting with
+  such a name also matches other cases; results are therefore looked up by exact name, and for such a name counted
+  only when the listing showed the spec to match that one case (a case named `parse*/legacy` would otherwise pass
+  for a section of `parse*`). A name starting with
   `exclude:` turns the spec into an exclusion that runs everything else, so `test_cases` reports such a name as
   unresolved.
 * Spec matching ignores case; the JUnit `<testcase name>` is the exact name. A section is its own `<testcase>` named
@@ -635,7 +637,10 @@ _REFUSED_EXITS = frozenset({2, 3, 5, 6})
 def case_result(name: str, xml: str | None, run: RunStatus | None) -> tuple[CaseResult, str]:
     """Combine the JUnit text (None when no file) and the process outcome of one case into (result, note).
 
-    * JUnit says failed, or skipped: that.
+    * JUnit says failed, or skipped: that, except for a name with a leading or trailing `*`. Catch2 keeps such a `*`
+      a wildcard, so the spec may also run another case whose name extends this one (`parse*` runs `parse*/legacy`,
+      whose <testcase> reads like a section of `parse*`); its JUnit (whatever it says) then counts only when the
+      listing proved the spec unique, and the case is missing otherwise.
     * JUnit says passed, but the process failed (a signal, the timeout, any exit but 0 and 4): failed. This is how
       LeakSanitizer (reports at exit, after the XML) and non-halting sanitizer findings show up. Only when the
       listing proved the spec unique.
@@ -646,6 +651,9 @@ def case_result(name: str, xml: str | None, run: RunStatus | None) -> tuple[Case
     The note names the process outcome when it decided the result.
     """
     state = parse_junit(xml, name) if xml is not None else "missing"
+    wildcard = name.startswith("*") or name.endswith("*")
+    if wildcard and state != "missing" and (run is None or not run.unique):
+        return "missing", "the wildcard test spec did not match exactly one case, so its JUnit is not attributed"
     if state in ("failed", "skipped") or run is None:
         return state, ""
     if not run.started:
