@@ -422,7 +422,7 @@ jobs:
         if: steps.models.outputs.warm == 'true'
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DNIBBLE_BUILD_TESTS=OFF
-          cmake --build build -j "$(nproc)" --target nibble
+          cmake --build build -j "$(nproc)" --target nibble_cli
       - name: Benchmark Qwen2.5-0.5B Q4_0 and Q8_0
         if: steps.models.outputs.warm == 'true'
         run: |
