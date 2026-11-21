@@ -83,6 +83,38 @@ class UpsertCommentTests(unittest.TestCase):
         self.assertIn(f"repos/{REPO}/issues/comments/12", argv)
         self.assertEqual(json.loads(stdin or ""), {"body": "new <!-- m --> text"})
 
+    def test_upsert_comment_ignores_marker_from_another_author(self) -> None:
+        # An outside commenter can paste the marker first; with `author` set, only the bot's comment is edited.
+        comments = json.dumps(
+            [
+                {"id": 11, "body": "planted <!-- m -->", "user": {"login": "mallory"}},
+                {"id": 12, "body": "old <!-- m -->", "user": {"login": "github-actions[bot]"}},
+            ]
+        )
+        runner = ScriptedRunner({"issues/7/comments": comments})
+        gh.GhCli(REPO, runner).upsert_comment(7, "<!-- m -->", "new <!-- m -->", author="github-actions[bot]")
+        writes = [argv for argv, _ in runner.calls if "-X" in argv]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][writes[0].index("-X") + 1], "PATCH")
+        self.assertIn(f"repos/{REPO}/issues/comments/12", writes[0])
+
+    def test_upsert_comment_creates_when_only_another_author_has_the_marker(self) -> None:
+        comments = json.dumps([{"id": 11, "body": "planted <!-- m -->", "user": {"login": "mallory"}}])
+        runner = ScriptedRunner({"issues/7/comments": comments})
+        gh.GhCli(REPO, runner).upsert_comment(7, "<!-- m -->", "new <!-- m -->", author="github-actions[bot]")
+        writes = [argv for argv, _ in runner.calls if "-X" in argv]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][writes[0].index("-X") + 1], "POST")
+        self.assertIn(f"repos/{REPO}/issues/7/comments", writes[0])
+
+    def test_upsert_comment_survives_a_comment_without_user(self) -> None:
+        # A deleted account shows up as `"user": null`; it never matches an author filter.
+        comments = json.dumps([{"id": 11, "body": "x <!-- m -->", "user": None}])
+        runner = ScriptedRunner({"issues/7/comments": comments})
+        gh.GhCli(REPO, runner).upsert_comment(7, "<!-- m -->", "new <!-- m -->", author="github-actions[bot]")
+        writes = [argv for argv, _ in runner.calls if "-X" in argv]
+        self.assertEqual(writes[0][writes[0].index("-X") + 1], "POST")
+
     def test_upsert_comment_creates_when_absent(self) -> None:
         runner = ScriptedRunner({"issues/7/comments": json.dumps([{"id": 11, "body": "unrelated"}])})
         gh.GhCli(REPO, runner).upsert_comment(7, "<!-- m -->", "body <!-- m -->")
@@ -313,6 +345,23 @@ class FakeGitHubTests(unittest.TestCase):
         fake.upsert_comment(number, "<!-- m -->", "v1 <!-- m -->")
         fake.upsert_comment(number, "<!-- m -->", "v2 <!-- m -->")
         self.assertEqual(fake.issues[number].comments, ["v2 <!-- m -->"])
+
+    def test_fake_upsert_comment_only_edits_the_given_author(self) -> None:
+        fake = FakeGitHub()
+        number = fake.create_issue("t", "b", [])
+        fake.comment_as(number, "mallory", "planted <!-- m -->")
+        fake.upsert_comment(number, "<!-- m -->", "v1 <!-- m -->", author=FakeGitHub.BOT)
+        fake.upsert_comment(number, "<!-- m -->", "v2 <!-- m -->", author=FakeGitHub.BOT)
+        self.assertEqual(fake.issues[number].comments, ["planted <!-- m -->", "v2 <!-- m -->"])
+
+    def test_fake_holds_pull_requests(self) -> None:
+        fake = FakeGitHub()
+        number = fake.add_pull_request("a" * 40)
+        self.assertEqual(fake.pr_for_sha("a" * 40), number)
+        fake.upsert_comment(number, "<!-- m -->", "hi <!-- m -->")
+        self.assertEqual(fake.issues[number].comments, ["hi <!-- m -->"])
+        # A pull request is not an issue: the title search used by report_failure must skip it.
+        self.assertIsNone(fake.find_open_issue(fake.issues[number].title))
 
     def test_fake_records_dispatches_and_answers_lookups(self) -> None:
         fake = FakeGitHub()

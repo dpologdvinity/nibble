@@ -1,0 +1,158 @@
+# Reason: AGENTS.md says "a bug fix gets a test that fails without the fix". This workflow checks it. For a pull request
+# that is a fix (`fix:` in the title or in a commit subject) and touches src/, include/ or cli/, it
+#   1. selects the Catch2 cases the PR adds or changes in tests/*.cpp (tools/ci/fix_proof.py select),
+#   2. builds the MERGE BASE of the PR (the commit the branch was cut from, `git merge-base`, so unrelated commits that
+#      landed on the base branch later do not count) with the PR's whole tests/ tree copied over it, in Debug with
+#      ASan and UBSan, and
+#   3. runs each selected case on that build, one process per case (`fix_proof.py run`).
+# The check is green when at least one case FAILS there ("proven": the test catches the bug), and red when none does
+# ("does not reproduce"), when the PR has no test at all ("no test"), or when no case failed but the time budget left
+# a case unrun ("incomplete"). A base that does not compile with the new tests counts as
+# proven (the tests use something the fix adds). The `no-test-needed` label turns a red result green (reason in the PR).
+# Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
+# without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
+# Trust split: it runs the pull request's own code, so the token is read-only and no secret exists. The PR title and
+# every other `${{ }}` value reach scripts through `env:` only. It never writes to GitHub.
+# By hand: it cannot be dispatched (the base and head come from the pull request event). Push to the pull request, edit
+# its title or toggle a label to run it again. To check a fix locally: build the merge base with the new tests and run
+# `python tools/ci/fix_proof.py specs --cases cases.json` for the Catch2 spec of each case (see its docstring).
+# Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
+name: fix-proof
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+# One run per pull request; a newer event cancels the older one. Every listed event (edits and label changes included)
+# runs the whole job and writes a real verdict: a job skipped for an "irrelevant" event would leave a `skipped` check
+# run, which branch protection counts as passing and which the checks list shows instead of the earlier red verdict
+# ("does not reproduce") on the same commit. Re-judging costs a minute or two with a warm cache.
+concurrency:
+  group: fix-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  DEPS_DIR: ${{ github.workspace }}/.deps-cache
+
+jobs:
+  fix-proof:
+    name: fix-proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      PR_TITLE: ${{ github.event.pull_request.title }}  # free text: only ever read from the environment
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}  # the base branch's tip (hex)
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}  # the commit under test (hex)
+      NO_TEST_NEEDED: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') }}
+    steps:
+      # The head commit itself, not the merge preview. Full history for `git merge-base` and the commit subjects.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Does the check apply (a fix that touches code)?
+        id: gate
+        run: |
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
+          # Not a pipe into tee: a failing gate must fail the step (the default shell has no pipefail).
+          python tools/ci/fix_proof.py gate --title "$PR_TITLE" --base "$BASE_SHA" --head "$HEAD_SHA" > gate.txt
+          cat gate.txt
+          if grep -qx 'fix=true' gate.txt && grep -qx 'code=true' gate.txt; then
+            echo "apply=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+            echo "not a code fix: nothing to prove" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Select the test cases the pull request adds or changes
+        id: select
+        if: steps.gate.outputs.apply == 'true'
+        run: |
+          python tools/ci/fix_proof.py select --base "$BASE_SHA" --head "$HEAD_SHA" --out cases.json > select.txt
+          cat select.txt >> "$GITHUB_OUTPUT"
+      # Nothing selected means there is nothing to build: `classify` reports "no test" (red, unless labelled).
+      - name: Restore Catch2
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      # The merge base, with the head's whole tests/ tree (sources, tests/data, headers) over it: the new tests run
+      # against the old code. (No models: end-to-end cases skip and read as not-runnable.)
+      - name: Check out the merge base with the head's tests
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
+        env:
+          MERGE_BASE: ${{ steps.gate.outputs.merge_base }}
+        run: |
+          git worktree add --detach base-src "$MERGE_BASE"
+          # Replace the tree, not overlay it: a test file the PR deleted or renamed must not stay on the base (a
+          # renamed file would give duplicate TEST_CASE names, a stale one that no longer compiles a false "proven").
+          rm -rf base-src/tests
+          cp -a tests base-src/tests
+      - name: Let the sanitizers map memory (lower ASLR entropy)
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      # Configure is its own step and may fail the job: a configure failure (a FetchContent download error, say) is an
+      # infrastructure error, not a finding about the pull request, so it never reaches `classify`.
+      - name: Configure the base (ASan and UBSan)
+        id: configure
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
+        run: |
+          cmake -S base-src -B base-build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=address,undefined -DNIBBLE_NATIVE=ON \
+                -DFETCHCONTENT_BASE_DIR="$DEPS_DIR" || {
+            echo "::error title=fix-proof::cmake could not configure the base (infrastructure error, not a verdict on the pull request)"
+            exit 1
+          }
+      # continue-on-error: a base that does not compile with the new tests is a finding ("proven"), not a failed check.
+      # The outcome of this step is what `classify` is told.
+      - name: Build the base with the new tests
+        id: build
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
+        continue-on-error: true
+        run: |
+          cmake --build base-build -j "$(nproc)" --target nibble_tests nibble_alloc_tests
+      # --budget keeps the job's 150 minutes for setup, the build and the verdict: 90 minutes for the cases, and a
+      # case starts only while its whole 30-minute timeout still fits, so a few hanging cases cannot reach the job
+      # limit before `Judge` writes a verdict. Cases left over are reported as not run, and unless another case
+      # failed the verdict is "incomplete" (red), never a green "not runnable".
+      - name: Run the selected cases on the base
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0' && steps.build.outcome == 'success'
+        run: |
+          rm -rf fix-proof-results
+          python tools/ci/fix_proof.py run --cases cases.json --build-dir base-build --results-dir fix-proof-results \
+            --timeout 1800 --budget 5400
+      # Whatever happened above (a build failure included), but not when the run was cancelled or the configure step
+      # failed (infrastructure: the job is red with that error and no verdict is written).
+      - name: Judge
+        id: classify
+        if: ${{ !cancelled() && steps.gate.outputs.apply == 'true' && steps.configure.outcome != 'failure' }}
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}  # success, failure, or skipped (nothing was selected)
+        run: |
+          mkdir -p fix-proof-results
+          compiled=true
+          if [ "$BUILD_OUTCOME" = failure ]; then compiled=false; fi
+          override=()
+          if [ "$NO_TEST_NEEDED" = true ]; then override=(--override); fi
+          python tools/ci/fix_proof.py classify --cases cases.json --results-dir fix-proof-results \
+            --base-compiled "$compiled" "${override[@]}" --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload the case logs
+        if: ${{ !cancelled() && steps.gate.outputs.apply == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fix-proof-results
+          path: |
+            cases.json
+            fix-proof-results/
+          retention-days: 7
+          overwrite: true  # a re-run attempt replaces this run's earlier artifact instead of failing on the name
+          if-no-files-found: ignore
