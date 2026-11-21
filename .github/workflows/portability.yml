@@ -2,9 +2,9 @@
 # claims it does not cover. This workflow checks them weekly on master (a failing job opens or updates one
 # "portability: <job> failing" issue through report-failure), and a new compiler's warnings are errors here first
 # (the build uses -Wall -Wextra -Wpedantic -Werror), before they can break a pull request:
-#   arm64             the scalar kernels on a 64-bit ARM runner, built with -DNIBBLE_NATIVE=OFF. NOTE: this checks a
-#                     claim the README does not make yet (ARM64 is unproven, not known-broken); a red run is a
-#                     finding to fix, not a regression. For example aarch64 GCC contracts multiply-adds by default.
+#   arm64             the scalar kernels on a 64-bit ARM runner, built with -DNIBBLE_NATIVE=OFF. The README's platform
+#                     badge (`linux x86-64 | arm64`) rests on this job, so a red run breaks a stated platform: fix it
+#                     or take arm64 off the badge. For example aarch64 GCC contracts multiply-adds by default.
 #   newest-gcc        the newest g++-NN the Ubuntu toolchain PPA offers (the version is printed to the job summary).
 #   newest-clang      the newest stable LLVM that apt.llvm.org/llvm.sh installs. The script runs as root, so it is
 #                     pinned by SHA-256 (LLVM_SH_SHA256) and verified before it runs. When LLVM publishes a new
