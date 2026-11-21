@@ -1,0 +1,79 @@
+# Reason: the reporting half of a scheduled job (nightly, portability). report-failure needs `issues: write` (and
+# `actions: write` to start claude-triage.yml), and the long build and test jobs must not hold those scopes while they
+# run third-party code (FetchContent, apt, llvm.sh). So each work job only records its result as job outputs, and a
+# small job that `needs:` it calls this workflow with the real result.
+# Skips, with the job shown as skipped, when the result is `cancelled` (a job superseded in its concurrency group that
+# never started) or `skipped`, when `warm` is `false` (the job skipped its work on a cold model cache) and on any ref
+# but master (a hand run from another branch opens no issue). A cancelled run never calls it: the callers use
+# `!cancelled()`. `timed-out` (the job hit its own timeout-minutes) is reported as a failure, with a warning saying so.
+# By hand: not runnable (workflow_call only); the nightly and portability workflows call it.
+# Logic: .github/actions/report-failure and tools/ci/report_failure.py.
+name: report-job
+
+on:
+  workflow_call:
+    inputs:
+      job:
+        description: Job name; part of the issue title, so keep it stable.
+        type: string
+        required: true
+      status:
+        description: The work job's result - success, failure, timed-out (reported as a failure), cancelled or skipped.
+        type: string
+        required: true
+      warm:
+        description: '"false" when the work job skipped its work on a cold model cache.'
+        type: string
+        default: ""
+      area:
+        description: Area label put on the issue.
+        type: string
+        required: true
+      attachments-url:
+        description: Link to the artifact the work job uploaded on failure, or empty.
+        type: string
+        default: ""
+
+permissions: {}
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  report:
+    name: report ${{ inputs.job }}
+    if: |
+      github.ref == 'refs/heads/master' &&
+      inputs.status != 'cancelled' && inputs.status != 'skipped' && inputs.warm != 'false'
+    # One report per job at a time (concurrency is keyed on the caller's workflow name): a scheduled and a hand-started
+    # run must not both look up "<workflow>: <job> failing" before either creates it and open two issues.
+    concurrency:
+      group: report-${{ github.workflow }}-${{ inputs.job }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      actions: write  # report-failure starts claude-triage.yml (workflow_dispatch)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Say that the job hit its time limit
+        if: inputs.status == 'timed-out'
+        env:
+          JOB: ${{ inputs.job }}
+        run: |
+          echo "::warning title=report ${JOB}::${JOB} hit its timeout-minutes; reported as a failure"
+          echo "${JOB} hit its timeout-minutes (a hang, not a test failure); reported as a failure." >> "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/report-failure
+        with:
+          job: ${{ inputs.job }}
+          outcome: ${{ inputs.status == 'success' && 'success' || 'failure' }}
+          area: ${{ inputs.area }}
+          attachments-url: ${{ inputs.attachments-url }}
+          triage: "true"  # starts claude-triage.yml for a newly opened issue

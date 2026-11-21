@@ -1,0 +1,154 @@
+# Reason: the owner's own pull requests and Dependabot's minor and patch updates should merge as soon as the required
+# checks are green, without the owner clicking. This only turns on GitHub auto-merge (`gh pr merge --auto --merge`);
+# branch protection still decides when the merge happens. It never enables auto-merge for an `agent` pull request, nor
+# for one that Claude has pushed commits to; it switches auto-merge off when `agent` is added later or when Claude pushes
+# to a pull request that is not Claude's own, and says why in a comment. The owner reads and merges those by hand
+# (pull requests authored by claude[bot] wait for an approval through agent-approval.yml instead).
+# A Claude push also puts the `agent` label on the pull request: commit authors do not record who pushed, so the label
+# is what keeps auto-merge off after a close and reopen.
+# Enabling happens only when a pull request is opened, reopened or made ready, so adding a label never re-enables it.
+# An enabling job reads the labels again just before and just after it enables, and turns auto-merge off again if
+# `agent` arrived meanwhile: agent-hold or claude-pushed may have looked while auto-merge was still off.
+# Runs on pull_request_target so Dependabot's pull requests get a write token; it never checks out or runs pull request
+# code, and the only values it uses (the URL, the number, the author, the sender and the labels) come from the event
+# payload or the API.
+# Needs the repository setting allow_auto_merge (set; `gh api repos/dpologdvinity/nibble --jq .allow_auto_merge`).
+# By hand: not runnable (it needs a pull request event); close and reopen the pull request, or run
+# `gh pr merge --auto --merge <number>`.
+name: automerge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, labeled, synchronize]
+
+permissions: {}
+
+jobs:
+  owner:
+    # Not a draft, from a branch of this repository, written by the owner, not an agent pull request, and only when the
+    # pull request has just been opened, reopened or made ready.
+    if: |
+      contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'dpologdvinity' &&
+      !contains(github.event.pull_request.labels.*.name, 'agent')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # A pull request that Claude has already pushed to (reopened, or made ready, after the push) is reviewed by hand.
+      - name: Enable auto-merge unless Claude pushed commits or the pull request is held
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # Prints true when the pull request carries `agent` now (the payload's labels are as old as the event).
+          held() { gh pr view "$PR_URL" --json labels --jq 'any(.labels[]; .name == "agent")'; }
+          claude_commits=$(gh pr view "$PR_URL" --json commits \
+            --jq '[.commits[].authors[].login | ascii_downcase | select(. == "claude" or . == "claude[bot]")] | length')
+          if [ "$claude_commits" != "0" ]; then
+            echo "::notice title=automerge::Claude pushed commits to this pull request; auto-merge stays off"
+            exit 0
+          fi
+          before=$(held)
+          if [ "$before" = "true" ]; then
+            echo "::notice title=automerge::the pull request has the agent label; auto-merge stays off"
+            exit 0
+          fi
+          gh pr merge --auto --merge "$PR_URL"
+          # An unreadable label list counts as held.
+          after=$(held) || after=true
+          if [ "$after" = "true" ]; then
+            gh pr merge --disable-auto "$PR_URL"
+            echo "::notice title=automerge::the agent label arrived while auto-merge was being enabled; it is off again"
+          fi
+
+  dependabot:
+    if: |
+      contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      !contains(github.event.pull_request.labels.*.name, 'agent')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Checks that the pull request really is Dependabot's (commit signatures included) before trusting its metadata.
+      - name: Read the update type
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Enable auto-merge for minor and patch updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-minor' || steps.metadata.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # As in the owner job: the labels are read again before and after enabling.
+          held() { gh pr view "$PR_URL" --json labels --jq 'any(.labels[]; .name == "agent")'; }
+          before=$(held)
+          if [ "$before" = "true" ]; then
+            echo "::notice title=automerge::the pull request has the agent label; auto-merge stays off"
+            exit 0
+          fi
+          gh pr merge --auto --merge "$PR_URL"
+          after=$(held) || after=true
+          if [ "$after" = "true" ]; then
+            gh pr merge --disable-auto "$PR_URL"
+            echo "::notice title=automerge::the agent label arrived while auto-merge was being enabled; it is off again"
+          fi
+
+  # An `agent` label added after auto-merge was switched on must stop the merge.
+  agent-hold:
+    if: github.event.action == 'labeled' && github.event.label.name == 'agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          # --disable-auto fails when auto-merge is not on, which is the usual case here.
+          if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            gh pr merge --disable-auto "$PR_URL"
+          fi
+
+  # Claude's commits on a pull request that is not Claude's own (the owner's or Dependabot's, where @claude works on the
+  # pull request's branch) must be read before they merge: add the `agent` label, switch auto-merge off and say so, once
+  # (it speaks when it adds the label or finds auto-merge on, and nothing here turns auto-merge back on).
+  claude-pushed:
+    if: |
+      github.event.action == 'synchronize' &&
+      github.event.sender.login == 'claude[bot]' &&
+      github.event.pull_request.user.login != 'claude[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Hold the pull request, disable auto-merge and explain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          labelled=$(gh pr view "$PR_URL" --json labels --jq 'any(.labels[]; .name == "agent")')
+          # The label goes on before auto-merge is read, so an enabling job that runs meanwhile sees it afterwards. A
+          # label added with GITHUB_TOKEN starts no workflow (no agent-hold or claude-review run).
+          gh api -X POST "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=agent" --silent
+          was_on=$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')
+          if [ "$was_on" = "true" ]; then
+            gh pr merge --disable-auto "$PR_URL"
+          fi
+          if [ "$labelled" != "true" ] || [ "$was_on" = "true" ]; then
+            gh pr comment "$PR_URL" --body "Claude pushed commits to this pull request, so it now has the \`agent\` label and auto-merge is off. Review the new commits and merge by hand."
+          fi
