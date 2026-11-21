@@ -67,6 +67,17 @@ class Review:
     association: str
 
 
+@dataclass(frozen=True)
+class LabelEvent:
+    """One `labeled` or `unlabeled` event of an issue or pull request: which label, who did it (their login, "" for a
+    deleted account) and the actor's account type (`User`, `Bot`, ...; "" when unknown)."""
+
+    event: str
+    label: str
+    actor: str
+    actor_type: str
+
+
 # Login of the GITHUB_TOKEN identity as the REST API reports issue and comment authors.
 BOT_LOGIN = "github-actions[bot]"
 
@@ -144,6 +155,15 @@ class GitHub(Protocol):
 
     def list_reviews(self, number: int) -> list[Review]:
         """Every review of pull request `number`, oldest first."""
+        ...
+
+    def label_events(self, number: int) -> list[LabelEvent]:
+        """Every `labeled` and `unlabeled` event of issue or pull request `number`, oldest first."""
+        ...
+
+    def permission(self, login: str) -> str:
+        """`login`'s permission on the repository: `admin`, `write` (maintainers too), `read` (triage too) or `none`.
+        Raises GhError when the account does not exist."""
         ...
 
 
@@ -335,3 +355,24 @@ class GhCli:
                 )
             )
         return reviews
+
+    def label_events(self, number: int) -> list[LabelEvent]:
+        events: list[LabelEvent] = []
+        for item in _json_list(self._get(f"repos/{self.repo}/issues/{number}/events?per_page=100", paginate=True)):
+            if item.get("event") not in ("labeled", "unlabeled"):
+                continue
+            actor = item.get("actor")
+            label = item.get("label")
+            events.append(
+                LabelEvent(
+                    event=str(item["event"]),
+                    label=str(label.get("name", "")) if isinstance(label, dict) else "",
+                    actor=str(actor.get("login", "")) if isinstance(actor, dict) else "",
+                    actor_type=str(actor.get("type", "")) if isinstance(actor, dict) else "",
+                )
+            )
+        return events
+
+    def permission(self, login: str) -> str:
+        data = json.loads(self._get(f"repos/{self.repo}/collaborators/{urllib.parse.quote(login, safe='')}/permission"))
+        return str(data.get("permission") or "none") if isinstance(data, dict) else "none"

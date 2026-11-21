@@ -165,8 +165,8 @@ jobs:
                open a pull request.
             5. Stage, commit and push only with the action's wrappers: ${{ steps.prep.outputs.wrappers }}/git-add.sh <paths>,
                ${{ steps.prep.outputs.wrappers }}/git-commit.sh -m "<message>", ${{ steps.prep.outputs.wrappers }}/git-push.sh origin HEAD.
-               Open the pull request yourself with gh pr create --base master --label agent, a Conventional Commit
-               title, and a body that says what changed and why and ends with "Fixes #${{ steps.gate.outputs.issue }}". Open it only if no
+               Open the pull request yourself with gh pr create --base master --label agent (no other label, and
+               never no-test-needed: only the owner waives fix-proof), a Conventional Commit title, and a body that says what changed and why and ends with "Fixes #${{ steps.gate.outputs.issue }}". Open it only if no
                pull request exists for the branch (gh pr list --head). Do not add a Generated with Claude Code
                signature or any attribution line.
             6. Never merge, approve or close anything, and never push to master.

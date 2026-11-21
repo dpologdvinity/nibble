@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from gh import GhError, PullRequest, Review, RunInfo
+from gh import GhError, LabelEvent, PullRequest, Review, RunInfo
 
 
 @dataclass
@@ -43,7 +43,9 @@ class FakeGitHub:
     `pull_requests` (number -> PullRequest, filled by add_pull_request) and `reviews` (number -> Review list).
     `vanished` ((run id, name) pairs that are listed but cannot be downloaded) and `failing_artifact_runs` (run ids
     whose artifact listing raises GhError). `fail_listing`, `fail_tip` and `fail_reviews` make the run listings,
-    branch_tip and list_reviews raise GhError.
+    branch_tip and list_reviews raise GhError. `label_history` (number -> LabelEvent list, oldest first, for
+    label_events) and `permissions` (login -> permission; a login without an entry raises GhError, like an unknown
+    account); `fail_label_events` makes label_events raise GhError.
     """
 
     BOT = "github-actions[bot]"
@@ -65,6 +67,9 @@ class FakeGitHub:
         self.fail_reviews = False
         self.pull_requests: dict[int, PullRequest] = {}
         self.reviews: dict[int, list[Review]] = {}
+        self.label_history: dict[int, list[LabelEvent]] = {}
+        self.permissions: dict[str, str] = {}
+        self.fail_label_events = False
         self._next_number = 1
 
     def find_open_issue(self, title: str, label: str) -> int | None:
@@ -170,3 +175,13 @@ class FakeGitHub:
         if self.fail_reviews:
             raise GhError("simulated review listing failure")
         return list(self.reviews.get(number, []))
+
+    def label_events(self, number: int) -> list[LabelEvent]:
+        if self.fail_label_events:
+            raise GhError("simulated label event listing failure")
+        return list(self.label_history.get(number, []))
+
+    def permission(self, login: str) -> str:
+        if login not in self.permissions:
+            raise GhError(f"simulated: no permission on record for {login}")
+        return self.permissions[login]

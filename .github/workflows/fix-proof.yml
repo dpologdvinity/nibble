@@ -9,7 +9,9 @@
 # ("does not reproduce"), when the PR has no test at all ("no test"), or when no case failed but the time budget left
 # a case unrun ("incomplete"). A base that does not compile with the new tests counts as
 # proven (the tests use something the fix adds). The `no-test-needed` label turns a "no test" result green (reason in
-# the PR); the other red results stay red.
+# the PR); the other red results stay red. The label counts only when its latest `labeled` event was made by a person
+# with write access, never by a bot (tools/ci/fix_proof_waiver.py): an agent session can open a pull request with any
+# label, and must not be able to waive its own proof.
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
 # without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
 # Where things come from: the workspace is the MERGE REF (GitHub's preview of the PR merged into its base, the default
@@ -23,7 +25,8 @@
 # three dots), not the merge commit, so they list only what the PR changed.
 # Trust split: it builds and runs the pull request's own tests and so its code, so the token is read-only and no secret
 # exists; the tools that judge the result come from the merge ref, not from the PR. The PR title and every other
-# `${{ }}` value reach scripts through `env:` only. It never writes to GitHub.
+# `${{ }}` value reach scripts through `env:` only. It never writes to GitHub. The token (issues and pull-requests
+# read, for the label's history) reaches only the waiver step, which runs before any pull request code is built.
 # By hand: it cannot be dispatched (the base and head come from the pull request event). Push to the pull request, edit
 # its title or toggle a label to run it again. To check a fix locally: build the merge base with the new tests and run
 # `python tools/ci/fix_proof.py specs --cases cases.json` for the Catch2 spec of each case (see its docstring).
@@ -54,11 +57,16 @@ jobs:
     name: fix-proof
     runs-on: ubuntu-24.04
     timeout-minutes: 150
+    permissions:
+      contents: read
+      issues: read  # the label's events (who applied no-test-needed)
+      pull-requests: read  # the pull request's current labels
     env:
       PR_TITLE: ${{ github.event.pull_request.title }}  # free text: only ever read from the environment
       BASE_SHA: ${{ github.event.pull_request.base.sha }}  # the base branch's tip (hex)
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}  # the commit under test (hex)
-      NO_TEST_NEEDED: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') }}
+      NO_TEST_NEEDED: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') }}  # checked below
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       # No `ref:`: the merge ref (the PR merged into its base), so tools/ci is current whatever the branch's age. Its
       # second parent is the PR head. Full history for `git merge-base`, the commit subjects and the head's tests/.
@@ -86,6 +94,16 @@ jobs:
             echo "apply=false" >> "$GITHUB_OUTPUT"
             echo "not a code fix: nothing to prove" >> "$GITHUB_STEP_SUMMARY"
           fi
+      # Before any pull request code is built, and the only step that gets the token. The label alone is not enough:
+      # it counts when a person with write access applied it last (an agent could add it to its own pull request).
+      - name: Does the no-test-needed label count?
+        id: waiver
+        if: steps.gate.outputs.apply == 'true' && env.NO_TEST_NEEDED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci/fix_proof_waiver.py --pr "$PR_NUMBER" --summary "$GITHUB_STEP_SUMMARY" > waiver.txt
+          cat waiver.txt >> "$GITHUB_OUTPUT"
       - name: Select the test cases the pull request adds or changes
         id: select
         if: steps.gate.outputs.apply == 'true'
@@ -153,12 +171,13 @@ jobs:
         if: ${{ !cancelled() && steps.gate.outputs.apply == 'true' && steps.configure.outcome != 'failure' }}
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}  # success, failure, or skipped (nothing was selected)
+          WAIVED: ${{ steps.waiver.outputs.waived }}  # true only for a label a person with write access applied
         run: |
           mkdir -p fix-proof-results
           compiled=true
           if [ "$BUILD_OUTCOME" = failure ]; then compiled=false; fi
           override=()
-          if [ "$NO_TEST_NEEDED" = true ]; then override=(--override); fi
+          if [ "$WAIVED" = true ]; then override=(--override); fi
           python tools/ci/fix_proof.py classify --cases cases.json --results-dir fix-proof-results \
             --base-compiled "$compiled" "${override[@]}" --summary "$GITHUB_STEP_SUMMARY"
       - name: Upload the case logs
