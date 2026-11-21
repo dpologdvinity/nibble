@@ -20,14 +20,16 @@ name: fix-proof
 
 on:
   pull_request:
-    types: [opened, synchronize, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 permissions:
   contents: read
 
-# One run per pull request; a newer event cancels the older one.
+# One run per pull request; a newer event cancels the older one. An event the job skips (see its `if:`) gets a group of
+# its own, so that it cannot cancel a running check and then leave the pull request without a verdict. (The condition
+# is the same as the job's `if:`; the middle operand must be truthy, hence 'check'.)
 concurrency:
-  group: fix-proof-${{ github.event.pull_request.number }}
+  group: fix-proof-${{ github.event.pull_request.number }}-${{ ((github.event.action != 'edited' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || (github.event.action == 'edited' && (github.event.changes.title != null || github.event.changes.base != null)) || (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name == 'no-test-needed')) && 'check' || format('ignored-{0}', github.run_id) }}
   cancel-in-progress: true
 
 env:
@@ -37,6 +39,12 @@ env:
 jobs:
   fix-proof:
     name: fix-proof
+    # opened, synchronize and reopened always run. An edit only matters when the title (it carries `fix:`) or the base
+    # branch changed, and a label only when it is `no-test-needed`; anything else would repeat a sanitizer build.
+    if: >-
+      (github.event.action != 'edited' && github.event.action != 'labeled' && github.event.action != 'unlabeled')
+      || (github.event.action == 'edited' && (github.event.changes.title != null || github.event.changes.base != null))
+      || (contains(fromJSON('["labeled", "unlabeled"]'), github.event.action) && github.event.label.name == 'no-test-needed')
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
@@ -90,29 +98,42 @@ jobs:
           MERGE_BASE: ${{ steps.gate.outputs.merge_base }}
         run: |
           git worktree add --detach base-src "$MERGE_BASE"
-          cp -a tests/. base-src/tests/
+          # Replace the tree, not overlay it: a test file the PR deleted or renamed must not stay on the base (a
+          # renamed file would give duplicate TEST_CASE names, a stale one that no longer compiles a false "proven").
+          rm -rf base-src/tests
+          cp -a tests base-src/tests
       - name: Let the sanitizers map memory (lower ASLR entropy)
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
         run: sudo sysctl -w vm.mmap_rnd_bits=28
+      # Configure is its own step and may fail the job: a configure failure (a FetchContent download error, say) is an
+      # infrastructure error, not a finding about the pull request, so it never reaches `classify`.
+      - name: Configure the base (ASan and UBSan)
+        id: configure
+        if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
+        run: |
+          cmake -S base-src -B base-build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=address,undefined -DNIBBLE_NATIVE=ON \
+                -DFETCHCONTENT_BASE_DIR="$DEPS_DIR" || {
+            echo "::error title=fix-proof::cmake could not configure the base (infrastructure error, not a verdict on the pull request)"
+            exit 1
+          }
       # continue-on-error: a base that does not compile with the new tests is a finding ("proven"), not a failed check.
       # The outcome of this step is what `classify` is told.
-      - name: Build the base with the new tests (ASan and UBSan)
+      - name: Build the base with the new tests
         id: build
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
         continue-on-error: true
         run: |
-          cmake -S base-src -B base-build -DCMAKE_BUILD_TYPE=Debug -DNIBBLE_SANITIZE=address,undefined -DNIBBLE_NATIVE=ON \
-                -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
           cmake --build base-build -j "$(nproc)" --target nibble_tests nibble_alloc_tests
       - name: Run the selected cases on the base
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0' && steps.build.outcome == 'success'
         run: |
           rm -rf fix-proof-results
           python tools/ci/fix_proof.py run --cases cases.json --build-dir base-build --results-dir fix-proof-results --timeout 1800
-      # Whatever happened above (a build failure included), but not when the run was cancelled.
+      # Whatever happened above (a build failure included), but not when the run was cancelled or the configure step
+      # failed (infrastructure: the job is red with that error and no verdict is written).
       - name: Judge
         id: classify
-        if: ${{ !cancelled() && steps.gate.outputs.apply == 'true' }}
+        if: ${{ !cancelled() && steps.gate.outputs.apply == 'true' && steps.configure.outcome != 'failure' }}
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}  # success, failure, or skipped (nothing was selected)
         run: |
