@@ -37,3 +37,4 @@
 {"schema":1,"date":"2026-11-21T06:46:57Z","commit":"fab3eeea929ae76c5324a1e1489e2ae4e02e763e","source":"nightly","metric":"job_status","key":"nightly/fuzz_load","value":1.0,"unit":"ok","runner":"Intel(R) Xeon(R) 6975P-C","run_id":44867692841}
 {"schema":1,"date":"2026-11-21T09:15:08Z","commit":"102804b357dff478acdea0e81918f067b44be1df","source":"ci","metric":"line_coverage","key":"src+cli","value":94.6,"unit":"%","runner":"AMD EPYC 9V74 80-Core Processor","run_id":44888320250}
 {"schema":1,"date":"2026-11-21T09:50:47Z","commit":"c41515abd86931fa6ae8e5b7a69e0dc0d005fe80","source":"ci","metric":"line_coverage","key":"src+cli","value":94.6,"unit":"%","runner":"AMD EPYC 9V74 80-Core Processor","run_id":44891175418}
+{"schema":1,"date":"2026-11-21T10:19:14Z","commit":"3d9d92d69a1b1a8ce9e85d53b6d1fd9e4639e835","source":"ci","metric":"line_coverage","key":"src+cli","value":95.4,"unit":"%","runner":"Intel(R) Xeon(R) 6975P-C","run_id":44893402183}
