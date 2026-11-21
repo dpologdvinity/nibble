@@ -174,3 +174,10 @@ TEST_CASE("sampler: pick_index falls back to the last token with probability", "
   const double q[] = {0.0};
   CHECK(pick_index(q, 1, 1.0) == 0);
 }
+
+// Demonstration case for the fix-proof workflow: asserts behaviour that already holds without any fix.
+TEST_CASE("sampler: greedy tie no-repro demo", "[sampler]") {
+  Sampler s({0.0f, 0, 1.0f, 3}, 4);
+  std::vector<float> l{4, 4, 1, 1};
+  REQUIRE(s.sample(l) == 0);
+}
