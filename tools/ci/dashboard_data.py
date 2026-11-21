@@ -11,8 +11,8 @@ Metrics, their keys and units (METRICS below is the single source for the metric
 
     bench_tok_s    "<model file>/<test>/t<threads>"  tok/s   median of `nibble bench --out` (membw lines are skipped)
     min_cosine     "<model>/<prompt>"                cosine  from cosine.parse_min_cosine
-    fuzz_execs     "<target>"                        execs   libFuzzer `stat::number_of_executed_units`
-    fuzz_seconds   "<target>"                        s       libFuzzer `Done N runs in S second(s)`
+    fuzz_execs     "<target>"                        execs   libFuzzer `stat::number_of_executed_units` (if printed)
+    fuzz_seconds   "<target>"                        s       libFuzzer `Done N runs in S second(s)`, else --seconds
     corpus_files   "<target>"                        files   passed in by the caller (count of the corpus directory)
     binary_bytes   "nibble"                          bytes   size of the release binary
     line_coverage  "src+cli"                         %       gcovr `lines: 85.3% (1234 out of 1447)`
@@ -28,8 +28,9 @@ Run metadata (`Meta`) comes from the environment in `meta_from_env`: GITHUB_SHA,
 usage (each appends to --out; --source is nightly|ci|portability, default nightly):
     dashboard_data.py from-bench BENCH.jsonl --out rows.jsonl
     dashboard_data.py from-cosine CTEST.log --out rows.jsonl
-    dashboard_data.py from-libfuzzer FUZZ.log --target fuzz_gguf [--corpus-files N] --out rows.jsonl
-        (the fuzzer must run with -print_final_stats=1)
+    dashboard_data.py from-libfuzzer FUZZ.log --target fuzz_gguf [--corpus-files N] [--seconds S] --out rows.jsonl
+        (the fuzzer must run with -print_final_stats=1; S is the wall time the workflow measured around it, used when
+        a crash left no `Done` line, so fuzzing time before a crash still counts)
     dashboard_data.py from-gcovr SUMMARY.txt --out rows.jsonl          (gcovr --print-summary output)
     dashboard_data.py from-binary-size build/nibble --out rows.jsonl
     dashboard_data.py status --workflow nightly --job fuzz_gguf --outcome success|failure|cancelled --out rows.jsonl
@@ -193,20 +194,33 @@ _EXECS = re.compile(r"^stat::number_of_executed_units:\s*(\d+)\s*$", re.MULTILIN
 _DONE = re.compile(r"^Done (\d+) runs in (\d+) second\(s\)\s*$", re.MULTILINE)
 
 
-def from_libfuzzer(log: str, target: str, meta: Meta, corpus_files: int | None = None) -> list[Row]:
-    """`fuzz_execs` and `fuzz_seconds` rows (plus `corpus_files` when given) from a libFuzzer log.
+def from_libfuzzer(
+    log: str, target: str, meta: Meta, corpus_files: int | None = None, seconds: int | None = None
+) -> list[Row]:
+    """`fuzz_seconds` and, when present, `fuzz_execs` rows (plus `corpus_files` when given) from a libFuzzer log.
 
-    The fuzzer must have run with -print_final_stats=1 and ended normally: the log needs the
-    `stat::number_of_executed_units: N` line and the `Done N runs in S second(s)` line (the last of each counts).
-    ValueError names whichever is missing. `corpus_files` is counted by the caller from the corpus directory.
+    Time fuzzed counts even when the target crashed, so the elapsed seconds never depend on a clean exit: they come
+    from libFuzzer's own `Done N runs in S second(s)` line (the last one) and, when that line is missing because the
+    run ended in a crash, from `seconds`, which the caller measured around the fuzzer. With neither, ValueError.
+    `fuzz_execs` needs `stat::number_of_executed_units: N` (run with -print_final_stats=1; the last one counts) and is
+    left out when the log has none. `corpus_files` is counted by the caller from the corpus directory.
     """
-    execs = _EXECS.findall(log)
-    if not execs:
-        raise ValueError("libFuzzer log has no 'stat::number_of_executed_units' line (run with -print_final_stats=1)")
+    if seconds is not None and seconds < 0:
+        raise ValueError(f"seconds must not be negative, got {seconds}")
     done = _DONE.findall(log)
-    if not done:
-        raise ValueError("libFuzzer log has no 'Done N runs in S second(s)' line (did the run end early?)")
-    rows = [_row(meta, "fuzz_execs", target, float(execs[-1])), _row(meta, "fuzz_seconds", target, float(done[-1][1]))]
+    if done:
+        elapsed = int(done[-1][1])
+    elif seconds is not None:
+        elapsed = seconds
+    else:
+        raise ValueError(
+            "libFuzzer log has no 'Done N runs in S second(s)' line (did the run end early?) and no --seconds was given"
+        )
+    rows: list[Row] = []
+    execs = _EXECS.findall(log)
+    if execs:
+        rows.append(_row(meta, "fuzz_execs", target, float(execs[-1])))
+    rows.append(_row(meta, "fuzz_seconds", target, float(elapsed)))
     if corpus_files is not None:
         rows.append(_row(meta, "corpus_files", target, float(corpus_files)))
     return rows
@@ -361,6 +375,7 @@ def _parser() -> argparse.ArgumentParser:
     fuzz = command("from-libfuzzer", "input")
     fuzz.add_argument("--target", required=True)
     fuzz.add_argument("--corpus-files", type=int)
+    fuzz.add_argument("--seconds", type=int)
     command("from-gcovr", "input")
     command("from-binary-size", "input")
     status = command("status")
@@ -424,7 +439,7 @@ def main(
             elif args.command == "from-cosine":
                 rows = from_cosine(parse_min_cosine(text), meta)
             elif args.command == "from-libfuzzer":
-                rows = from_libfuzzer(text, args.target, meta, args.corpus_files)
+                rows = from_libfuzzer(text, args.target, meta, args.corpus_files, args.seconds)
             else:
                 rows = from_gcovr_summary(text, meta)
         _append(args.out, rows)

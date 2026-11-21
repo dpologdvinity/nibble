@@ -181,11 +181,34 @@ class FromTests(unittest.TestCase):
         rows = dashboard_data.from_libfuzzer(LIBFUZZER, "fuzz_gguf", META)
         self.assertEqual({r["metric"] for r in rows}, {"fuzz_execs", "fuzz_seconds"})
 
-    def test_from_libfuzzer_names_missing_stats(self) -> None:
-        with self.assertRaisesRegex(ValueError, "number_of_executed_units"):
-            dashboard_data.from_libfuzzer("Done 5 runs in 1 second(s)\n", "fuzz_gguf", META)
+    def test_from_libfuzzer_crash_keeps_the_measured_time_and_the_counters(self) -> None:
+        # A target that crashed after 90 minutes: final stats are printed but there is no `Done` line.
+        crashed = "==1==ERROR: libFuzzer: deadly signal\nstat::number_of_executed_units: 99\n"
+        rows = dashboard_data.from_libfuzzer(crashed, "fuzz_gguf", META, seconds=5400)
+        got = {r["metric"]: r["value"] for r in rows}
+        self.assertEqual(got, {"fuzz_execs": 99.0, "fuzz_seconds": 5400.0})
+
+    def test_from_libfuzzer_without_any_stats_still_records_the_time(self) -> None:
+        rows = dashboard_data.from_libfuzzer("Segmentation fault\n", "fuzz_gguf", META, seconds=5400)
+        self.assertEqual([(r["metric"], r["value"]) for r in rows], [("fuzz_seconds", 5400.0)])
+
+    def test_from_libfuzzer_prefers_the_done_line_to_the_measured_time(self) -> None:
+        rows = dashboard_data.from_libfuzzer(LIBFUZZER, "fuzz_gguf", META, seconds=9999)
+        self.assertEqual({r["metric"]: r["value"] for r in rows}["fuzz_seconds"], 7200.0)
+
+    def test_from_libfuzzer_done_line_alone_gives_the_time_only(self) -> None:
+        rows = dashboard_data.from_libfuzzer("Done 5 runs in 1 second(s)\n", "fuzz_gguf", META)
+        self.assertEqual([(r["metric"], r["value"]) for r in rows], [("fuzz_seconds", 1.0)])
+
+    def test_from_libfuzzer_without_any_elapsed_time_raises(self) -> None:
         with self.assertRaisesRegex(ValueError, "Done"):
             dashboard_data.from_libfuzzer("stat::number_of_executed_units: 5\n", "fuzz_gguf", META)
+        with self.assertRaisesRegex(ValueError, "--seconds"):
+            dashboard_data.from_libfuzzer("", "fuzz_gguf", META)
+
+    def test_from_libfuzzer_rejects_negative_seconds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "seconds"):
+            dashboard_data.from_libfuzzer("", "fuzz_gguf", META, seconds=-1)
 
     def test_from_gcovr_summary(self) -> None:
         (row,) = dashboard_data.from_gcovr_summary(GCOVR, META)
@@ -379,7 +402,17 @@ class CliTests(unittest.TestCase):
             log.write_text("nothing useful\n")
             code, err = self.run_cli("from-libfuzzer", str(log), "--target", "t", "--out", str(Path(tmp) / "o.jsonl"))
             self.assertEqual(code, 1)
-            self.assertIn("number_of_executed_units", err)
+            self.assertIn("--seconds", err)
+
+    def test_from_libfuzzer_cli_takes_the_measured_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "fuzz.log"
+            log.write_text("stat::number_of_executed_units: 12\n")
+            out = Path(tmp) / "o.jsonl"
+            code, _ = self.run_cli("from-libfuzzer", str(log), "--target", "t", "--seconds", "5400", "--out", str(out))
+            self.assertEqual(code, 0)
+            rows = [json.loads(line) for line in out.read_text().splitlines()]
+            self.assertEqual({r["metric"]: r["value"] for r in rows}, {"fuzz_execs": 12.0, "fuzz_seconds": 5400.0})
 
 
 if __name__ == "__main__":

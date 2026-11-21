@@ -250,9 +250,15 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          # The pipe would hide the fuzzer's exit status; with pipefail a crash fails the step.
+          # The pipe would hide the fuzzer's exit status; with pipefail a crash fails the step. The wall time is
+          # measured here because a crash leaves no `Done N runs in S second(s)` line, and the time fuzzed before it
+          # must still reach the dashboard.
           set -o pipefail
-          "build-fuzz/$TARGET" -max_total_time=7200 -print_final_stats=1 -artifact_prefix=crashes/ corpus 2>&1 | tee fuzz.log
+          start=$SECONDS
+          status=0
+          "build-fuzz/$TARGET" -max_total_time=7200 -print_final_stats=1 -artifact_prefix=crashes/ corpus 2>&1 | tee fuzz.log || status=$?
+          echo "seconds=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
+          exit "$status"
       # Minimize into a fresh directory (-merge=1 copies only inputs that add coverage), then replace the corpus.
       - name: Minimize the corpus
         id: merge
@@ -277,9 +283,11 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           CORPUS_FILES: ${{ steps.merge.outputs.files }}
+          FUZZ_SECONDS: ${{ steps.fuzz.outputs.seconds }}
         run: |
           args=(--target "$TARGET")
           if [ -n "$CORPUS_FILES" ]; then args+=(--corpus-files "$CORPUS_FILES"); fi
+          if [ -n "$FUZZ_SECONDS" ]; then args+=(--seconds "$FUZZ_SECONDS"); fi
           python tools/ci/dashboard_data.py from-libfuzzer fuzz.log "${args[@]}" --out rows.jsonl
       - name: Dashboard rows (job status)
         if: ${{ always() && job.status != 'cancelled' }}
