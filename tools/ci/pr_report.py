@@ -455,7 +455,13 @@ def _speed_rows(perf: Sequence[PerfEntry]) -> list[str]:
 def _accuracy_lines(r: Report) -> list[str]:
     acc = r["accuracy"]
     if acc["status"] != "ran":
-        return ["**Accuracy:** not run (the model cache was cold; the nightly run refills it)"]
+        # The nightly job on master is the only one that saves the model cache (ruling R4), and its key hashes the
+        # model inputs (setup-models), so a pull request that changes them stays cold until it merges.
+        return [
+            "**Accuracy:** not run: the model cache was cold. The nightly job on master refills it, but a pull request "
+            "that changes the model inputs (the scripts and prompts the cache key hashes) gets no accuracy run before "
+            "it merges; run `ctest -L e2e` locally for one."
+        ]
     # First, because the rows alone cannot show it: a test can fail after printing an unchanged min cosine.
     tests = (
         "❌ end-to-end tests failed on the head (a failed check need not move a min cosine; see the accuracy job)"
@@ -469,10 +475,12 @@ def _accuracy_lines(r: Report) -> list[str]:
     changed = sum(1 for row in rows if row["base"] != row["head"])
     lines = ["**Accuracy:** min cosine against llama.cpp, per case", "", tests, ""]
     if r["kernels_changed"]:
+        # The cosines are compared as printed (six significant digits, the CONTRIBUTING.md check): equal values are
+        # strong evidence, not proof, that the logits are bit-identical, so the line says only what was compared.
         lines.append(
-            f"❗ bit-identity: {changed} cases changed"
+            f"❗ printed min cosine changed in {changed} of {len(rows)} cases"
             if changed
-            else f"✅ bit-identity: all {len(rows)} cases unchanged"
+            else f"✅ printed min cosine unchanged in all {len(rows)} cases"
         )
         lines.append("")
     lines += ["| case | base | head | Δ |", "|---|---:|---:|---:|"]

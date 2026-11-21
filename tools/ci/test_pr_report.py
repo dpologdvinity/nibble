@@ -343,6 +343,10 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(sum("skipped" in line for line in text.splitlines()), 3)
         self.assertNotIn("|", text)
         self.assertIn("cold", text)  # the accuracy line says why nothing ran
+        # ... and that the nightly job only refills master's cache: a PR that changes the hashed model inputs gets no
+        # accuracy run before it merges, so the comment must not promise one.
+        self.assertIn("changes the model inputs", text)
+        self.assertIn("ctest -L e2e", text)
 
     def test_render_zero_medians_do_not_divide_by_zero(self) -> None:
         d = make_dict()
@@ -382,20 +386,25 @@ class RenderTests(unittest.TestCase):
             "%", next(line for line in pr_report.render(pr_report.load(json.dumps(d))).splitlines() if "Size" in line)
         )
 
-    def test_render_flags_bit_identity_change(self) -> None:
+    def test_render_flags_a_changed_printed_min_cosine(self) -> None:
         text = pr_report.render(make_report())  # kernels_changed, and one of two cosines moved
-        self.assertIn("❗ bit-identity: 1 cases changed", text)
-        self.assertLess(text.index("bit-identity"), text.index("q4_0/capital".replace("_", r"\_").replace("/", r"\/")))
+        self.assertIn("❗ printed min cosine changed in 1 of 2 cases", text)
+        # Equal values printed to six digits do not show identical logits, so the comment must not claim that.
+        self.assertNotIn("bit-identi", text)
+        self.assertLess(
+            text.index("printed min cosine"), text.index("q4_0/capital".replace("_", r"\_").replace("/", r"\/"))
+        )
 
     def test_render_does_not_flag_when_kernels_unchanged_or_identical(self) -> None:
         d = make_dict()
         d["kernels_changed"] = False
-        self.assertNotIn("bit-identity: 1 cases", pr_report.render(pr_report.load(json.dumps(d))))
+        self.assertNotIn("printed min cosine", pr_report.render(pr_report.load(json.dumps(d))))
         d = make_dict()
         d["accuracy"]["rows"][1]["head"] = d["accuracy"]["rows"][1]["base"]
         text = pr_report.render(pr_report.load(json.dumps(d)))
         self.assertNotIn("❗", text)
-        self.assertIn("bit-identity", text)
+        self.assertIn("✅ printed min cosine unchanged in all 2 cases", text)
+        self.assertNotIn("bit-identi", text)
 
     def test_render_says_when_the_head_failed_its_end_to_end_tests(self) -> None:
         # The cosine rows can be identical to the base's while a later check of the same test (batch prefill,
@@ -448,7 +457,7 @@ class RenderTests(unittest.TestCase):
         }
         self.assertEqual(rows[r"q4\_0\/new"], ["—", "0.9", "no base result"])
         self.assertEqual(rows[r"q4\_0\/gone"], ["0.8", "—", "no head result"])
-        self.assertIn("❗ bit-identity: 2 cases changed", text)  # kernels_changed is true in the fixture
+        self.assertIn("❗ printed min cosine changed in 2 of 2 cases", text)  # kernels_changed is true in the fixture
 
     def test_render_of_maximal_report_fits_a_comment(self) -> None:
         # Built without `load` so that every character is one the escaper doubles: the worst case for the size.
