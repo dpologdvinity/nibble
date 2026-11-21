@@ -2,7 +2,7 @@
 # that is a fix (`fix:` in the title or in a commit subject) and touches src/, include/ or cli/, it
 #   1. selects the Catch2 cases the PR adds or changes in tests/*.cpp (tools/ci/fix_proof.py select),
 #   2. builds the MERGE BASE of the PR (the commit the branch was cut from, `git merge-base`, so unrelated commits that
-#      landed on the base branch later do not count) with the PR's whole tests/ tree copied over it, in Debug with
+#      landed on the base branch later do not count) with the PR head's whole tests/ tree put over it, in Debug with
 #      ASan and UBSan, and
 #   3. runs each selected case on that build, one process per case (`fix_proof.py run`).
 # The check is green when at least one case FAILS there ("proven": the test catches the bug), and red when none does
@@ -11,8 +11,17 @@
 # proven (the tests use something the fix adds). The `no-test-needed` label turns a red result green (reason in the PR).
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
 # without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
-# Trust split: it runs the pull request's own code, so the token is read-only and no secret exists. The PR title and
-# every other `${{ }}` value reach scripts through `env:` only. It never writes to GitHub.
+# Where things come from: the workspace is the MERGE REF (GitHub's preview of the PR merged into its base, the default
+# `actions/checkout` ref for `pull_request`), so tools/ci is the base branch's current copy. The PR's own head would
+# break every branch cut before a tools/ci change (PR #61 predated tools/ci/fix_proof.py and went red with "can't open
+# file", an error that says nothing about its fix). Only tests/ is taken from the PR head (`git archive "$HEAD_SHA"
+# tests`, over the merge base's tests/ tree, which is removed first), never from the merge ref: tests that landed on the
+# base branch after the merge base can need code the merge base lacks, and would give a false "proven" (the base does
+# not compile). The diffs (`gate`, `select`) still compare the merge base with the PR head (`$BASE_SHA...$HEAD_SHA`,
+# three dots), not the merge commit, so they list only what the PR changed.
+# Trust split: it builds and runs the pull request's own tests and so its code, so the token is read-only and no secret
+# exists; the tools that judge the result come from the merge ref, not from the PR. The PR title and every other
+# `${{ }}` value reach scripts through `env:` only. It never writes to GitHub.
 # By hand: it cannot be dispatched (the base and head come from the pull request event). Push to the pull request, edit
 # its title or toggle a label to run it again. To check a fix locally: build the merge base with the new tests and run
 # `python tools/ci/fix_proof.py specs --cases cases.json` for the Catch2 spec of each case (see its docstring).
@@ -49,10 +58,10 @@ jobs:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}  # the commit under test (hex)
       NO_TEST_NEEDED: ${{ contains(github.event.pull_request.labels.*.name, 'no-test-needed') }}
     steps:
-      # The head commit itself, not the merge preview. Full history for `git merge-base` and the commit subjects.
+      # No `ref:`: the merge ref (the PR merged into its base), so tools/ci is current whatever the branch's age. Its
+      # second parent is the PR head. Full history for `git merge-base`, the commit subjects and `git archive`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -61,7 +70,9 @@ jobs:
       - name: Does the check apply (a fix that touches code)?
         id: gate
         run: |
-          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          # The checkout is the merge commit and its second parent is the head under test; anything else means the
+          # event and the checkout disagree, and nothing below would describe the PR.
+          test "$(git rev-parse 'HEAD^2')" = "$HEAD_SHA"
           merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
           # Not a pipe into tee: a failing gate must fail the step (the default shell has no pipefail).
@@ -86,8 +97,9 @@ jobs:
         with:
           path: ${{ env.DEPS_DIR }}
           key: deps-${{ hashFiles('CMakeLists.txt') }}
-      # The merge base, with the head's whole tests/ tree (sources, tests/data, headers) over it: the new tests run
-      # against the old code. (No models: end-to-end cases skip and read as not-runnable.)
+      # The merge base, with the PR head's whole tests/ tree (sources, tests/data, headers) over it: the new tests run
+      # against the old code. (No models: end-to-end cases skip and read as not-runnable.) The tests come from
+      # $HEAD_SHA, not from the workspace (the merge ref): see the opening comment.
       - name: Check out the merge base with the head's tests
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
         env:
@@ -97,7 +109,10 @@ jobs:
           # Replace the tree, not overlay it: a test file the PR deleted or renamed must not stay on the base (a
           # renamed file would give duplicate TEST_CASE names, a stale one that no longer compiles a false "proven").
           rm -rf base-src/tests
-          cp -a tests base-src/tests
+          # Two commands, not a pipe: the default shell has no pipefail, and a failed `git archive` must fail the step.
+          git archive --format=tar --output=head-tests.tar "$HEAD_SHA" tests
+          tar -x -C base-src -f head-tests.tar
+          rm head-tests.tar
       - name: Let the sanitizers map memory (lower ASLR entropy)
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0'
         run: sudo sysctl -w vm.mmap_rnd_bits=28
