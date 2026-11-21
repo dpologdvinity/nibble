@@ -82,7 +82,7 @@ int32_t Sampler::sample(std::span<const float> logits) {
     throw Error("sampler: got " + std::to_string(logits.size()) + " logits, expected " + std::to_string(n_vocab_));
   const auto better = [&](int32_t a, int32_t b) {
     const float la = key(logits[static_cast<size_t>(a)]), lb = key(logits[static_cast<size_t>(b)]);
-    return la > lb || (la == lb && a < b);
+    return la > lb || (la == lb && a > b);
   };
   int32_t* idx = idx_.data();
   const size_t n = idx_.size();
