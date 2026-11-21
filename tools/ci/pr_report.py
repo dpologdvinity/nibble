@@ -674,8 +674,9 @@ def mark_outdated(gh: GitHub, run_head_sha: str, run_url: str) -> int:
     """Put the outdated banner on the bot's report comment of the open pull request whose head is `run_head_sha`.
 
     Called when the pr-report run for `run_head_sha` left no report. Returns the pull request number, or 0 when there
-    is nothing to mark: no open pull request has that head (a newer push superseded it), the bot has no report
-    comment there, or that comment already describes `run_head_sha`. An earlier banner is replaced, not repeated.
+    is nothing to mark: no open pull request has that head (a newer push superseded it, checked again just before
+    writing), the bot has no report comment there, or that comment already describes `run_head_sha`. An earlier banner
+    is replaced, not repeated.
     """
     number = gh.pr_for_sha(run_head_sha)
     if number is None:
@@ -686,6 +687,10 @@ def mark_outdated(gh: GitHub, run_head_sha: str, run_url: str) -> int:
     found = _HEAD_MARKER.search(body)
     old_head = found.group(1) if found else None
     if old_head == run_head_sha:
+        return 0
+    # The workflow serializes comment jobs per pull request branch; this second look covers a push that landed while
+    # the comment was read, so a newer report is never overwritten with this older body.
+    if gh.pr_for_sha(run_head_sha) != number:
         return 0
     rest = _BANNER.sub("", body)
     if rest.startswith(MARKER):

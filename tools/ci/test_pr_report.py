@@ -18,6 +18,7 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pr_report
 from fakes import FakeGitHub
@@ -650,6 +651,22 @@ class OutdatedTests(unittest.TestCase):
         body = fake.issues[number].comments[0]
         self.assertIn("an earlier commit", body)
         self.assertIn("old numbers", body)
+
+    def test_a_head_that_moves_while_marking_is_left_alone(self) -> None:
+        # Between reading the comment and writing it, a push moved the head (and its report may already be posted):
+        # writing the saved body back would replace that newer report, so nothing is written.
+        fake, number = self.setup_pr()
+        before = list(fake.issues[number].comments)
+        real_find = fake.find_comment
+
+        def find_then_push(n: int, marker: str, author: str) -> str | None:
+            body = real_find(n, marker, author)
+            del fake.prs_by_sha[NEW]  # the pull request's head is now another commit
+            return body
+
+        with mock.patch.object(fake, "find_comment", side_effect=find_then_push):
+            self.assertEqual(pr_report.mark_outdated(fake, NEW, RUN_URL), 0)
+        self.assertEqual(fake.issues[number].comments, before)
 
     def test_cli_outdated_validates_its_inputs(self) -> None:
         fake, number = self.setup_pr()

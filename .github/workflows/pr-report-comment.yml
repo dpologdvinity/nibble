@@ -23,9 +23,12 @@ on:
 
 permissions: {}
 
-# Two runs for the same commit would race to create the comment; the second waits and then edits it.
+# One comment job at a time per pull request branch (the repository and branch the run came from), so a post for one
+# head and an `outdated` mark for another can never interleave their read and write of the same comment; `outdated`
+# also checks the head again just before it writes. Never cancelled; GitHub keeps one pending run per group, and a
+# replaced pending run is always older than the one that replaces it.
 concurrency:
-  group: pr-report-comment-${{ github.event.workflow_run.head_sha }}
+  group: pr-report-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
