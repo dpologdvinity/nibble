@@ -283,6 +283,43 @@ class CliTests(unittest.TestCase):
         self.assertIn("- FAILED: only 1 of the expected 18", (self.dir / "sum.md").read_text())
         self.assertTrue((self.dir / "s.json").exists())
 
+    def test_snapshot_lenient_reports_problems_as_warnings_and_exits_0(self) -> None:
+        log = self.dir / "e2e.log"
+        log.write_text(log_of(("capital", "q4_0", "nan")))
+        code, out = self.run_cli(
+            "snapshot",
+            str(log),
+            "--out",
+            str(self.dir / "s.json"),
+            "--summary",
+            str(self.dir / "sum.md"),
+            "--expected",
+            "18",
+            "--lenient",
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("::warning title=e2e accuracy::only 1 of the expected 18", out)
+        self.assertIn("::warning title=e2e accuracy::non-finite min cosine: q4_0/capital", out)
+        self.assertNotIn("::error", out)
+        self.assertIn("- WARNING: only 1 of the expected 18", (self.dir / "sum.md").read_text())
+        self.assertEqual(list(json.loads((self.dir / "s.json").read_text())), ["q4_0/capital"])
+
+    def test_snapshot_lenient_still_fails_on_an_unreadable_log(self) -> None:
+        code, out = self.run_cli(
+            "snapshot",
+            str(self.dir / "missing.log"),
+            "--out",
+            str(self.dir / "s.json"),
+            "--summary",
+            str(self.dir / "sum.md"),
+            "--expected",
+            "0",
+            "--lenient",
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("::error title=e2e log::", out)
+        self.assertFalse((self.dir / "s.json").exists())
+
     def test_snapshot_non_finite_fails(self) -> None:
         log = self.dir / "e2e.log"
         log.write_text(log_of(("capital", "q4_0", "nan")))

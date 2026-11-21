@@ -8,6 +8,8 @@ Two subcommands replace what used to be inline Python in .github/workflows/night
       in the summary) when fewer than `--expected` results parsed (models or goldens went missing) or any min cosine
       is NaN or infinite. diff_cosines counts NaN == NaN as unchanged, so without the second gate a broken kernel
       would never show up as a change.
+      `--lenient` (the PR report) turns those failures into warnings and exits 0, so the snapshot is always written
+      and the report is built; the workflow then re-runs the strict form on the head to fail the job.
 
   compare CURRENT.json --summary SUMMARY.md --dest DIR [--workflow-file nightly.yml --branch master
                                                          --job accuracy --artifact e2e-cosines]
@@ -217,20 +219,25 @@ def compare_with_baseline(
 
 
 def _snapshot_command(args: argparse.Namespace) -> int:
-    """`snapshot`: write the JSON file and the summary, print `::error::` lines, return 1 on a gate failure."""
+    """`snapshot`: write the JSON file and the summary, print `::error::` lines, return 1 on a gate failure.
+
+    With `--lenient` the gate failures are `::warning::` lines and `- WARNING:` bullets and the exit status is 0; only
+    a log that cannot be read (nothing to write) still returns 1.
+    """
     try:
         snap = build_snapshot(args.log.read_text(encoding="utf-8", errors="replace"), args.expected)
     except (OSError, ValueError) as e:
         print("::error title=e2e log::" + _oneline(str(e)))
         return 1
     args.out.write_text(snapshot_json(snap.runs), encoding="utf-8")
+    label, command = ("WARNING", "warning") if args.lenient else ("FAILED", "error")
     with args.summary.open("a", encoding="utf-8") as out:
         out.write(f"### e2e accuracy\n\n{len(snap.runs)} min-cosine results parsed.\n\n")
         for problem in snap.problems:
-            out.write(f"- FAILED: {problem}\n")
+            out.write(f"- {label}: {problem}\n")
     for problem in snap.problems:
-        print("::error title=e2e accuracy::" + problem)
-    return 1 if snap.problems else 0
+        print(f"::{command} title=e2e accuracy::" + problem)
+    return 1 if snap.problems and not args.lenient else 0
 
 
 def _compare_command(args: argparse.Namespace, gh: GitHub) -> int:
@@ -266,6 +273,11 @@ def main(argv: Sequence[str], *, gh: GitHub | None = None, repo: str | None = No
     snap.add_argument("--out", type=Path, required=True)
     snap.add_argument("--summary", type=Path, required=True)
     snap.add_argument("--expected", type=int, required=True)
+    snap.add_argument(
+        "--lenient",
+        action="store_true",
+        help="report gate failures as warnings and exit 0 (an unreadable log still fails), for the PR report",
+    )
     cmp_ = sub.add_parser("compare", help="diff the snapshot against the previous night's")
     cmp_.add_argument("current", type=Path)
     cmp_.add_argument("--summary", type=Path, required=True)
