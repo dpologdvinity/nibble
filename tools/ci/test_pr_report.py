@@ -331,6 +331,19 @@ class RenderTests(unittest.TestCase):
         self.assertIn("EPYC", text)
         self.assertIn("</details>", text)
 
+    def test_render_reproduction_uses_the_ci_settings(self) -> None:
+        # The steps must reproduce what CI compared: portable builds (a plain Release build turns NIBBLE_NATIVE on),
+        # both models at 1 and all threads with the same rounds, and accuracy on the base as well as the head.
+        text = pr_report.render(make_report())
+        block = text[text.index("```sh") : text.index("```", text.index("```sh") + 5)]
+        self.assertEqual(block.count("-DNIBBLE_NATIVE=OFF"), 2)
+        for model in sorted(pr_report.MODEL_ALLOWLIST):
+            self.assertIn(f"models/{model}", block)
+        self.assertIn('--threads "1,$(nproc)" --rounds 3 --reps 3', block)
+        self.assertIn(f"git worktree add ../nibble-base {BASE}", block)
+        self.assertIn("ctest --test-dir ../nibble-base/build -L e2e", block)
+        self.assertIn("ctest --test-dir build -L e2e", block)
+
     def test_render_verdict_symbols(self) -> None:
         for verdict, symbol in (("faster", "✅"), ("slower", "⚠️"), ("same", "➖"), ("inconclusive", "❔")):
             with self.subTest(verdict=verdict):
