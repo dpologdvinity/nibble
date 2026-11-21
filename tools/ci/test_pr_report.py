@@ -560,7 +560,7 @@ class MainTests(unittest.TestCase):
             self.assertEqual(self.run_main(["post", str(out), "--head-sha", HEAD], fake)[0], 0)
             self.assertIn(MARKER, fake.issues[number].comments[0])
 
-    def snapshot(self, tmp: str, name: str, cosines: Mapping[str, float | str]) -> str:
+    def snapshot(self, tmp: str, name: str, cosines: Mapping[str, float | str | None]) -> str:
         """Write a cosine snapshot in the format the nightly job uploads as `e2e-cosines.json`; return its path."""
         data = {
             key: {"model": key.split("/")[0], "prompt": key.split("/")[1], "min_cos": v, "positions": 8, "agree": 8}
@@ -599,11 +599,32 @@ class MainTests(unittest.TestCase):
                 json.loads(out.read_text(encoding="utf-8")), {"accuracy": {"status": "skipped-cold-cache", "rows": []}}
             )
 
+    def test_accuracy_subcommand_drops_non_finite_cosines_instead_of_failing(self) -> None:
+        # A head whose kernel produces NaN must still get a report (the case shows as removed); the workflow's own
+        # strict `accuracy.py snapshot` gate is what turns the job red.
+        with tempfile.TemporaryDirectory() as tmp:
+            good = self.snapshot(tmp, "good.json", {"q4_0/a": 0.99, "q4_0/b": 0.9})
+            out = Path(tmp, "part.json")
+            for name, value in (("nan.json", "nan"), ("inf.json", "-inf")):
+                with self.subTest(name=name):
+                    bad = self.snapshot(tmp, name, {"q4_0/a": value, "q4_0/b": 0.9})
+                    self.assertEqual(
+                        self.run_main(["accuracy", "--base", good, "--head", bad, "--out", str(out)])[0], 0
+                    )
+                    rows = json.loads(out.read_text(encoding="utf-8"))["accuracy"]["rows"]
+                    self.assertEqual(rows[0], {"key": "q4_0/a", "base": 0.99, "head": None})
+                    self.assertEqual(rows[1], {"key": "q4_0/b", "base": 0.9, "head": 0.9})
+                    self.assertEqual(
+                        self.run_main(["accuracy", "--base", bad, "--head", good, "--out", str(out)])[0], 0
+                    )
+                    rows = json.loads(out.read_text(encoding="utf-8"))["accuracy"]["rows"]
+                    self.assertEqual(rows[0], {"key": "q4_0/a", "base": None, "head": 0.99})
+
     def test_accuracy_subcommand_refuses_bad_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             good = self.snapshot(tmp, "good.json", {"q4_0/a": 0.99})
             out = str(Path(tmp, "part.json"))
-            for name, cosines in (("nan.json", {"q4_0/a": "nan"}), ("inf.json", {"q4_0/a": "-inf"})):
+            for name, cosines in (("junk.json", {"q4_0/a": "junk"}), ("null.json", {"q4_0/a": None})):
                 with self.subTest(name=name):
                     bad = self.snapshot(tmp, name, cosines)
                     code, err = self.run_main(["accuracy", "--base", good, "--head", bad, "--out", out])

@@ -534,12 +534,17 @@ def post(gh: GitHub, r: Report, run_head_sha: str) -> int:
     return number
 
 
+_NON_FINITE = frozenset({"nan", "inf", "-inf"})  # how accuracy.py's snapshot_json writes a non-finite min cosine
+
+
 def _snapshot(path: str) -> dict[str, float]:
     """Read a cosine snapshot, the `e2e-cosines.json` the nightly job writes, as {key: min_cos}.
 
     The file is `{"<model>/<prompt>": {"model", "prompt", "min_cos", "positions", "agree"}, ...}`; a `min_cos` that is
-    not finite is written there as a string ("nan", "inf"). Only `min_cos` is used. A non-finite or non-numeric value
-    is a ValueError naming the case: the schema cannot carry it, and a broken kernel must not pass quietly.
+    not finite is written there as a string ("nan", "inf"). Only `min_cos` is used. A non-finite value (the schema
+    cannot carry one) leaves the case out, so it shows as added or removed instead of the report not being written at
+    all; the workflow's strict `accuracy.py snapshot` gate on the head is what fails the job for it. Any other
+    non-numeric value is a ValueError naming the case.
     """
     raw = _parse(read_limited(path), os.path.basename(path))
     if not isinstance(raw, dict):
@@ -547,9 +552,12 @@ def _snapshot(path: str) -> dict[str, float]:
     cosines: dict[str, float] = {}
     for key, entry in raw.items():
         value = entry.get("min_cos") if isinstance(entry, dict) else None
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-            raise ValueError(f"{os.path.basename(path)}: {_show(key)} has no finite min_cos")
-        cosines[key] = float(value)
+        if isinstance(value, str) and value in _NON_FINITE:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{os.path.basename(path)}: {_show(key)} has no numeric min_cos")
+        if math.isfinite(value):
+            cosines[key] = float(value)
     return cosines
 
 
