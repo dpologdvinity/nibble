@@ -1064,6 +1064,16 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertEqual(stdout.splitlines(), ["fix=false", "code=false"])
 
+    def test_gate_counts_a_rename_out_of_a_code_directory(self) -> None:
+        # Git's rename detection lists only the destination of src/legacy.cpp -> tools/legacy.cpp, which is not code;
+        # the fix still removed a file from src/.
+        body = "int legacy() { return 1; }\n" * 20
+        base = self.commit({"src/legacy.cpp": body}, "feat: base")
+        git(self.repo, "mv", "src/legacy.cpp", "tools-legacy.cpp")
+        head = self.commit({}, "fix: move the legacy code out")
+        code, stdout = self.run_main("gate", "--repo", str(self.repo), "--title", "x", "--base", base, "--head", head)
+        self.assertEqual((code, stdout.splitlines()), (0, ["fix=true", "code=true"]))
+
     def moved_base(self) -> tuple[str, str, str]:
         """(merge base, base branch tip, head) where the base branch gained a test case, a deletion and a src change."""
         src = 'TEST_CASE("keeps") {\n  CHECK(true);\n}\n\nTEST_CASE("master drops") {\n  CHECK(true);\n}\n'

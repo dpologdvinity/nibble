@@ -972,7 +972,9 @@ def run_case(build_dir: Path, results_dir: Path, index: int, case: Case, timeout
 def _cmd_gate(args: argparse.Namespace) -> int:
     base, head = _check_ref(args.base), _check_ref(args.head)
     subjects = _git(args.repo, "log", "--format=%s", f"{base}..{head}").split("\n")
-    names = [p for p in _git(args.repo, "diff", "--name-only", "-z", f"{base}...{head}").split("\0") if p]
+    # --no-renames: a rename lists only its destination, so moving src/x.cpp to tools/ would not count as code.
+    diff = _git(args.repo, "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}")
+    names = [p for p in diff.split("\0") if p]
     print(f"fix={str(is_fix(args.title, subjects)).lower()}")
     print(f"code={str(touches_code(names)).lower()}")
     return 0
