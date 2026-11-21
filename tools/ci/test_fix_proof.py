@@ -225,7 +225,8 @@ class TestCasesTests(unittest.TestCase):
         self.assertEqual((u.start, u.end), (1, 2))
 
     def test_real_repository_files(self) -> None:
-        # Every real test file parses; only the E2E_CASE macro (tests/test_e2e_golden.cpp) has an unnamed case.
+        # Every real test file parses, and the E2E_CASE macro (tests/test_e2e_golden.cpp) is an unnamed case. Other
+        # unnamed cases may come (a SCENARIO is valid Catch2, unresolved by design), so it need not be the only one.
         files = sorted((REPO_ROOT / "tests").glob("*.cpp"))
         self.assertTrue(files)
         unnamed: list[str] = []
@@ -236,8 +237,8 @@ class TestCasesTests(unittest.TestCase):
                 total += 1
                 if c.name is None:
                     unnamed.append(rel)
-        self.assertGreater(total, 100)
-        self.assertEqual(unnamed, ["tests/test_e2e_golden.cpp"])
+        self.assertGreater(total - len(unnamed), 100)
+        self.assertIn("tests/test_e2e_golden.cpp", unnamed)
         # Every span of the real files ends on its body's closing brace, before the next case (no fallback).
         for path in files:
             text = path.read_text(encoding="utf-8")
