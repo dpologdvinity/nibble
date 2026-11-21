@@ -185,7 +185,8 @@ re-run it.
 1. In a release-prep pull request, regenerate the changelog with [git-cliff](https://git-cliff.org) (`cliff.toml`):
    `git cliff --tag vX.Y.Z -o CHANGELOG.md`. It turns the "Unreleased" section into the dated `vX.Y.Z` section; read
    the diff, then merge.
-2. Tag that merge commit and push the tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+2. Tag that merge commit and push the tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. Only the owner
+   can: `release.yml` stops at its first job when anyone else (the Claude app included) pushed the tag or re-ran it.
 3. `release.yml` runs the whole `ci.yml` suite on the tag, fails if CHANGELOG.md has no `## [vX.Y.Z]` section, and
    otherwise creates a draft release with the tarballs, their SPDX SBOMs and attestations, and pushes the image to
    ghcr.io. The owner publishes the draft. The README shows how to verify a download with `gh attestation verify`.
