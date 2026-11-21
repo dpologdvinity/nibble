@@ -216,6 +216,135 @@ class LineChartTest(unittest.TestCase):
         fine = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.995), (T0 + DAY, 1.0)])], y_min=0.99)
         self.assertNotIn("Hollow", fine)
 
+    def test_line_chart_y_max_caps_the_axis(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 90.0), (T0 + DAY, 96.3)])], y_max=100)
+        self.assertEqual(self.y_labels(svg), ["0", "20", "40", "60", "80", "100"])
+        self.assertNotIn("Hollow", svg)
+
+    def test_line_chart_y_max_is_a_fixed_axis_top(self) -> None:
+        # A percentage reads best on a fixed 0-100 scale, however low the data sits.
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 20.0), (T0 + DAY, 30.0)])], y_max=100)
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertEqual(labels[0], 0.0)
+        self.assertEqual(labels[-1], 100.0)
+        self.assertEqual(len({round(b - a, 9) for a, b in zip(labels, labels[1:], strict=False)}), 1)  # even
+
+    def test_line_chart_capped_negative_axis_labels_sit_on_their_values(self) -> None:
+        # Regression: the grid origin came from the pre-cap step, so ticks -0.4, 4.6, 9.6 were labelled 0, 5, 10.
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, -0.3), (T0 + DAY, 0.5)])], y_max=10)
+        cy = [float(c) for c in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)]
+        slope = (cy[1] - cy[0]) / 0.8  # pixels per unit, from the two plotted points
+        ticks = [
+            (float(v), float(y))
+            for y, v in re.findall(r'<text x="[\d.]+" y="([\d.]+)"[^>]*text-anchor="end"[^>]*>([^<]*)</text>', svg)
+        ]
+        self.assertGreaterEqual(len(ticks), 3)
+        values = [v for v, _ in ticks]
+        step = values[1] - values[0]
+        for v, text_y in ticks:
+            self.assertAlmostEqual(text_y - 4, cy[1] + slope * (v - 0.5), delta=0.2, msg=f"label {v}")
+            self.assertAlmostEqual(v / step, round(v / step), msg=f"{v} is not a multiple of {step}")  # on the grid
+        self.assertLessEqual(values[-1], 10.0)
+        self.assertGreater(values[-1] + step, 10.0)  # the top tick is the last one on the grid within y_max
+        self.assertLessEqual(values[0], -0.3)  # the axis still reaches the lowest point
+        self.assertIn(0.0, values)
+
+    def test_line_chart_negative_cap_at_or_below_the_data_still_renders(self) -> None:
+        # Regression: a cap equal to the lowest value made the realigned span 0 (math domain error), and a cap
+        # below it made the span negative. Points above the cap are drawn hollow on the top edge.
+        cases = [
+            ([-0.375, 0.5], -0.375),  # cap == lowest value
+            ([-0.375, 0.5], -0.38),  # cap just below it
+            ([-0.1, -0.05], -0.375),  # every point above a negative cap
+            ([-0.1, -0.05], -0.5),
+        ]
+        for values, cap in cases:
+            pts = [(T0 + i * DAY, v) for i, v in enumerate(values)]
+            svg = plot.line_chart("t", "y", [("a", "#000", pts)], y_max=cap)
+            labels = [float(v) for v in self.y_labels(svg)]
+            self.assertGreaterEqual(len(labels), 2, (values, cap))
+            self.assertLessEqual(max(labels), cap + 1e-9, (values, cap))  # no tick above the cap
+            step = labels[1] - labels[0]
+            self.assertGreater(step, 0, (values, cap))
+            self.assertGreater(labels[-1] + step, cap - 1e-9, (values, cap))  # the top tick is the last on the grid
+            hollow = len(re.findall(r'<circle [^>]*fill="white"', svg))
+            self.assertEqual(hollow, sum(v > cap for v in values), (values, cap))
+            self.assertEqual("above the axis maximum" in svg, hollow > 0, (values, cap))
+            for c in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg):
+                self.assertTrue(40 <= float(c) <= 400, (values, cap, c))
+
+    def test_line_chart_y_max_is_the_top_with_y_min_and_negative_data(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.991), (T0 + DAY, 0.992)])], y_min=0.99, y_max=1.0)
+        self.assertEqual(self.y_labels(svg)[-1], "1.000")
+        neg = plot.line_chart("t", "y", [("a", "#000", [(T0, -10.0), (T0 + DAY, -3.0)])], y_max=20.0)
+        labels = [float(v) for v in self.y_labels(neg)]
+        self.assertLessEqual(max(labels), 20.0)
+        self.assertGreaterEqual(
+            max(labels), 20.0 - (labels[1] - labels[0])
+        )  # the top tick sits at the top edge or one step below
+        cy = [float(c) for c in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', neg)]
+        self.assertTrue(all(40 <= c <= 400 for c in cy))
+
+    def test_line_chart_y_max_with_y_min(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.9995), (T0 + DAY, 1.0)])], y_min=0.99, y_max=1.0)
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertEqual(labels[0], 0.99)
+        self.assertLessEqual(max(labels), 1.0)
+
+    def test_line_chart_y_max_with_uneven_cap_has_no_tick_above_it(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 60.0), (T0 + DAY, 66.0)])], y_max=70)
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertLessEqual(max(labels), 70.0)
+        self.assertEqual(len({round(a - b, 9) for a, b in zip(labels[1:], labels, strict=False)}), 1)
+
+    def test_line_chart_points_above_y_max_are_hollow_on_the_top_edge(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 50.0), (T0 + DAY, 130.0)])], y_max=100)
+        self.assertEqual(self.y_labels(svg)[-1], "100")
+        self.assertIn("Hollow = above the axis maximum (100)", svg)
+        self.assertNotIn("below", svg)
+        self.assertEqual(len(re.findall(r'<circle [^>]*fill="white"', svg)), 1)
+        for cy in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg):
+            self.assertTrue(40 <= float(cy) <= 400, cy)  # inside the plot area (top 40, bottom 460 - 60)
+
+    def test_line_chart_points_outside_both_bounds_name_both(self) -> None:
+        pts = [(T0, 0.5), (T0 + DAY, 0.995), (T0 + 2 * DAY, 1.5)]
+        svg = plot.line_chart("t", "y", [("a", "#000", pts)], y_min=0.99, y_max=1.0)
+        self.assertIn("below the axis minimum (0.99)", svg)
+        self.assertIn("above the axis maximum (1)", svg)
+
+    def test_line_chart_without_y_max_never_flags_points_above_the_axis(self) -> None:
+        # Float noise can leave the nice top a hair below the highest point; callers that set no maximum
+        # must see the old drawing (solid dot, no footnote), not a "Hollow = above the axis maximum" note.
+        for v in (1.0000000000000002, 1.000000000001):
+            svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.995), (T0 + DAY, v)])], y_min=0.99)
+            self.assertNotIn("Hollow", svg, v)
+            self.assertEqual(len(re.findall(r'<circle [^>]*fill="white"', svg)), 0, v)
+
+    def test_line_chart_all_points_above_y_max(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 150.0), (T0 + DAY, 160.0)])], y_max=100)
+        self.assertEqual(self.y_labels(svg)[-1], "100")
+        self.assertEqual(len(re.findall(r'<circle [^>]*fill="white"', svg)), 2)
+        self.assertIn("Hollow = above the axis maximum (100)", svg)
+        self.assertEqual(set(re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)), {"40.0"})  # the top edge
+
+    def test_line_chart_validates_y_max_even_without_data(self) -> None:
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [], y_max=0.0)  # the axis would start at 0
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [], y_min=1.0, y_max=0.5)
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [], y_min=1.0, y_max=1.0)  # an empty chart must not hide a bad pair
+
+    def test_line_chart_rejects_bad_y_max(self) -> None:
+        one = [("a", "#000", [(T0, 1.0)])]
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaisesRegex(ValueError, "y_max"):
+                plot.line_chart("t", "y", one, y_max=bad)
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", one, y_min=1.0, y_max=1.0)
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [("a", "#000", [(T0, 5.0)])], y_max=0.0)  # the axis starts at 0
+
     def test_line_chart_default_axis_starts_at_zero(self) -> None:
         svg = plot.line_chart("t", "y", self.two_series())
         self.assertIn(">0</text>", svg)
