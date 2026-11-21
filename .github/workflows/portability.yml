@@ -117,7 +117,8 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: arm64
-      status: ${{ needs.arm64.outputs.status || needs.arm64.result }}
+      # A cancel can land after the job recorded its status (in post-step cleanup), so a cancelled result wins.
+      status: ${{ needs.arm64.result == 'cancelled' && 'cancelled' || needs.arm64.outputs.status || needs.arm64.result }}
       area: build
 
   newest-gcc:
@@ -203,7 +204,7 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: newest-gcc
-      status: ${{ needs.newest-gcc.outputs.status || needs.newest-gcc.result }}
+      status: ${{ needs.newest-gcc.result == 'cancelled' && 'cancelled' || needs.newest-gcc.outputs.status || needs.newest-gcc.result }}
       area: build
 
   newest-clang:
@@ -285,7 +286,7 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: newest-clang
-      status: ${{ needs.newest-clang.outputs.status || needs.newest-clang.result }}
+      status: ${{ needs.newest-clang.result == 'cancelled' && 'cancelled' || needs.newest-clang.outputs.status || needs.newest-clang.result }}
       area: build
 
   simd-off-portable:
@@ -354,5 +355,5 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: simd-off-portable
-      status: ${{ needs.simd-off-portable.outputs.status || needs.simd-off-portable.result }}
+      status: ${{ needs.simd-off-portable.result == 'cancelled' && 'cancelled' || needs.simd-off-portable.outputs.status || needs.simd-off-portable.result }}
       area: build
