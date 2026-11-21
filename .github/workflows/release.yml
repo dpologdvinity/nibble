@@ -7,7 +7,8 @@
 # Verify a download with: gh attestation verify nibble-<tag>-linux-x86_64.tar.gz -R dpologdvinity/nibble
 #
 # Only the repository owner releases: the first job fails unless both the tag's pusher (github.actor) and whoever started
-# this attempt (github.triggering_actor, which differs on a re-run) are the owner. A push by the Claude GitHub App, a
+# this attempt (github.triggering_actor, which differs on a re-run) are the owner, and the publishing jobs (package,
+# attest, release) skip unless the same holds, since a re-run of failed jobs does not run the first job again. A push by the Claude GitHub App, a
 # collaborator or a token that leaked from an agent session therefore builds, pushes and signs nothing. A tag ruleset
 # that lets only the owner create `v*` tags is the first line; this check is the second.
 #
@@ -75,8 +76,12 @@ jobs:
     permissions:
       contents: read
 
+  # Every job that publishes (pushes the image, signs, drafts the release) checks the actors again itself: a re-run of
+  # failed jobs keeps the changelog job's earlier success without running its check, and runs as whoever re-ran it.
+  # success() keeps the default "only after the needed jobs passed", which a custom `if:` would otherwise replace.
   package:
     needs: verify
+    if: success() && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     uses: ./.github/workflows/package.yml
     permissions:
       contents: read
@@ -90,6 +95,7 @@ jobs:
     # package.yml with read-only permissions and a called workflow cannot ask for more than its caller grants.
     name: attest artifacts
     needs: package
+    if: success() && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -174,6 +180,7 @@ jobs:
   release:
     name: draft release
     needs: [attest, changelog]
+    if: success() && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
