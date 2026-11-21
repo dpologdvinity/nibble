@@ -92,7 +92,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow portability --job arm64 --outcome "$JOB_STATUS" --source portability --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-arm64
           path: rows.jsonl
@@ -181,7 +181,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow portability --job newest-gcc --outcome "$JOB_STATUS" --source portability --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-newest-gcc
           path: rows.jsonl
@@ -263,7 +263,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow portability --job newest-clang --outcome "$JOB_STATUS" --source portability --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-newest-clang
           path: rows.jsonl
@@ -332,7 +332,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow portability --job simd-off-portable --outcome "$JOB_STATUS" --source portability --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-simd-off-portable
           path: rows.jsonl

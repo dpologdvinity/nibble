@@ -61,7 +61,7 @@ jobs:
             exit 1
           fi
           cat notes.md
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
           path: notes.md
@@ -169,7 +169,7 @@ jobs:
           subject-digest: ${{ env.IMAGE_DIGEST }}
           sbom-path: sbom/nibble-${{ github.ref_name }}-container-image.spdx.json
           push-to-registry: true
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Named like the tarball artifacts so the release job's "nibble-<tag>-*" download picks it up.
           name: nibble-${{ github.ref_name }}-sbom
