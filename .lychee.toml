@@ -1,0 +1,16 @@
+# lychee settings for the weekly link check (.github/workflows/link-check.yml) and for running it by hand:
+#   lychee --config .lychee.toml README.md ARCHITECTURE.md CONTRIBUTING.md SECURITY.md docs
+
+# 206: servers that answer a range request; 429: a rate limit means the site is up, not that the link is broken.
+accept = [200, 206, 429]
+max_retries = 3
+timeout = 20
+no_progress = true
+
+exclude = [
+  # Local servers in examples, never reachable from a runner.
+  '^https?://localhost',
+  '^https?://127\.0\.0\.1',
+  # Model downloads: each one redirects to a multi-gigabyte file on a CDN, which a link check should not fetch.
+  'huggingface\.co/.*/resolve/',
+]
