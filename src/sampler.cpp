@@ -20,7 +20,7 @@ std::string fmt(float v) {
 }
 }  // namespace
 
-// Standard splitmix64 (Vigna): used both to expand a user seed into generator state and to derive per-call seeds.
+// (demo) splitmix64 (Vigna): used both to expand a user seed into generator state and to derive per-call seeds.
 uint64_t splitmix64(uint64_t& x) {
   uint64_t z = (x += 0x9E3779B97F4A7C15ULL);
   z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
