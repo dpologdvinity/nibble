@@ -15,6 +15,7 @@ Rows without a "model" (the hand-recorded dispatch-empty timings) are left out.
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import html
 import json
@@ -28,6 +29,7 @@ from typing import Any
 
 Row = dict[str, Any]  # one JSONL measurement row
 Block = tuple[float, float, float, bool]  # (llama.cpp/nibble ratio, nibble tok/s, llama.cpp tok/s, noisy)
+Series = tuple[str, str, Sequence[tuple[float, float]]]  # (label, colour, [(x = unix seconds, y = value)])
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOISY = 2.0
@@ -224,9 +226,9 @@ class Svg:
             f'stroke="{colour}" stroke-width="2"/>'
         )
 
-    def dot(self, x: float, y: float, colour: str, hollow: bool) -> None:
+    def dot(self, x: float, y: float, colour: str, hollow: bool, r: float = 5) -> None:
         fill = "white" if hollow else colour
-        self.add(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{fill}" stroke="{colour}" stroke-width="2"/>')
+        self.add(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{r:g}" fill="{fill}" stroke="{colour}" stroke-width="2"/>')
 
     def legend(self, x: float, y: float, items: Sequence[tuple[str, str]]) -> None:
         """Colour swatches with labels, one per line."""
@@ -341,6 +343,130 @@ def ladder(data: dict[str, list[Row]]) -> str:
         )
     )
     svg.note(NOISE_NOTE)
+    return str(svg)
+
+
+DAY = 86400  # seconds
+MAX_DATE_TICKS = 8  # about 80 px per "YYYY-MM-DD" label on the 650 px wide plot area
+TICK_STEPS_DAYS = (1, 2, 3, 7, 14, 30, 60, 90, 180, 365)
+MIN_TIME, MAX_TIME = -62135596800.0, 253402300799.0  # unix seconds of 0001-01-01 and 9999-12-31 23:59:59 UTC
+
+
+def date_label(t: float) -> str:
+    """'YYYY-MM-DD' (UTC) of a unix time; a time outside years 1 to 9999 (or not finite) is shown as a number."""
+    if not MIN_TIME <= t <= MAX_TIME:
+        return f"{t:g}"
+    return datetime.datetime.fromtimestamp(t, tz=datetime.UTC).strftime("%Y-%m-%d")
+
+
+def date_ticks(lo: float, hi: float) -> list[float]:
+    """Unix times of UTC midnights inside [lo, hi], at most MAX_DATE_TICKS of them, spaced a whole number of days
+    (the smallest of TICK_STEPS_DAYS that fits, then whole years). A range holding no midnight (a single point,
+    or a few hours) gets one tick at its centre, which date_label() names by the day the data falls on. The work is
+    proportional to the number of ticks, not to the span."""
+    first = math.ceil(lo / DAY)  # day number of the first midnight at or after lo
+    last = math.floor(hi / DAY)  # ... and of the last one at or before hi
+    days = last - first + 1
+    if days < 1:
+        return [(lo + hi) / 2]
+    widest = TICK_STEPS_DAYS[-1]  # beyond this, whole multiples of a year
+    step = next(
+        (d for d in TICK_STEPS_DAYS if (days - 1) // d + 1 <= MAX_DATE_TICKS),
+        widest * (1 + (days - 1) // (widest * MAX_DATE_TICKS)),
+    )
+    start = -(-first // step) * step  # the first multiple of step at or after `first`
+    return [float(d * DAY) for d in range(start, last + 1, step)] or [float(first * DAY)]
+
+
+def nice_step(span: float, max_steps: int = 5) -> float:
+    """The smallest 1, 2 or 5 times a power of ten that covers `span` in at most `max_steps` steps."""
+    p = 10 ** math.floor(math.log10(span / max_steps))
+    return float(next(m * p for m in (1, 2, 5, 10) if span <= m * p * max_steps * (1 + 1e-9)))
+
+
+def tick_label(v: float, step: float) -> str:
+    """v with as many decimals as `step` has (a 1, 2 or 5 times a power of ten), so every tick label of an axis
+    is formatted alike: 0.990, 0.992, ... or 0, 40, 80."""
+    decimals = max(0, -math.floor(math.log10(step) + 1e-9))
+    text = f"{v:.{decimals}f}"
+    return f"{0.0:.{decimals}f}" if float(text) == 0 else text  # never "-0" or "-0.0"
+
+
+def line_chart(title: str, y_label: str, series: Sequence[Series], y_min: float | None = None) -> str:
+    """Time-series line chart: one polyline per (label, colour, points) series with the points marked, a legend on
+    the right and 'YYYY-MM-DD' ticks on the x axis. x is unix seconds, y the value.
+
+    The y axis starts at 0 (or at the first tick below the data, for negative data), or at `y_min` when given
+    (cosine charts pass 0.99; a non-finite `y_min` raises ValueError). A point below `y_min` is drawn hollow on
+    the bottom edge rather than off the chart. Points that are not finite, or whose x is not a date in years 1 to
+    9999 (say, milliseconds instead of seconds), are ignored. With no points at all the chart says "no data yet";
+    a series without points keeps its legend entry.
+    """
+    if y_min is not None and not math.isfinite(y_min):
+        raise ValueError(f"y_min must be finite, got {y_min}")
+    w, h, left, right, top, bottom = 900, 460, 70, 190, 40, 60
+    svg = Svg(w, h, title)
+    pts = [
+        (label, colour, sorted(p for p in points if MIN_TIME <= p[0] <= MAX_TIME and math.isfinite(p[1])))
+        for label, colour, points in series
+    ]
+    svg.legend(w - right + 15, top + 20, [(label, colour) for label, colour, _ in pts])
+    xs = [x for _, _, p in pts for x, _ in p]
+    ys = [y for _, _, p in pts for _, y in p]
+    if not xs:
+        svg.add(
+            svg.text(
+                left + (w - left - right) / 2,
+                top + (h - top - bottom) / 2,
+                "no data yet",
+                size=13,
+                anchor="middle",
+                fill="#555",
+            )
+        )
+        return str(svg)
+    vmax = max(ys)
+    if y_min is not None:  # nice ticks from y_min up to the first tick at or above the highest point
+        lo = y_min
+        step = nice_step(max(vmax - lo, abs(lo) * 0.01) or 1.0)
+        hi = lo + step * max(1, math.ceil((vmax - lo) / step - 1e-9))
+        first_tick = lo
+    elif min(ys) < 0:  # negative data: nice ticks on a floor-aligned grid that includes 0
+        step = nice_step(max(vmax, 0.0) - min(ys))
+        k0 = math.floor(min(ys) / step + 1e-9)
+        k1 = max(k0 + 1, math.ceil(max(vmax, 0.0) / step - 1e-9))
+        lo, hi, first_tick = k0 * step, k1 * step, k0 * step
+    else:
+        lo = 0.0
+        hi = nice_max(vmax * 1.1) if vmax > 0 else 1.0
+        step = hi / 5
+        first_tick = lo
+    ph = h - top - bottom
+    y_of: Callable[[float], float] = lambda v: top + ph * (1 - (v - lo) / (hi - lo))
+    ticks = [first_tick + step * i for i in range(round((hi - lo) / step) + 1)]
+    y_axis(svg, left, w - right, y_of, ticks, lambda v: tick_label(v, step))
+    x_lo, x_hi = min(xs), max(xs)
+    if x_lo == x_hi:  # a single instant: centre it in a one-day window
+        x_lo, x_hi = x_lo - DAY / 2, x_hi + DAY / 2
+    pad = 10  # keeps the first and last markers inside the plot area
+    x_of: Callable[[float], float] = lambda t: left + pad + (t - x_lo) / (x_hi - x_lo) * (w - left - right - 2 * pad)
+    for t in date_ticks(x_lo, x_hi):
+        x = x_of(t)
+        svg.line(x, top + ph, x, top + ph + 4, stroke="#888")
+        svg.add(svg.text(x, top + ph + 18, date_label(t), size=10, anchor="middle"))
+    clamped = False
+    for _label, colour, p in pts:
+        if not p:
+            continue
+        xy = [(x_of(x), y_of(max(y, lo)), y < lo) for x, y in p]
+        clamped = clamped or any(off for *_, off in xy)
+        d = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in xy)
+        svg.add(f'<polyline points="{d}" fill="none" stroke="{colour}" stroke-width="1.5"/>')
+        for x, y, off in xy:
+            svg.dot(x, y, colour, off, r=3)
+    svg.add(svg.text(left - 55, top + ph / 2, y_label, anchor="middle", rotate=-90))
+    if clamped:
+        svg.note(f"Hollow = below the axis minimum ({y_min:g}), drawn on the bottom edge.")
     return str(svg)
 
 

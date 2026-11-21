@@ -88,6 +88,16 @@ class ValidateTests(unittest.TestCase):
     def test_accepts_good_row(self) -> None:
         self.assertEqual(dashboard_data.validate(good_row()), good_row())
 
+    def test_validate_rejects_dates_that_are_not_on_the_calendar(self) -> None:
+        for bad in ("2026-02-30T03:17:00Z", "2026-13-01T03:17:00Z", "2026-11-21T24:00:00Z", "2026-11-21T03:61:00Z"):
+            with self.subTest(date=bad), self.assertRaisesRegex(ValueError, "date"):
+                dashboard_data.validate(good_row(date=bad))
+        dashboard_data.validate(good_row(date="2028-02-29T23:59:59Z"))  # a real leap day is fine
+
+    def test_merge_rejects_a_new_row_with_an_impossible_date(self) -> None:
+        with self.assertRaisesRegex(ValueError, "date"):
+            dashboard_data.merge("", [good_row(date="2026-02-30T03:17:00Z")])
+
     def test_validate_rejects_nan_and_long_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "value"):
             dashboard_data.validate(good_row(value=math.nan))
@@ -265,6 +275,36 @@ class MergeTests(unittest.TestCase):
         merged = dashboard_data.merge(merged, [dashboard_data.status_row("nightly", "a", True, other_run)])
         self.assertEqual(len(merged.splitlines()), 2)
 
+    def test_merge_later_status_of_the_same_run_replaces_the_failed_attempt(self) -> None:
+        # "Re-run failed jobs" keeps GITHUB_RUN_ID and uploads again: the new attempt's row has the same identity.
+        failed = dashboard_data.status_row("nightly", "a", False, META)
+        rerun_meta = Meta("2026-11-21T09:00:00Z", SHA, "nightly", META.runner, META.run_id)
+        passed = dashboard_data.status_row("nightly", "a", True, rerun_meta)
+        merged = dashboard_data.merge(dashboard_data.merge("", [failed]), [passed])
+        self.assertEqual(
+            [(r["value"], r["date"]) for r in map(json.loads, merged.splitlines())], [(1.0, rerun_meta.date)]
+        )
+        # Idempotent: merging the same re-run row again changes nothing.
+        self.assertEqual(dashboard_data.merge(merged, [passed]), merged)
+        # And an older row (a stale artifact seen late) never replaces a newer one, whatever the order of arrival.
+        self.assertEqual(dashboard_data.merge(merged, [failed]), merged)
+        self.assertEqual(dashboard_data.merge("", [passed, failed]), merged)
+
+    def test_merge_replacing_a_status_keeps_its_place_in_the_file(self) -> None:
+        a, b = self.rows()
+        rerun_meta = Meta("2026-11-21T09:00:00Z", SHA, "nightly", META.runner, META.run_id)
+        merged = dashboard_data.merge(
+            dashboard_data.merge("", [a, b]), [dashboard_data.status_row("nightly", "a", False, rerun_meta)]
+        )
+        got = [(r["key"], r["value"]) for r in map(json.loads, merged.splitlines())]
+        self.assertEqual(got, [("nightly/a", 0.0), ("nightly/b", 0.0)])
+
+    def test_merge_other_metrics_stay_first_wins_even_with_a_later_date(self) -> None:
+        first = good_row(value=1.0)
+        later = good_row(value=2.0, date="2026-11-22T00:00:00Z")
+        merged = dashboard_data.merge(dashboard_data.merge("", [first]), [later])
+        self.assertEqual([json.loads(line)["value"] for line in merged.splitlines()], [1.0])
+
     def test_merge_rejects_an_invalid_new_row_and_bad_existing_json(self) -> None:
         with self.assertRaisesRegex(ValueError, "value"):
             dashboard_data.merge("", [good_row(value=math.nan)])
@@ -395,6 +435,77 @@ class CliTests(unittest.TestCase):
             )
             self.assertEqual(code, 1)
             self.assertIn("dashboard_data:", err)
+
+    def merge_with_skip_bad(self, d: Path, *names: str, summary: Path | None = None) -> tuple[int, str]:
+        """Run `merge --skip-bad` over files in `d` (an empty existing file first); return (exit code, stderr)."""
+        (d / "existing.jsonl").write_text("")
+        env = dict(self.ENV) | ({"GITHUB_STEP_SUMMARY": str(summary)} if summary else {})
+        err = io.StringIO()
+        argv = [
+            "merge",
+            str(d / "existing.jsonl"),
+            *(str(d / n) for n in names),
+            "--out",
+            str(d / "o.jsonl"),
+            "--skip-bad",
+        ]
+        with contextlib.redirect_stderr(err):
+            code = dashboard_data.main(argv, env=env, cpuinfo=CPUINFO_X86, now=self.NOW)
+        return code, err.getvalue()
+
+    def test_merge_cli_skip_bad_merges_the_good_file_and_warns_about_the_bad_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "good.jsonl").write_text(dashboard_data.merge("", [good_row(key="good")]))
+            # The bad file starts with a valid row: it must not be merged partially.
+            (d / "9-dashboard-rows-bad.jsonl").write_text(json.dumps(good_row(key="half")) + '\n{"schema":1}\n')
+            summary = d / "summary.md"
+            code, err = self.merge_with_skip_bad(d, "good.jsonl", "9-dashboard-rows-bad.jsonl", summary=summary)
+            self.assertEqual(code, 0)
+            self.assertEqual([json.loads(x)["key"] for x in (d / "o.jsonl").read_text().splitlines()], ["good"])
+            self.assertIn("::warning", err)
+            self.assertIn("9-dashboard-rows-bad.jsonl", err)
+            self.assertIn("line 2", err)
+            self.assertIn("9-dashboard-rows-bad.jsonl", summary.read_text())
+
+    def test_merge_cli_skip_bad_with_only_bad_files_merges_nothing_and_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "a.jsonl").write_text("not json\n")
+            (d / "b.jsonl").write_bytes(b"\xff\xfe\n")  # not even UTF-8
+            code, err = self.merge_with_skip_bad(d, "a.jsonl", "b.jsonl", "missing.jsonl")
+            self.assertEqual(code, 0)
+            self.assertEqual((d / "o.jsonl").read_text(), "")
+            self.assertEqual(err.count("::warning"), 3)
+
+    def test_merge_cli_skip_bad_skips_files_that_overflow_or_nest_too_deeply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "good.jsonl").write_text(dashboard_data.merge("", [good_row(key="good")]))
+            huge = json.dumps(good_row()).replace('"value": 1234.0', '"value": ' + "9" * 400)
+            self.assertIn("9" * 400, huge)
+            (d / "huge.jsonl").write_text(huge + "\n")  # an integer too big for a float: isfinite() overflows
+            (d / "deep.jsonl").write_text("[" * 100000 + "\n")  # JSON nested deeper than Python's recursion limit
+            code, err = self.merge_with_skip_bad(d, "good.jsonl", "huge.jsonl", "deep.jsonl")
+            self.assertEqual(code, 0)
+            self.assertEqual([json.loads(x)["key"] for x in (d / "o.jsonl").read_text().splitlines()], ["good"])
+            self.assertEqual(err.count("::warning"), 2)
+
+    def test_validate_rejects_a_huge_integer_value_as_a_value_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "value"):
+            dashboard_data.validate(good_row(value=10**400))
+
+    def test_merge_cli_skip_bad_still_fails_on_a_broken_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "new.jsonl").write_text(dashboard_data.merge("", [good_row()]))
+            code, _ = self.merge_with_skip_bad(d, "new.jsonl")  # baseline: fine
+            self.assertEqual(code, 0)
+            (d / "existing.jsonl").write_text("garbage\n")
+            err = io.StringIO()
+            argv = ["merge", str(d / "existing.jsonl"), str(d / "new.jsonl"), "--out", str(d / "o.jsonl"), "--skip-bad"]
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(dashboard_data.main(argv, env=self.ENV, cpuinfo=CPUINFO_X86, now=self.NOW), 1)
 
     def test_bad_input_exits_1_with_a_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

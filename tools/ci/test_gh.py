@@ -221,6 +221,51 @@ class RunLookupTests(unittest.TestCase):
                 self.assertEqual(len(runner.calls), 1)  # no download attempted
 
 
+class RecentRunsTests(unittest.TestCase):
+    """list_recent_runs and list_artifact_names: what the dashboard sweep asks about."""
+
+    def test_list_recent_runs_reads_every_page_with_the_fields_the_sweep_filters_on(self) -> None:
+        def run(run_id: int, event: str, repo: str, created: str) -> dict[str, object]:
+            return {"id": run_id, "event": event, "head_repository": {"full_name": repo}, "created_at": created}
+
+        page1 = json.dumps({"workflow_runs": [run(3, "schedule", REPO, "2026-11-21T03:17:00Z")]})
+        page2 = json.dumps({"workflow_runs": [run(2, "pull_request", "fork/nibble", "2026-11-20T01:00:00Z")]})
+        runner = ScriptedRunner({"workflows/nightly.yml/runs": page1 + page2})
+        runs = gh.GhCli(REPO, runner).list_recent_runs("nightly.yml", "master", "2026-11-14")
+        self.assertEqual(
+            runs,
+            [
+                gh.RunInfo(3, "schedule", REPO, "2026-11-21T03:17:00Z"),
+                gh.RunInfo(2, "pull_request", "fork/nibble", "2026-11-20T01:00:00Z"),
+            ],
+        )
+        argv = runner.calls[0][0]
+        self.assertIn("--paginate", argv)
+        self.assertEqual(
+            argv[-1],
+            f"repos/{REPO}/actions/workflows/nightly.yml/runs?branch=master&status=completed"
+            "&created=%3E%3D2026-11-14&per_page=100",
+        )
+
+    def test_list_recent_runs_tolerates_a_missing_head_repository(self) -> None:
+        # GitHub leaves head_repository null when the fork behind a pull request was deleted.
+        body = json.dumps(
+            {"workflow_runs": [{"id": 1, "event": "pull_request", "head_repository": None, "created_at": "x"}]}
+        )
+        runs = gh.GhCli(REPO, ScriptedRunner({"/runs": body})).list_recent_runs("ci.yml", "master", "2026-11-14")
+        self.assertEqual(runs, [gh.RunInfo(1, "pull_request", "", "x")])
+
+    def test_list_artifact_names_skips_expired_ones_and_reads_every_page(self) -> None:
+        page1 = json.dumps(
+            {"artifacts": [{"name": "dashboard-rows-a", "expired": False}, {"name": "old", "expired": True}]}
+        )
+        page2 = json.dumps({"artifacts": [{"name": "dashboard-rows-b", "expired": False}]})
+        runner = ScriptedRunner({"runs/9/artifacts": page1 + page2})
+        self.assertEqual(gh.GhCli(REPO, runner).list_artifact_names(9), ["dashboard-rows-a", "dashboard-rows-b"])
+        self.assertIn("--paginate", runner.calls[0][0])
+        self.assertEqual(runner.calls[0][0][-1], f"repos/{REPO}/actions/runs/9/artifacts?per_page=100")
+
+
 class BranchTipTests(unittest.TestCase):
     def test_branch_tip_reads_the_commit_sha(self) -> None:
         runner = ScriptedRunner({"branches/master": json.dumps({"name": "master", "commit": {"sha": "abc123"}})})
@@ -301,6 +346,21 @@ class FakeGitHubTests(unittest.TestCase):
             self.assertTrue(fake.download_artifact(3, "snap", Path(tmp) / "d"))
             self.assertEqual((Path(tmp) / "d" / "a.json").read_text(), "{}")
             self.assertFalse(fake.download_artifact(3, "nope", Path(tmp) / "e"))
+
+    def test_fake_recent_runs_filter_by_creation_date_and_list_artifact_names(self) -> None:
+        fake = FakeGitHub()
+        old = gh.RunInfo(1, "schedule", REPO, "2026-11-01T03:00:00Z")
+        new = gh.RunInfo(2, "schedule", REPO, "2026-11-20T03:00:00Z")
+        fake.recent_runs[("nightly.yml", "master")] = [new, old]
+        fake.artifacts[(2, "dashboard-rows-a")] = {"rows.jsonl": ""}
+        fake.artifacts[(2, "other")] = {}
+        self.assertEqual(fake.list_recent_runs("nightly.yml", "master", "2026-11-14"), [new])
+        self.assertEqual(fake.list_recent_runs("ci.yml", "master", "2026-11-14"), [])
+        self.assertEqual(sorted(fake.list_artifact_names(2)), ["dashboard-rows-a", "other"])
+        self.assertEqual(fake.list_artifact_names(1), [])
+        fake.fail_listing = True
+        with self.assertRaises(gh.GhError):
+            fake.list_recent_runs("nightly.yml", "master", "2026-11-14")
 
 
 if __name__ == "__main__":

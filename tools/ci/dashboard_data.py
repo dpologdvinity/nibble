@@ -25,7 +25,8 @@ code and the checks passed, and the red Report step is visible in the run.
 
 `validate` is the gate: every row built here, and every new row `merge` accepts, passes through it.
 `merge` appends rows to existing JSONL text and drops repeats of the same (run_id, metric, key), so re-running a job
-or a merge is harmless; existing lines are kept byte for byte.
+or a merge is harmless; existing lines are kept byte for byte. The one exception is `job_status`: a re-run of a job
+keeps the run id, so its later row replaces the failed attempt's (see `merge`).
 
 Run metadata (`Meta`) comes from the environment in `meta_from_env`: GITHUB_SHA, GITHUB_RUN_ID, the CPU model from
 /proc/cpuinfo and the current UTC time. The pure functions never read the environment.
@@ -40,7 +41,9 @@ usage (each appends to --out; --source is nightly|ci|portability, default nightl
     dashboard_data.py from-binary-size build/nibble --out rows.jsonl
     dashboard_data.py status --workflow nightly --job fuzz_gguf --outcome success|failure|cancelled --out rows.jsonl
         (cancelled writes nothing)
-    dashboard_data.py merge EXISTING.jsonl NEW.jsonl... --out merged.jsonl     (EXISTING may be missing)
+    dashboard_data.py merge EXISTING.jsonl NEW.jsonl... --out merged.jsonl [--skip-bad]   (EXISTING may be missing)
+        (a NEW file with an invalid row fails the command, or with --skip-bad is skipped whole with a `::warning`
+        and a job-summary note, and the other files still merge)
 Stdlib only. Exit status is 0 on success and 1 (message on stderr) for input that is not what it should be.
 """
 
@@ -77,6 +80,7 @@ METRICS: dict[str, str] = {
 # The keys of a row, in the order they are written.
 FIELDS = ("schema", "date", "commit", "source", "metric", "key", "value", "unit", "runner", "run_id")
 MAX_TEXT = 120  # longest `key` and `runner`
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"  # the layout of a row's `date`, in UTC
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 COVERAGE_KEY = "src+cli"
@@ -98,9 +102,9 @@ class Meta:
 def validate(row: Mapping[str, object]) -> Row:
     """Return `row` as a new dict in schema order with `value` as a float, or raise ValueError naming the bad field.
 
-    Checks: exactly the schema's keys; schema 1; date format; 40-hex commit; known source and metric; a unit that
-    matches the metric; a non-empty key and runner of at most 120 characters; a finite number for `value`; a
-    non-negative int (not a bool) for `run_id`.
+    Checks: exactly the schema's keys; schema 1; date format, and that it is a real date and time; 40-hex commit; known
+    source and metric; a unit that matches the metric; a non-empty key and runner of at most 120 characters; a finite
+    number for `value`; a non-negative int (not a bool) for `run_id`.
     """
     for field in FIELDS:
         if field not in row:
@@ -111,6 +115,10 @@ def validate(row: Mapping[str, object]) -> Row:
     if row["schema"] != SCHEMA or isinstance(row["schema"], bool):
         raise ValueError(f"field 'schema' must be {SCHEMA}, got {row['schema']!r}")
     _check_str("date", row["date"], _DATE)
+    try:
+        datetime.strptime(str(row["date"]), DATE_FORMAT)  # the pattern alone lets 2026-02-30 and 24:00:00 through
+    except ValueError as e:
+        raise ValueError(f"field 'date' must be a real date and time, got {row['date']!r}") from e
     _check_str("commit", row["commit"], _COMMIT)
     if row["source"] not in SOURCES:
         raise ValueError(f"field 'source' must be one of {SOURCES}, got {row['source']!r}")
@@ -124,8 +132,14 @@ def validate(row: Mapping[str, object]) -> Row:
         if not isinstance(text, str) or not 1 <= len(text) <= MAX_TEXT:
             raise ValueError(f"field '{field}' must be a string of 1 to {MAX_TEXT} characters, got {text!r:.60}")
     value = row["value"]
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-        raise ValueError(f"field 'value' must be a finite number, got {value!r}")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"field 'value' must be a finite number, got {value!r:.60}")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:  # an integer too big for a float
+        finite = False
+    if not finite:
+        raise ValueError(f"field 'value' must be a finite number, got {value!r:.60}")
     run_id = row["run_id"]
     if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 0:
         raise ValueError(f"field 'run_id' must be a non-negative integer, got {run_id!r}")
@@ -273,11 +287,16 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str:
 
     Existing lines are kept as they are (not validated, not rewritten) except that a later repeat of an earlier
     line's (run_id, metric, key) is dropped; of two rows with the same identity the first wins, so merging the same
-    rows twice changes nothing. Every new row is validated first (ValueError names the field). A line of `existing`
-    that is not a JSON object raises ValueError with its line number. The result ends with a newline unless empty.
+    rows twice changes nothing. One exception: a `job_status` row replaces an earlier row of the same identity when its
+    `date` is later (a re-run keeps the run id, so its status must supersede the failed attempt's). The replacement
+    takes the earlier row's place in the file, and a row that is not later never replaces one, so the outcome does not
+    depend on the order rows arrive in. Every new row is validated first (ValueError names the field). A line of
+    `existing` that is not a JSON object raises ValueError with its line number. The result ends with a newline unless
+    empty.
     """
-    seen: set[tuple[object, object, object]] = set()
+    seen: dict[tuple[object, object, object], int] = {}  # identity -> index into `lines`
     lines: list[str] = []
+    objects: list[Mapping[str, object]] = []
     for number, line in enumerate(existing.splitlines(), start=1):
         if not line.strip():
             continue
@@ -291,16 +310,22 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str:
         if ident is not None:
             if ident in seen:
                 continue
-            seen.add(ident)
+            seen[ident] = len(lines)
         lines.append(line)
+        objects.append(obj)
     for new in new_rows:
         row = validate(new)
         ident = _identity(row)
         if ident is not None and ident in seen:
+            at = seen[ident]
+            if row["metric"] == "job_status" and str(row["date"]) > str(objects[at].get("date", "")):
+                lines[at] = _dump(row)
+                objects[at] = row
             continue
         if ident is not None:
-            seen.add(ident)
+            seen[ident] = len(lines)
         lines.append(_dump(row))
+        objects.append(row)
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -350,7 +375,7 @@ def _read_cpuinfo() -> str:
 
 def _utc_now() -> str:
     """The current UTC time as `YYYY-MM-DDTHH:MM:SSZ`."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime(DATE_FORMAT)
 
 
 def _append(out: Path, rows: Iterable[Row]) -> None:
@@ -389,25 +414,60 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--outcome", required=True, choices=["success", "failure", "cancelled"])
     merge_cmd = command("merge", "existing")
     merge_cmd.add_argument("new", type=Path, nargs="+")
+    merge_cmd.add_argument(
+        "--skip-bad",
+        action="store_true",
+        help="skip a NEW file that is invalid as a whole (warning) instead of failing",
+    )
     return parser
 
 
-def _merge_files(existing: Path, new: Sequence[Path], out: Path) -> None:
-    """Write the merge of `existing` (a missing file counts as empty) and every row of the `new` files to `out`."""
+def _read_rows(path: Path) -> list[Row]:
+    """The validated rows of the JSONL file `path`; ValueError (naming the file, the line and the field) if any line is
+    not a valid row, OSError if it cannot be read. All or nothing: a bad line fails the whole file."""
+    rows: list[Row] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+            if not isinstance(obj, dict):
+                raise ValueError("not a JSON object")
+            rows.append(validate(obj))
+        except RecursionError as e:  # JSON nested deeper than the interpreter allows
+            raise ValueError(f"{path.name} line {number}: JSON is nested too deeply") from e
+        except ValueError as e:
+            raise ValueError(f"{path.name} line {number}: {e}") from e
+    return rows
+
+
+def _merge_files(
+    existing: Path, new: Sequence[Path], out: Path, skip_bad: bool = False, env: Mapping[str, str] | None = None
+) -> None:
+    """Write the merge of `existing` (a missing file counts as empty) and every row of the `new` files to `out`.
+
+    A new file with an invalid row (or an unreadable one) raises ValueError/OSError, unless `skip_bad`: then that file
+    is skipped as a whole (none of its rows are merged) and reported as a `::warning` on stderr naming the path and the
+    reason and, when GITHUB_STEP_SUMMARY is set in `env`, in the job summary; the other files are merged. `existing` is
+    never skipped: a broken data file is a real error.
+    """
     old_text = existing.read_text(encoding="utf-8") if existing.exists() else ""
     rows: list[Row] = []
+    skipped: list[str] = []
     for path in new:
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except ValueError as e:
-                raise ValueError(f"{path.name} line {number}: not JSON ({e})") from e
-            if not isinstance(obj, dict):
-                raise ValueError(f"{path.name} line {number}: not a JSON object")
-            rows.append(obj)
+        try:
+            rows.extend(_read_rows(path))
+        except (ValueError, OSError) as e:
+            if not skip_bad:
+                raise
+            skipped.append(f"{path}: {e}")
     out.write_text(merge(old_text, rows), encoding="utf-8")
+    for message in skipped:
+        print(f"::warning::dashboard_data: skipped rows file {message}", file=sys.stderr)
+    summary = (env or {}).get("GITHUB_STEP_SUMMARY")
+    if skipped and summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(f"### Dashboard: {len(skipped)} rows file(s) skipped\n\n" + "".join(f"- `{m}`\n" for m in skipped))
 
 
 def main(
@@ -422,7 +482,7 @@ def main(
     args = _parser().parse_args(argv)
     try:
         if args.command == "merge":
-            _merge_files(args.existing, args.new, args.out)
+            _merge_files(args.existing, args.new, args.out, args.skip_bad, os.environ if env is None else env)
             return 0
         if args.command == "status" and args.outcome == "cancelled":
             return 0  # a cancelled job says nothing about the code; leave the file alone

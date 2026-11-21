@@ -1,8 +1,9 @@
 """In-memory stand-in for gh.GitHub, used by the unit tests of every tools/ci script.
 
-FakeGitHub keeps issues and their comments in a dict, records every workflow dispatch, and answers
-`last_green_sha` / `pr_for_sha` / `list_completed_runs` / `job_conclusion` / `download_artifact` from dicts a test
-fills in beforehand. It touches the file system only to write a downloaded artifact into the directory it is given.
+FakeGitHub keeps issues and their comments in a dict, records every workflow dispatch, and answers `last_green_sha`,
+`pr_for_sha`, `list_completed_runs`, `list_recent_runs`, `list_artifact_names`, `job_conclusion` and `download_artifact`
+from dicts a test fills in beforehand. It touches the file system only to write a downloaded artifact into the
+directory it is given.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from gh import GhError
+from gh import GhError, RunInfo
 
 
 @dataclass
@@ -31,8 +32,11 @@ class FakeGitHub:
     Tests inspect `issues` (number -> FakeIssue) and `dispatches` ((workflow, ref, inputs) in call order), and
     seed `green_shas` ((workflow, branch) -> sha), `prs_by_sha` (head sha -> PR number), `completed_runs`
     ((workflow, branch) -> run ids, newest first), `job_conclusions` ((run id, job name) -> conclusion) and
+    `recent_runs` ((workflow, branch) -> RunInfo, newest first; list_recent_runs filters by `created_at`),
     `artifacts` ((run id, artifact name) -> {file name: text}) and `branch_tips` (branch -> head sha).
-    `fail_listing` and `fail_tip` make list_completed_runs and branch_tip raise GhError.
+    `vanished` ((run id, name) pairs that are listed but cannot be downloaded) and `failing_artifact_runs` (run ids
+    whose artifact listing raises GhError). `fail_listing` and `fail_tip` make the run listings and branch_tip raise
+    GhError.
     """
 
     def __init__(self) -> None:
@@ -41,9 +45,12 @@ class FakeGitHub:
         self.green_shas: dict[tuple[str, str], str] = {}
         self.prs_by_sha: dict[str, int] = {}
         self.completed_runs: dict[tuple[str, str], list[int]] = {}
+        self.recent_runs: dict[tuple[str, str], list[RunInfo]] = {}
         self.job_conclusions: dict[tuple[int, str], str] = {}
         self.artifacts: dict[tuple[int, str], dict[str, str]] = {}
         self.branch_tips: dict[str, str] = {}
+        self.vanished: set[tuple[int, str]] = set()
+        self.failing_artifact_runs: set[int] = set()
         self.fail_listing = False
         self.fail_tip = False
         self._next_number = 1
@@ -88,12 +95,22 @@ class FakeGitHub:
             raise GhError("simulated listing failure")
         return self.completed_runs.get((workflow_file, branch), [])[:limit]
 
+    def list_recent_runs(self, workflow_file: str, branch: str, since: str) -> list[RunInfo]:
+        if self.fail_listing:
+            raise GhError("simulated listing failure")
+        return [r for r in self.recent_runs.get((workflow_file, branch), []) if r.created_at[:10] >= since]
+
+    def list_artifact_names(self, run_id: int) -> list[str]:
+        if run_id in self.failing_artifact_runs:
+            raise GhError(f"simulated artifact listing failure for run {run_id}")
+        return [name for (run, name) in self.artifacts if run == run_id]
+
     def job_conclusion(self, run_id: int, job_name: str) -> str | None:
         return self.job_conclusions.get((run_id, job_name))
 
     def download_artifact(self, run_id: int, name: str, dest: Path) -> bool:
         files = self.artifacts.get((run_id, name))
-        if files is None:
+        if files is None or (run_id, name) in self.vanished:
             return False
         for relative, text in files.items():
             target = dest / relative
