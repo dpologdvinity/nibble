@@ -121,8 +121,9 @@ jobs:
           fi
 
   # Claude's commits on a pull request that is not Claude's own (the owner's or Dependabot's, where @claude works on the
-  # pull request's branch) must be read before they merge: add the `agent` label, switch auto-merge off and say so, once
-  # (it speaks when it adds the label or finds auto-merge on, and nothing here turns auto-merge back on).
+  # pull request's branch) must be read before they merge: switch auto-merge off, add the `agent` label, look at
+  # auto-merge again and say so, once (it speaks when it adds the label or finds auto-merge on, and nothing here turns
+  # auto-merge back on). Auto-merge goes off before anything else, so a failure later in the job fails closed.
   claude-pushed:
     if: |
       github.event.action == 'synchronize' &&
@@ -141,14 +142,41 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          labelled=$(gh pr view "$PR_URL" --json labels --jq 'any(.labels[]; .name == "agent")')
-          # The label goes on before auto-merge is read, so an enabling job that runs meanwhile sees it afterwards. A
-          # label added with GITHUB_TOKEN starts no workflow (no agent-hold or claude-review run).
-          gh api -X POST "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=agent" --silent
-          was_on=$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')
+          # Each API call gets one retry, and a call that still fails ends the job red with an error that says what
+          # was left undone: this job must never fail quietly with auto-merge still on.
+          retry() {
+            "$@" && return 0
+            echo "::warning title=automerge::retrying after a failed call: $1 $2 $3" >&2  # not into a $(...) value
+            sleep 5
+            "$@"
+          }
+          fail() {
+            echo "::error title=automerge::$1"
+            exit 1
+          }
+          auto_merge_on() {
+            retry gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null'
+          }
+          # 1. Auto-merge off first, so that if anything below fails, Claude's commits still cannot merge on their own.
+          was_on=$(auto_merge_on) || fail "could not read the auto-merge state of $PR_URL; check it by hand"
           if [ "$was_on" = "true" ]; then
-            gh pr merge --disable-auto "$PR_URL"
+            retry gh pr merge --disable-auto "$PR_URL" || fail "could not disable auto-merge on $PR_URL; disable it by hand"
           fi
-          if [ "$labelled" != "true" ] || [ "$was_on" = "true" ]; then
-            gh pr comment "$PR_URL" --body "Claude pushed commits to this pull request, so it now has the \`agent\` label and auto-merge is off. Review the new commits and merge by hand."
+          # 2. The label keeps auto-merge off after a close and reopen. A label added with GITHUB_TOKEN starts no
+          # workflow (no agent-hold or claude-review run).
+          labelled=$(retry gh pr view "$PR_URL" --json labels --jq 'any(.labels[]; .name == "agent")') ||
+            fail "auto-merge is off, but the labels of $PR_URL could not be read; add the agent label by hand"
+          if [ "$labelled" != "true" ]; then
+            retry gh api -X POST "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=agent" --silent ||
+              fail "auto-merge is off, but the agent label could not be added to $PR_URL; add it by hand"
+          fi
+          # 3. An enabling job (owner) that read the labels before step 2 may have switched auto-merge on after step 1;
+          # it re-reads the labels after enabling, and this second look covers the rest of that window.
+          now_on=$(auto_merge_on) || fail "could not re-read the auto-merge state of $PR_URL; check it by hand"
+          if [ "$now_on" = "true" ]; then
+            retry gh pr merge --disable-auto "$PR_URL" || fail "could not disable auto-merge on $PR_URL; disable it by hand"
+          fi
+          if [ "$labelled" != "true" ] || [ "$was_on" = "true" ] || [ "$now_on" = "true" ]; then
+            retry gh pr comment "$PR_URL" --body "Claude pushed commits to this pull request, so it now has the \`agent\` label and auto-merge is off. Review the new commits and merge by hand." ||
+              fail "auto-merge is off and the agent label is on, but the explaining comment could not be posted on $PR_URL"
           fi

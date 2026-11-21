@@ -14,6 +14,11 @@
 # `origin` only, no flags, only the branch named in CLAUDE_PUSH_BRANCH) and opens the pull request; a push made with
 # the App token, unlike one made with GITHUB_TOKEN, starts CI on the branch. The branch is created from master before
 # Claude starts and no force push is possible, so triaging the same issue a second time cannot push (it comments only).
+# The OAuth token stays in the Claude process only. Shell commands cannot read it because CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
+# strips credentials from their environment (GH_TOKEN, the App token gh needs, stays) and runs them in a PID namespace of
+# their own (.github/actions/subprocess-isolation installs bubblewrap and fails the job if the namespace does not work).
+# The file tools run inside the Claude process, so for them the `Read(//proc/**)` deny keeps /proc/self/environ closed.
+# The printenv and */proc shell denies only narrow the obvious routes.
 name: claude-triage
 
 on:
@@ -35,6 +40,9 @@ env:
   PYTHON_VERSION: "3.12"
   DEPS_DIR: ${{ github.workspace }}/.deps-cache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
+  # Strip credentials (the OAuth token among them) from the environment of every command the session runs; the action
+  # sets it only for allowed_non_write_users, which this workflow does not use. Read by the action from env.
+  CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
 
 jobs:
   triage:
@@ -105,11 +113,14 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # bubblewrap for the subprocess scrub's PID namespace, checked to work before the session starts (fails closed).
+      - uses: ./.github/actions/subprocess-isolation
+        if: steps.gate.outputs.proceed == 'true'
       - name: Install the build and lint tools
         if: steps.gate.outputs.proceed == 'true'
         run: |
           python -m pip install -r requirements-ci.txt
-          sudo apt-get install -y --no-install-recommends ccache
+          sudo apt-get install -y --no-install-recommends ccache  # lists refreshed by subprocess-isolation
       - name: Restore Catch2
         if: steps.gate.outputs.proceed == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -165,12 +176,12 @@ jobs:
                open a pull request.
             5. Stage, commit and push only with the action's wrappers: ${{ steps.prep.outputs.wrappers }}/git-add.sh <paths>,
                ${{ steps.prep.outputs.wrappers }}/git-commit.sh -m "<message>", ${{ steps.prep.outputs.wrappers }}/git-push.sh origin HEAD.
-               Open the pull request yourself with gh pr create --base master --label agent, a Conventional Commit
-               title, and a body that says what changed and why and ends with "Fixes #${{ steps.gate.outputs.issue }}". Open it only if no
+               Open the pull request yourself with gh pr create --base master --label agent (no other label, and
+               never no-test-needed: only the owner waives fix-proof), a Conventional Commit title, and a body that says what changed and why and ends with "Fixes #${{ steps.gate.outputs.issue }}". Open it only if no
                pull request exists for the branch (gh pr list --head). Do not add a Generated with Claude Code
                signature or any attribution line.
             6. Never merge, approve or close anything, and never push to master.
             7. If you are unsure, or there is no reproducer, stop after the comment in step 3 and make no commit.
           claude_args: |
             --allowedTools "Read,Glob,Grep,Edit(/**),MultiEdit(/**),Write(/**),Bash(cmake:*),Bash(ctest:*),Bash(clang-format:*),Bash(xargs clang-format:*),Bash(grep:*),Bash(python -m unittest:*),Bash(ruff:*),Bash(mypy:*),Bash(shellcheck:*),Bash(build/nibble:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git ls-files:*),Bash(${{ steps.prep.outputs.wrappers }}/git-add.sh:*),Bash(${{ steps.prep.outputs.wrappers }}/git-commit.sh:*),Bash(${{ steps.prep.outputs.wrappers }}/git-push.sh:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr list:*),Bash(gh issue view ${{ steps.gate.outputs.issue }} --json title),Bash(gh issue view ${{ steps.gate.outputs.issue }} --json body),Bash(gh issue comment:*),Bash(gh run view:*),Bash(gh run list:*)"
-            --disallowedTools "Edit(/.github/**),MultiEdit(/.github/**),Write(/.github/**),Bash(CLAUDE_PUSH_BRANCH=*),Bash(env:*),Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh pr checkout:*),Bash(gh pr close:*),Bash(gh pr edit:*),Bash(gh issue delete:*),Bash(gh issue transfer:*),Bash(gh issue close:*),Bash(gh issue lock:*),Bash(gh api:*),Bash(git config:*),Bash(git remote:*),Bash(git branch:*),Bash(git push:*),Bash(git commit:*),Bash(git add:*),Bash(git checkout:*),Bash(git switch:*)"
+            --disallowedTools "Edit(/.github/**),MultiEdit(/.github/**),Write(/.github/**),Bash(CLAUDE_PUSH_BRANCH=*),Bash(env:*),Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh pr checkout:*),Bash(gh pr close:*),Bash(gh pr edit:*),Bash(gh issue delete:*),Bash(gh issue transfer:*),Bash(gh issue close:*),Bash(gh issue lock:*),Bash(gh api:*),Bash(git config:*),Bash(git remote:*),Bash(git branch:*),Bash(git push:*),Bash(git commit:*),Bash(git add:*),Bash(git checkout:*),Bash(git switch:*),Read(//proc),Read(//proc/**),Bash(*/proc),Bash(*/proc/*),Bash(printenv:*)"

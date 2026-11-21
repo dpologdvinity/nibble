@@ -39,36 +39,58 @@ class ScriptedRunner:
 
 
 class FindOpenIssueTests(unittest.TestCase):
+    BOT = {"login": "github-actions[bot]", "type": "Bot"}
+    CI_FAILURE = [{"name": "ci-failure"}, {"name": "ci"}]
     ISSUES = json.dumps(
         [
-            {"number": 3, "title": "nightly: fuzz_load failing"},
-            {"number": 4, "title": "nightly: fuzz_gguf failing"},
+            {"number": 3, "title": "nightly: fuzz_load failing", "user": BOT, "labels": CI_FAILURE},
+            {"number": 4, "title": "nightly: fuzz_gguf failing", "user": BOT, "labels": CI_FAILURE},
         ]
     )
 
+    def issue(self, number: int, title: str, **extra: object) -> dict[str, object]:
+        """An issues-listing entry opened by the bot with the ci-failure label, overridden by `extra`."""
+        return {"number": number, "title": title, "user": self.BOT, "labels": self.CI_FAILURE, **extra}
+
     def test_find_open_issue_exact_title(self) -> None:
         client = gh.GhCli(REPO, ScriptedRunner({"issues": self.ISSUES}))
-        self.assertEqual(client.find_open_issue("nightly: fuzz_gguf failing"), 4)
-        self.assertIsNone(client.find_open_issue("nightly: fuzz failing"))
+        self.assertEqual(client.find_open_issue("nightly: fuzz_gguf failing", "ci-failure"), 4)
+        self.assertIsNone(client.find_open_issue("nightly: fuzz failing", "ci-failure"))
 
-    def test_find_open_issue_paginates(self) -> None:
+    def test_find_open_issue_paginates_and_filters_on_creator_and_label(self) -> None:
         runner = ScriptedRunner({"issues": self.ISSUES})
-        gh.GhCli(REPO, runner).find_open_issue("x")
+        gh.GhCli(REPO, runner).find_open_issue("x", "ci-failure")
         argv, _ = runner.calls[0]
         self.assertIn("--paginate", argv)
-        self.assertIn(f"repos/{REPO}/issues?state=open&per_page=100", argv)
+        self.assertIn(
+            f"repos/{REPO}/issues?state=open&creator=github-actions%5Bbot%5D&labels=ci-failure&per_page=100", argv
+        )
 
     def test_find_open_issue_reads_concatenated_pages(self) -> None:
         # `gh api --paginate` prints one JSON array per page back to back, not one merged array.
-        pages = json.dumps([{"number": 1, "title": "a"}]) + json.dumps([{"number": 2, "title": "b"}])
+        pages = json.dumps([self.issue(1, "a")]) + json.dumps([self.issue(2, "b")])
         client = gh.GhCli(REPO, ScriptedRunner({"issues": pages}))
-        self.assertEqual(client.find_open_issue("b"), 2)
+        self.assertEqual(client.find_open_issue("b", "ci-failure"), 2)
 
     def test_find_open_issue_skips_pull_requests(self) -> None:
         # The issues endpoint also lists pull requests; they carry a "pull_request" key.
-        listing = json.dumps([{"number": 9, "title": "t", "pull_request": {}}, {"number": 10, "title": "t"}])
+        listing = json.dumps([self.issue(9, "t", pull_request={}), self.issue(10, "t")])
         client = gh.GhCli(REPO, ScriptedRunner({"issues": listing}))
-        self.assertEqual(client.find_open_issue("t"), 10)
+        self.assertEqual(client.find_open_issue("t", "ci-failure"), 10)
+
+    def test_find_open_issue_ignores_other_authors_and_missing_labels(self) -> None:
+        # The query filters on both already; the response is checked again so a filter the API ignored (or a typo in
+        # the query) cannot hand a stranger's same-titled issue the failure reports.
+        listing = json.dumps(
+            [
+                self.issue(5, "t", user={"login": "mallory", "type": "User"}),
+                self.issue(6, "t", user=None),
+                self.issue(7, "t", labels=[{"name": "ci"}]),
+                self.issue(8, "t"),
+            ]
+        )
+        client = gh.GhCli(REPO, ScriptedRunner({"issues": listing}))
+        self.assertEqual(client.find_open_issue("t", "ci-failure"), 8)
 
 
 class UpsertCommentTests(unittest.TestCase):
@@ -327,15 +349,16 @@ class SubprocessRunnerTests(unittest.TestCase):
 class FakeGitHubTests(unittest.TestCase):
     def test_fake_matches_protocol(self) -> None:
         client: gh.GitHub = FakeGitHub()  # mypy verifies the structural match
-        self.assertIsNone(client.find_open_issue("nothing"))
+        self.assertIsNone(client.find_open_issue("nothing", "ci-failure"))
 
     def test_fake_issue_lifecycle(self) -> None:
         fake = FakeGitHub()
         number = fake.create_issue("t", "b", ["ci-failure"])
-        self.assertEqual(fake.find_open_issue("t"), number)
+        self.assertEqual(fake.find_open_issue("t", "ci-failure"), number)
+        self.assertIsNone(fake.find_open_issue("t", "documentation"))
         fake.comment(number, "again")
         fake.close_issue(number)
-        self.assertIsNone(fake.find_open_issue("t"))
+        self.assertIsNone(fake.find_open_issue("t", "ci-failure"))
         self.assertEqual(fake.issues[number].comments, ["again"])
         self.assertEqual(fake.issues[number].labels, ["ci-failure"])
 
@@ -361,7 +384,12 @@ class FakeGitHubTests(unittest.TestCase):
         fake.upsert_comment(number, "<!-- m -->", "hi <!-- m -->")
         self.assertEqual(fake.issues[number].comments, ["hi <!-- m -->"])
         # A pull request is not an issue: the title search used by report_failure must skip it.
-        self.assertIsNone(fake.find_open_issue(fake.issues[number].title))
+        self.assertIsNone(fake.find_open_issue(fake.issues[number].title, "ci-failure"))
+
+    def test_fake_find_open_issue_ignores_issues_by_others(self) -> None:
+        fake = FakeGitHub()
+        fake.open_issue_as("mallory", "t", ["ci-failure"])
+        self.assertIsNone(fake.find_open_issue("t", "ci-failure"))
 
     def test_fake_records_dispatches_and_answers_lookups(self) -> None:
         fake = FakeGitHub()
