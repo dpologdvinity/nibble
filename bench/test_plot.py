@@ -216,6 +216,52 @@ class LineChartTest(unittest.TestCase):
         fine = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.995), (T0 + DAY, 1.0)])], y_min=0.99)
         self.assertNotIn("Hollow", fine)
 
+    def test_line_chart_y_max_caps_the_axis(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 90.0), (T0 + DAY, 96.3)])], y_max=100)
+        self.assertEqual(self.y_labels(svg), ["0", "20", "40", "60", "80", "100"])
+        self.assertNotIn("Hollow", svg)
+
+    def test_line_chart_y_max_keeps_a_tighter_nice_axis(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 10.0), (T0 + DAY, 30.0)])], y_max=100)
+        self.assertEqual(self.y_labels(svg)[-1], "50")  # the data fits well under the cap: no need to reach it
+
+    def test_line_chart_y_max_with_y_min(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.9995), (T0 + DAY, 1.0)])], y_min=0.99, y_max=1.0)
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertEqual(labels[0], 0.99)
+        self.assertLessEqual(max(labels), 1.0)
+
+    def test_line_chart_y_max_with_uneven_cap_has_no_tick_above_it(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 60.0), (T0 + DAY, 66.0)])], y_max=70)
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertLessEqual(max(labels), 70.0)
+        self.assertEqual(len({round(a - b, 9) for a, b in zip(labels[1:], labels, strict=False)}), 1)
+
+    def test_line_chart_points_above_y_max_are_hollow_on_the_top_edge(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 50.0), (T0 + DAY, 130.0)])], y_max=100)
+        self.assertEqual(self.y_labels(svg)[-1], "100")
+        self.assertIn("Hollow = above the axis maximum (100)", svg)
+        self.assertNotIn("below", svg)
+        self.assertEqual(len(re.findall(r'<circle [^>]*fill="white"', svg)), 1)
+        for cy in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg):
+            self.assertTrue(40 <= float(cy) <= 400, cy)  # inside the plot area (top 40, bottom 460 - 60)
+
+    def test_line_chart_points_outside_both_bounds_name_both(self) -> None:
+        pts = [(T0, 0.5), (T0 + DAY, 0.995), (T0 + 2 * DAY, 1.5)]
+        svg = plot.line_chart("t", "y", [("a", "#000", pts)], y_min=0.99, y_max=1.0)
+        self.assertIn("below the axis minimum (0.99)", svg)
+        self.assertIn("above the axis maximum (1)", svg)
+
+    def test_line_chart_rejects_bad_y_max(self) -> None:
+        one = [("a", "#000", [(T0, 1.0)])]
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaisesRegex(ValueError, "y_max"):
+                plot.line_chart("t", "y", one, y_max=bad)
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", one, y_min=1.0, y_max=1.0)
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [("a", "#000", [(T0, 5.0)])], y_max=0.0)  # the axis starts at 0
+
     def test_line_chart_default_axis_starts_at_zero(self) -> None:
         svg = plot.line_chart("t", "y", self.two_series())
         self.assertIn(">0</text>", svg)

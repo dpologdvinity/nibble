@@ -202,6 +202,26 @@ class RenderTest(unittest.TestCase):
         got = {m: [v for _, v in pts] for m, pts in dashboard_render.min_cosine_by_model(rows).items()}
         self.assertEqual(got, {"q4_0": [0.9981], "q8_0": [0.9999]})
 
+    @staticmethod
+    def y_labels(svg: str) -> list[str]:
+        """The y axis tick labels of a chart, bottom to top (the text elements right-aligned at the axis)."""
+        return re.findall(r'text-anchor="end"[^>]*>([^<]*)</text>', svg)
+
+    def test_coverage_axis_never_exceeds_100_percent(self) -> None:
+        # Regression: the default axis (nice_max of 1.1 x the data) ran 0-200 for a 96.3 % value on the live page.
+        rows = [row("line_coverage", "src+cli", 96.3, run_id=2, source="ci", commit=SHA_B)]
+        out, _ = render(self, rows)
+        labels = [float(v) for v in self.y_labels((out / "coverage.svg").read_text(encoding="utf-8"))]
+        self.assertEqual(labels[-1], 100.0, labels)
+        self.assertLessEqual(max(labels), 100.0, labels)
+        self.assertEqual(labels[0], 0.0, labels)
+
+    def test_accuracy_axis_still_tops_out_at_1(self) -> None:
+        out, _ = render(self, [row("min_cosine", "q4_0/capital", 0.9995)])
+        labels = self.y_labels((out / "accuracy.svg").read_text(encoding="utf-8"))
+        self.assertEqual(labels[0], "0.990")
+        self.assertEqual(labels[-1], "1.000")
+
     def test_html_escapes_keys(self) -> None:
         evil = "<script>alert(1)</script>"
         rows = [

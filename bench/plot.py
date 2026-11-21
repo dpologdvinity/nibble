@@ -392,18 +392,25 @@ def tick_label(v: float, step: float) -> str:
     return f"{0.0:.{decimals}f}" if float(text) == 0 else text  # never "-0" or "-0.0"
 
 
-def line_chart(title: str, y_label: str, series: Sequence[Series], y_min: float | None = None) -> str:
+def line_chart(
+    title: str, y_label: str, series: Sequence[Series], y_min: float | None = None, y_max: float | None = None
+) -> str:
     """Time-series line chart: one polyline per (label, colour, points) series with the points marked, a legend on
     the right and 'YYYY-MM-DD' ticks on the x axis. x is unix seconds, y the value.
 
     The y axis starts at 0 (or at the first tick below the data, for negative data), or at `y_min` when given
-    (cosine charts pass 0.99; a non-finite `y_min` raises ValueError). A point below `y_min` is drawn hollow on
-    the bottom edge rather than off the chart. Points that are not finite, or whose x is not a date in years 1 to
+    (cosine charts pass 0.99; a non-finite `y_min` raises ValueError). `y_max` caps the axis (a percentage passes
+    100, which the default 1.1 x headroom would overshoot to 200): the top is the first nice tick at or above the
+    data when that is below `y_max`, else `y_max` itself, and no tick lies above it. A non-finite `y_max`, or one
+    not above the axis bottom, raises ValueError. A point outside the axis is drawn hollow on the nearest edge
+    rather than off the chart. Points that are not finite, or whose x is not a date in years 1 to
     9999 (say, milliseconds instead of seconds), are ignored. With no points at all the chart says "no data yet";
     a series without points keeps its legend entry.
     """
     if y_min is not None and not math.isfinite(y_min):
         raise ValueError(f"y_min must be finite, got {y_min}")
+    if y_max is not None and not math.isfinite(y_max):
+        raise ValueError(f"y_max must be finite, got {y_max}")
     w, h, left, right, top, bottom = 900, 460, 70, 190, 40, 60
     svg = Svg(w, h, title)
     pts = [
@@ -441,9 +448,15 @@ def line_chart(title: str, y_label: str, series: Sequence[Series], y_min: float 
         hi = nice_max(vmax * 1.1) if vmax > 0 else 1.0
         step = hi / 5
         first_tick = lo
+    if y_max is not None:
+        if y_max <= lo:
+            raise ValueError(f"y_max ({y_max:g}) must be above the axis bottom ({lo:g})")
+        if hi > y_max:  # cap: re-pick a nice step for the shorter span; the top tick may then sit below the edge
+            hi = y_max
+            step = nice_step(hi - lo)
     ph = h - top - bottom
     y_of: Callable[[float], float] = lambda v: top + ph * (1 - (v - lo) / (hi - lo))
-    ticks = [first_tick + step * i for i in range(round((hi - lo) / step) + 1)]
+    ticks = [first_tick + step * i for i in range(math.floor((hi - first_tick) / step + 1e-9) + 1)]
     y_axis(svg, left, w - right, y_of, ticks, lambda v: tick_label(v, step))
     x_lo, x_hi = min(xs), max(xs)
     if x_lo == x_hi:  # a single instant: centre it in a one-day window
@@ -454,19 +467,21 @@ def line_chart(title: str, y_label: str, series: Sequence[Series], y_min: float 
         x = x_of(t)
         svg.line(x, top + ph, x, top + ph + 4, stroke="#888")
         svg.add(svg.text(x, top + ph + 18, date_label(t), size=10, anchor="middle"))
-    clamped = False
     for _label, colour, p in pts:
         if not p:
             continue
-        xy = [(x_of(x), y_of(max(y, lo)), y < lo) for x, y in p]
-        clamped = clamped or any(off for *_, off in xy)
+        xy = [(x_of(x), y_of(min(max(y, lo), hi)), not lo <= y <= hi) for x, y in p]
         d = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in xy)
         svg.add(f'<polyline points="{d}" fill="none" stroke="{colour}" stroke-width="1.5"/>')
         for x, y, off in xy:
             svg.dot(x, y, colour, off, r=3)
     svg.add(svg.text(left - 55, top + ph / 2, y_label, anchor="middle", rotate=-90))
-    if clamped:
-        svg.note(f"Hollow = below the axis minimum ({y_min:g}), drawn on the bottom edge.")
+    below, above = any(y < lo for y in ys), any(y > hi for y in ys)
+    if below or above:
+        parts = ([f"below the axis minimum ({lo:g}), drawn on the bottom edge"] if below else []) + (
+            [f"above the axis maximum ({hi:g}), drawn on the top edge"] if above else []
+        )
+        svg.note("Hollow = " + "; ".join(parts) + ".")
     return str(svg)
 
 

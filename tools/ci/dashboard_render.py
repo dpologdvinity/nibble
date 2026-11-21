@@ -319,7 +319,7 @@ def charts(rows: Sequence[Row]) -> dict[str, str]:
             "Stripped release binary size", "MiB", _simple_series(shown, "binary_bytes", 1024 * 1024)
         ),
         "coverage.svg": plot.line_chart(
-            "Line coverage of src/ and cli/", "% of lines", _simple_series(shown, "line_coverage")
+            "Line coverage of src/ and cli/", "% of lines", _simple_series(shown, "line_coverage"), y_max=100
         ),
     }
 
