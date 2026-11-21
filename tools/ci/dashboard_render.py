@@ -6,7 +6,9 @@ ROWS.jsonl holds validated rows (see dashboard_data.py; a missing file counts as
 
     index.html    the page: status table of every job's latest result plus the charts as inline <img>. No JavaScript,
                   no external fonts or scripts; it reads fine on a phone.
-    speed.svg     decode/prefill tok/s per `<model>/<test>/t<threads>` (shared CI runners: a trend, not a benchmark)
+    speed-prefill.svg, speed-decode.svg
+                  tok/s per model and thread count, from the `<model>/<test>/t<threads>` bench keys (shared CI
+                  runners: a trend, not a benchmark); the legend reads `Q4_0, 1 thread`
     accuracy.svg  min cosine against llama.cpp per model, the minimum over prompts (y axis from 0.99)
     fuzz.svg      cumulative fuzzing hours per target
     size.svg      stripped release binary size
@@ -37,7 +39,16 @@ from dashboard_data import Row, validate
 
 Point = tuple[float, float]  # (x = unix seconds, y = value)
 
-FILES = ("index.html", "speed.svg", "accuracy.svg", "fuzz.svg", "size.svg", "coverage.svg", "badge.json")
+FILES = (
+    "index.html",
+    "speed-prefill.svg",
+    "speed-decode.svg",
+    "accuracy.svg",
+    "fuzz.svg",
+    "size.svg",
+    "coverage.svg",
+    "badge.json",
+)
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 MAX_LABEL = 30  # characters that fit the chart legend (190 px at 11 px sans-serif)
 WORKFLOW_ORDER = ("nightly", "portability", "ci")  # status table order; other workflows follow alphabetically
@@ -97,22 +108,6 @@ def _clip(label: str) -> str:
     return label if len(label) <= MAX_LABEL else label[: MAX_LABEL - 1] + "…"
 
 
-def short_labels(keys: Sequence[str]) -> list[str]:
-    """Legend labels for bench keys `<model file>/<test>/t<threads>`: the model shortened to its last dash-separated
-    part (`qwen2.5-0.5b-instruct-q4_0.gguf` -> `q4_0`), unless that makes two labels equal, in which case the
-    models keep their full stem (`.gguf` removed). Every label is clipped to MAX_LABEL."""
-
-    def build(key: str, short: bool) -> str:
-        model, sep, rest = key.partition("/")
-        stem = model.removesuffix(".gguf")
-        return (stem.rsplit("-", 1)[-1] if short else stem) + sep + rest
-
-    labels = [build(k, True) for k in keys]
-    if len(set(labels)) != len(labels):
-        labels = [build(k, False) for k in keys]
-    return [_clip(label) for label in labels]
-
-
 def _series(points: Mapping[str, Sequence[Point]], labels: Sequence[str]) -> list[plot.Series]:
     """Chart series for `points` (name -> points), one colour each in PALETTE order, labelled with `labels`."""
     return [
@@ -121,14 +116,61 @@ def _series(points: Mapping[str, Sequence[Point]], labels: Sequence[str]) -> lis
     ]
 
 
-def speed_series(rows: Sequence[Row]) -> list[plot.Series]:
-    """One series per bench key, in key order."""
+_BENCH_KEY = re.compile(r"(?P<model>.+)/(?P<test>[^/]+)/t(?P<threads>\d+)")
+
+
+def _bench_parts(key: str) -> tuple[str, str, int] | None:
+    """(model file stem without `.gguf`, test, threads) of a bench key `<model file>/<test>/t<threads>`, or None."""
+    m = _BENCH_KEY.fullmatch(key)
+    if m is None:
+        return None
+    return m["model"].removesuffix(".gguf"), m["test"], int(m["threads"])
+
+
+def speed_labels(keys: Sequence[str]) -> list[str]:
+    """Legend labels for the bench keys of one chart, readable without knowing the key format: `Q4_0, 1 thread` (the
+    quantization is the last dash-separated part of the model file name, upper-cased; the count comes from `t<N>`).
+    If two keys would get the same label, more is shown, in order until they differ: the test (`, pp512`), the whole
+    model stem instead of the quantization, then both. A key that does not parse keeps its raw text. Labels are
+    clipped to MAX_LABEL."""
+
+    def build(key: str, stage: int) -> str:
+        parts = _bench_parts(key)
+        if parts is None:
+            return key
+        stem, test, threads = parts
+        model = stem.rsplit("-", 1)[-1].upper() if stage < 2 else stem
+        text = f"{model}, {threads} thread{'' if threads == 1 else 's'}"
+        return f"{text}, {test}" if stage % 2 == 1 else text
+
+    # Stage 0: quantization only; 1: plus the test; 2: full stem; 3: full stem plus the test.
+    labels = [build(k, 0) for k in keys]
+    for stage in (1, 2, 3):
+        if len(set(labels)) == len(labels):
+            break
+        labels = [build(k, stage) for k in keys]
+    return [_clip(label) for label in labels]
+
+
+def _speed_order(key: str) -> tuple[int, str, int]:
+    """Sort key for bench keys: parsed ones by model then thread count (numerically), the rest after them."""
+    parts = _bench_parts(key)
+    return (0, parts[0], parts[2]) if parts else (1, key, 0)
+
+
+def speed_series(rows: Sequence[Row], test_prefix: str) -> list[plot.Series]:
+    """One series per bench key whose test starts with `test_prefix` (`pp` prefill, `tg` decode), ordered by model and
+    thread count. A key without a `<model>/<test>/<threads>` shape belongs to neither chart."""
     by_key: dict[str, list[Point]] = {}
     for r in rows:
-        if r["metric"] == "bench_tok_s":
-            by_key.setdefault(str(r["key"]), []).append((_unix(r["date"]), _num(r)))
-    by_key = dict(sorted(by_key.items()))
-    return _series(by_key, short_labels(list(by_key)))
+        if r["metric"] != "bench_tok_s":
+            continue
+        key = str(r["key"])
+        segments = key.rsplit("/", 2)
+        if len(segments) == 3 and segments[1].startswith(test_prefix):
+            by_key.setdefault(key, []).append((_unix(r["date"]), _num(r)))
+    by_key = dict(sorted(by_key.items(), key=lambda kv: _speed_order(kv[0])))
+    return _series(by_key, speed_labels(list(by_key)))
 
 
 def min_cosine_by_model(rows: Sequence[Row]) -> dict[str, list[Point]]:
@@ -183,13 +225,16 @@ def charts(rows: Sequence[Row]) -> dict[str, str]:
     cosine = min_cosine_by_model(rows)
     fuzz = cumulative_fuzz_hours(rows)
     return {
-        "speed.svg": plot.line_chart(
-            "Speed on a shared CI runner: a trend, not a benchmark", "tokens / second", speed_series(rows)
+        "speed-prefill.svg": plot.line_chart(
+            "Prefill speed (512-token prompt)", "tokens / second", speed_series(rows, "pp")
+        ),
+        "speed-decode.svg": plot.line_chart(
+            "Decode speed (128 generated tokens)", "tokens / second", speed_series(rows, "tg")
         ),
         "accuracy.svg": plot.line_chart(
             "Accuracy against llama.cpp: min cosine per model",
             "min cosine",
-            _series(cosine, [_clip(m) for m in cosine]),
+            _series(cosine, [_clip(m.upper()) for m in cosine]),
             y_min=0.99,
         ),
         "fuzz.svg": plot.line_chart("Cumulative fuzzing time", "hours", _series(fuzz, [_clip(t) for t in fuzz])),
@@ -273,45 +318,64 @@ tbody th[scope="rowgroup"] {
   background: #f6f8fa; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em;
 }
 figure { margin: 1.25rem 0; }
-figure img { max-width: 100%; height: auto; border: 1px solid #d0d7de; border-radius: 6px; }
+figure img + img { margin-top: 0.75rem; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid #d0d7de; border-radius: 6px; }
 figcaption { font-size: 0.9rem; color: #57606a; }
 .muted { color: #57606a; font-size: 0.9rem; }
 footer { margin-top: 2rem; }
 """
 
-# (file, heading, alt text, caption). The alt text describes what the chart shows, since the SVG has no scripts.
-FIGURES = (
+# (heading, caption, [(file, alt text)]). The alt text says what the chart shows; the SVGs have no scripts or text
+# fallback. The speed section has two images under one caption.
+SECTIONS = (
     (
-        "speed.svg",
         "Speed (trend only)",
-        "Line chart of decode and prefill tokens per second for each model and thread count, one point per nightly run",
         "Measured on shared GitHub-hosted runners, whose speed varies from run to run: read this as a trend, "
         "not a benchmark. The README tables come from an idle dedicated machine.",
+        (
+            (
+                "speed-prefill.svg",
+                "Line chart of prefill speed in tokens per second (512-token prompt) for each model and thread count, "
+                "one point per nightly run",
+            ),
+            (
+                "speed-decode.svg",
+                "Line chart of decode speed in tokens per second (128 generated tokens) for each model and thread "
+                "count, one point per nightly run",
+            ),
+        ),
     ),
     (
-        "accuracy.svg",
         "Accuracy against llama.cpp",
-        "Line chart of the minimum cosine similarity to llama.cpp per model over time, on an axis starting at 0.99",
         "Minimum cosine over the test prompts, per model and nightly run. Higher is closer to llama.cpp; the axis "
         "starts at 0.99.",
+        (
+            (
+                "accuracy.svg",
+                "Line chart of the minimum cosine similarity to llama.cpp per model over time, on an axis starting "
+                "at 0.99",
+            ),
+        ),
     ),
     (
-        "fuzz.svg",
         "Fuzzing",
-        "Line chart of cumulative fuzzing hours per fuzz target over time",
         "Total time each fuzz target has run in the nightly job.",
+        (("fuzz.svg", "Line chart of cumulative fuzzing hours per fuzz target over time"),),
     ),
     (
-        "size.svg",
         "Binary size",
-        "Line chart of the stripped release binary size in MiB over time",
         "Size of the stripped nibble binary built each night.",
+        (("size.svg", "Line chart of the stripped release binary size in MiB over time"),),
     ),
     (
-        "coverage.svg",
         "Line coverage",
-        "Line chart of the percentage of src and cli lines covered by the tests, per push to master",
         "Line coverage of src/ and cli/ from the unit and integration tests, measured on each push to master.",
+        (
+            (
+                "coverage.svg",
+                "Line chart of the percentage of src and cli lines covered by the tests, per push to master",
+            ),
+        ),
     ),
 )
 
@@ -329,9 +393,12 @@ def index_html(rows: Sequence[Row], repo: str) -> str:
     else:
         updated = '<p class="muted">No results yet: the first nightly run fills this page.</p>'
     figures = "".join(
-        f'<section><h2>{html.escape(heading)}</h2><figure><img src="{name}" alt="{html.escape(alt, quote=True)}" '
-        f'width="900" height="460"><figcaption>{html.escape(caption)}</figcaption></figure></section>'
-        for name, heading, alt, caption in FIGURES
+        f"<section><h2>{html.escape(heading)}</h2><figure>"
+        + "".join(
+            f'<img src="{name}" alt="{html.escape(alt, quote=True)}" width="900" height="460">' for name, alt in images
+        )
+        + f"<figcaption>{html.escape(caption)}</figcaption></figure></section>"
+        for heading, caption, images in SECTIONS
     )
     return (
         '<!DOCTYPE html>\n<html lang="en"><head><meta charset="utf-8">'

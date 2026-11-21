@@ -21,7 +21,16 @@ from dashboard_data import METRICS, Row, validate
 REPO = "dpologdvinity/nibble"
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-FILES = ["index.html", "speed.svg", "accuracy.svg", "fuzz.svg", "size.svg", "coverage.svg", "badge.json"]
+FILES = [
+    "index.html",
+    "speed-prefill.svg",
+    "speed-decode.svg",
+    "accuracy.svg",
+    "fuzz.svg",
+    "size.svg",
+    "coverage.svg",
+    "badge.json",
+]
 
 
 def row(
@@ -87,12 +96,12 @@ class RenderTest(unittest.TestCase):
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("<script", html.lower())
         imgs = re.findall(r"<img\b[^>]*>", html)
-        self.assertEqual(len(imgs), 5)
+        self.assertEqual(len(imgs), 6)
         for img in imgs:
             self.assertRegex(img, r'alt="[^"]{10,}"')
-        for name in FILES[1:6]:
+        for name in FILES[1:7]:
             self.assertIn(f'src="{name}"', html)
-        for name in FILES[1:6]:
+        for name in FILES[1:7]:
             self.assertTrue((out / name).read_text(encoding="utf-8").startswith("<svg"))
 
     def test_render_with_no_rows_still_writes_a_page(self) -> None:
@@ -100,7 +109,7 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(sorted(names), sorted(FILES))
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertIn("No results yet", html)
-        self.assertIn("no data yet", (out / "speed.svg").read_text(encoding="utf-8"))
+        self.assertIn("no data yet", (out / "speed-decode.svg").read_text(encoding="utf-8"))
         self.assertEqual(
             json.loads((out / "badge.json").read_text(encoding="utf-8")),
             {"schemaVersion": 1, "label": "nightly", "message": "no data", "color": "lightgrey"},
@@ -200,28 +209,61 @@ class RenderTest(unittest.TestCase):
             row("fuzz_seconds", evil, 60.0),
         ]
         out, _ = render(rows)
-        for name in ("index.html", "speed.svg", "fuzz.svg"):
+        for name in ("index.html", "speed-prefill.svg", "speed-decode.svg", "fuzz.svg"):
             text = (out / name).read_text(encoding="utf-8")
             self.assertNotIn("<script>", text, name)
         self.assertIn("&lt;script&gt;", (out / "index.html").read_text(encoding="utf-8"))
 
-    def test_speed_legend_labels_are_short_and_unique(self) -> None:
+    def test_prefill_and_decode_are_separate_charts(self) -> None:
+        out, _ = render(sample_rows())  # holds a tg128/t1 and a pp512/t4 series of the same model
+        prefill = (out / "speed-prefill.svg").read_text(encoding="utf-8")
+        decode = (out / "speed-decode.svg").read_text(encoding="utf-8")
+        self.assertIn("Prefill speed (512-token prompt)", prefill)
+        self.assertIn("Decode speed (128 generated tokens)", decode)
+        self.assertIn(">Q4_0, 4 threads<", prefill)
+        self.assertNotIn(">Q4_0, 1 thread<", prefill)
+        self.assertIn(">Q4_0, 1 thread<", decode)
+        self.assertNotIn(">Q4_0, 4 threads<", decode)
+        html = (out / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count("<h2>Speed (trend only)</h2>"), 1)
+        self.assertLess(html.index("speed-prefill.svg"), html.index("speed-decode.svg"))
+        self.assertLess(html.index("speed-decode.svg"), html.index("<h2>Accuracy"))
+
+    def test_speed_legend_labels_are_readable_and_sorted(self) -> None:
         rows = [
-            row("bench_tok_s", "qwen2.5-0.5b-instruct-q4_0.gguf/tg128/t1", 20.0),
-            row("bench_tok_s", "qwen2.5-0.5b-instruct-q8_0.gguf/tg128/t1", 15.0),
+            row("bench_tok_s", "qwen2.5-0.5b-instruct-q8_0.gguf/tg128/t4", 15.0),
+            row("bench_tok_s", "qwen2.5-0.5b-instruct-q4_0.gguf/tg128/t10", 20.0),
+            row("bench_tok_s", "qwen2.5-0.5b-instruct-q4_0.gguf/tg128/t2", 20.0),
+            row("bench_tok_s", "qwen2.5-0.5b-instruct-q4_k_m.gguf/tg128/t1", 20.0),
         ]
         out, _ = render(rows)
-        svg = (out / "speed.svg").read_text(encoding="utf-8")
-        self.assertIn(">q4_0/tg128/t1<", svg)
+        svg = (out / "speed-decode.svg").read_text(encoding="utf-8")
+        labels = re.findall(r">(Q[^<]*threads?)<", svg)
+        self.assertEqual(labels, ["Q4_0, 2 threads", "Q4_0, 10 threads", "Q4_K_M, 1 thread", "Q8_0, 4 threads"])
         self.assertNotIn("instruct", svg)
 
-    def test_short_labels_fall_back_when_ambiguous(self) -> None:
+    def test_speed_labels_include_the_model_when_quants_collide(self) -> None:
         keys = ["a-model-q4.gguf/tg128/t1", "b-model-q4.gguf/tg128/t1"]
-        self.assertEqual(dashboard_render.short_labels(keys), ["a-model-q4/tg128/t1", "b-model-q4/tg128/t1"])
+        self.assertEqual(dashboard_render.speed_labels(keys), ["a-model-q4, 1 thread", "b-model-q4, 1 thread"])
+
+    def test_speed_labels_include_the_test_when_a_chart_mixes_tests(self) -> None:
+        keys = ["m-q4_0.gguf/pp512/t1", "m-q4_0.gguf/pp1024/t1"]
+        self.assertEqual(dashboard_render.speed_labels(keys), ["Q4_0, 1 thread, pp512", "Q4_0, 1 thread, pp1024"])
+
+    def test_speed_labels_fall_back_to_the_raw_key(self) -> None:
+        self.assertEqual(
+            dashboard_render.speed_labels(["weird key", "m-q4_0.gguf/tg128/tx"]), ["weird key", "m-q4_0.gguf/tg128/tx"]
+        )
 
     def test_labels_are_clipped(self) -> None:
-        (label,) = dashboard_render.short_labels(["x" * 100])
+        (label,) = dashboard_render.speed_labels(["x" * 100])
         self.assertLessEqual(len(label), dashboard_render.MAX_LABEL)
+
+    def test_accuracy_legend_uses_upper_case_quant_names(self) -> None:
+        out, _ = render([row("min_cosine", "q4_k_m/capital", 0.999), row("min_cosine", "f16/capital", 0.9999)])
+        svg = (out / "accuracy.svg").read_text(encoding="utf-8")
+        self.assertIn(">Q4_K_M<", svg)
+        self.assertIn(">F16<", svg)
 
     def test_invalid_repo_is_rejected(self) -> None:
         for bad in ("", "nibble", 'a/b"onmouseover="x', "a/b/c", "a b/c"):
