@@ -155,6 +155,6 @@ class GhCli:
     def dispatch(self, workflow_file: str, ref: str, inputs: Mapping[str, str]) -> None:
         self._send(
             "POST",
-            f"repos/{self.repo}/actions/workflows/{workflow_file}/dispatches",
+            f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/dispatches",
             {"ref": ref, "inputs": dict(inputs)},
         )

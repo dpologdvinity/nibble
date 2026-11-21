@@ -146,6 +146,11 @@ class OtherCallTests(unittest.TestCase):
         runner = ScriptedRunner({"pulls?state=open": json.dumps([{"number": 7, "head": {"sha": "live"}}])})
         self.assertIsNone(gh.GhCli(REPO, runner).pr_for_sha("merged-head"))
 
+    def test_dispatch_encodes_workflow_file(self) -> None:
+        runner = ScriptedRunner()
+        gh.GhCli(REPO, runner).dispatch("my flow#1.yml", "master", {})
+        self.assertIn(f"repos/{REPO}/actions/workflows/my%20flow%231.yml/dispatches", runner.calls[0][0])
+
     def test_dispatch_posts_ref_and_inputs(self) -> None:
         runner = ScriptedRunner()
         gh.GhCli(REPO, runner).dispatch("claude-triage.yml", "master", {"issue": "12"})
