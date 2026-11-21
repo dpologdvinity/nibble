@@ -146,7 +146,7 @@ issue from another branch). A new workflow can only be dispatched after it is me
 | `portability.yml` | Sundays 04:23 UTC | `gh workflow run portability.yml` |
 | `scorecard.yml` | pushes to `master`, Mondays 05:37 UTC | `gh workflow run scorecard.yml` |
 | `link-check.yml` | Mondays 06:41 UTC | `gh workflow run link-check.yml`; locally `lychee --config .lychee.toml README.md ARCHITECTURE.md CONTRIBUTING.md SECURITY.md docs` |
-| `dashboard.yml` | after nightly, portability and ci finish on `master`, and daily at 09:47 UTC | `gh workflow run dashboard.yml` |
+| `dashboard.yml` | after nightly, portability and ci finish on `master`, and daily at 09:47 and 21:47 UTC | `gh workflow run dashboard.yml` |
 | `claude-triage.yml` | a new `ci-failure` issue | `gh workflow run claude-triage.yml -f issue=<number>` |
 | `claude.yml` | `@claude` from the owner, a member or a collaborator | comment `@claude <request>` |
 | `release.yml` | a `v*` tag | push the tag (see below) |
