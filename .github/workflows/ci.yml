@@ -6,7 +6,8 @@
 #   test             build + unit/integration tests in a matrix: portable (runtime-dispatched, as released; also run
 #                    with NIBBLE_KERNELS=avx2), native gcc (no AVX-VNNI tier)/clang, scalar kernels,
 #                    AddressSanitizer + UBSan, ThreadSanitizer; JUnit results go to Codecov Test Analytics
-#   coverage         gcc --coverage build, gcovr report (artifact + job summary + Codecov) with a minimum line coverage
+#   coverage         gcc --coverage build, gcovr report (artifact + job summary + Codecov) with a minimum line coverage;
+#                    on master it also records the line coverage for the dashboard (dashboard.yml)
 #   fuzz             60 s each of the GGUF-parser and full-load libFuzzer targets on a seeded corpus
 #   package          release tarballs and the container image (see package.yml)
 #
@@ -307,6 +308,22 @@ jobs:
           name: coverage
           path: coverage/
           retention-days: 14
+      # The line coverage of master's tip goes to the dashboard (dashboard.yml); pull requests and the tag runs that
+      # release.yml starts through workflow_call have nothing to add. The rows are a side output: a problem here must
+      # not turn the required coverage check red.
+      - name: Dashboard rows (line coverage)
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        continue-on-error: true
+        run: python tools/ci/dashboard_data.py from-gcovr coverage/summary.txt --source ci --out rows.jsonl
+      - name: Upload dashboard rows
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-coverage
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true
 
   fuzz:
     name: fuzz (60 s each)
