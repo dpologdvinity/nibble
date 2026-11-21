@@ -1,0 +1,27 @@
+# Feature request form: what is missing and why, so the change can be scoped against the project's goals
+# (a small, dependency-free CPU inference engine checked against llama.cpp).
+name: Feature request
+description: Suggest a model, quantization, kernel, option or other improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do that nibble cannot do (or does badly) today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like to see. Mention the model, quantization or CPU involved if it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or other approaches you tried or thought about.
+    validations:
+      required: false

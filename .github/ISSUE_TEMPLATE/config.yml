@@ -1,0 +1,7 @@
+# Issue chooser settings: no blank issues (the forms ask for what a report needs), and security problems go to the
+# private advisory form described in SECURITY.md instead of a public issue.
+blank_issues_enabled: false
+contact_links:
+  - name: Security report → SECURITY.md
+    url: https://github.com/dpologdvinity/nibble/security/policy
+    about: Report vulnerabilities (crafted GGUF files, crashes, hangs) privately, not in a public issue.

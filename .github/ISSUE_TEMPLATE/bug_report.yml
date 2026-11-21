@@ -1,0 +1,60 @@
+# Bug report form. The fields are what a maintainer needs to reproduce a problem: the build, the kernel tier, the
+# model file, the exact command and, for numerics, the end-to-end result against llama.cpp.
+name: Bug report
+description: Something crashes, hangs, or gives wrong output
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For a crash or hang triggered by a crafted `.gguf` file, please use the private
+        advisory form from [SECURITY.md](https://github.com/dpologdvinity/nibble/security/policy) instead.
+  - type: input
+    id: version
+    attributes:
+      label: nibble version
+      description: Output of `nibble --version` (the build's git SHA, `-dirty` if the tree had changes).
+      placeholder: 10b4a4e
+    validations:
+      required: true
+  - type: input
+    id: kernels
+    attributes:
+      label: Kernel tier
+      description: The `kernels:` line printed by `nibble info <model.gguf>`.
+      placeholder: "kernels: avx2+fma+f16c+avxvnni"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model file
+      description: File name, quantization and where it came from (for example the Hugging Face repository).
+      placeholder: qwen2.5-0.5b-instruct-q4_k_m.gguf
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact command line you ran.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs actual
+      description: What you expected to happen and what happened instead. Paste error text or output as is.
+    validations:
+      required: true
+  - type: textarea
+    id: e2e
+    attributes:
+      label: End-to-end result (optional)
+      description: >-
+        If the problem is numerical, the `min cosine` lines from `ctest --test-dir build -L e2e --output-on-failure`
+        (they need the models under `models/`), or a comparison against llama.cpp.
+      render: text
+    validations:
+      required: false
