@@ -1,39 +1,47 @@
 """Bug-fix proof: pick the Catch2 test cases a pull request added or changed, and judge how they ran on the base.
 
-nibble requires that a bug fix comes with a test that fails without the fix. CI checks that in three steps:
+nibble requires that a bug fix comes with a test that fails without the fix. CI checks that in four steps:
 
 1. `gate` says whether the pull request is a fix (`fix:` title or commit subject) that touches code
    (`src/`, `include/`, `cli/`). Other pull requests are not checked.
-2. `select` reads `git diff -U0 base head`, maps every added or modified line of `tests/*.cpp` to the TEST_CASE that
-   contains it, and writes `cases.json`. The workflow then builds the merge base with the PR's tests applied, runs
-   each selected case there (`specs` prints one Catch2 test spec per case) and keeps the JUnit XML it writes.
-3. `classify` reads that XML and judges (R9 of the plan): the fix is **proven** when at least one selected case fails
-   on the base. Cases that already pass are only listed. A base that does not compile with the new tests also counts
-   as proven (the tests use something the fix adds).
+2. `select` reads `git diff -U0 base...head` (changes since the merge base), maps every added or modified line of
+   `tests/*.cpp` to the TEST_CASE that contains it, and writes `cases.json`.
+3. The workflow builds the merge base with the PR's tests applied (ASan and UBSan), and `run` executes each selected
+   case there in a process of its own, recording the JUnit XML and how the process ended.
+4. `classify` judges (R9 of the plan): the fix is **proven** when at least one selected case fails on the base. Cases
+   that already pass are only listed. A base that does not compile with the new tests also counts as proven (the
+   tests use something the fix adds).
+
+A case counts as failed when its JUnit says so, or when its process crashed (signal), timed out or exited non-zero
+(a LeakSanitizer report comes after the JUnit and leaves the case passed in it; so does a non-halting sanitizer
+finding), provided `--list-tests` showed that the spec matches exactly that one case. Without that proof a process
+outcome is not attributed to the case, because Catch2 also exits 1 without running anything when it refuses its
+command line.
 
 What can never be proven, by design (the "unresolved" and "not-runnable" paths):
 
 * A TEST_CASE whose name is not one plain string literal (the `E2E_CASE` macro in tests/test_e2e_golden.cpp builds
   its names with the preprocessor) cannot be named to Catch2, so a change to it is listed as unresolved.
 * A change that deletes a whole TEST_CASE selects nothing and is listed as `deleted: <name>`.
-* A case that SKIPs on the base (the end-to-end cases without models) or leaves no result is not-runnable.
+* A case that SKIPs on the base (the end-to-end cases without models), or whose run left no result, is not-runnable.
 * Edits to tests/*.cpp files that neither nibble_tests nor nibble_alloc_tests builds (simd_helpers_test.cpp and so on)
   are listed as unresolved.
 
 Catch2 facts the code relies on (checked against Catch2 v3.16.1, the version CMakeLists.txt pins, by running real
 binaries with `-r junit`):
 
-* A test spec treats `,` `[` `]` `"` `~` `*` and `\\` specially; each needs a backslash (`catch_spec`). A leading or
-  trailing `*` stays a wildcard even when escaped, so such a name also matches other cases; results are therefore
-  looked up by exact name. A name starting with `exclude:` turns the spec into an exclusion that runs everything
-  else, so `test_cases` reports such a name as unresolved.
+* A test spec treats `,` `[` `]` `"` `~` `*` and `\\` specially; each needs a backslash (`catch_spec`), and so does a
+  leading `-`, which Catch2 would read as an option. A leading or trailing `*` stays a wildcard even when escaped, so
+  such a name also matches other cases; results are therefore looked up by exact name. A name starting with
+  `exclude:` turns the spec into an exclusion that runs everything else, so `test_cases` reports such a name as
+  unresolved.
 * Spec matching ignores case; the JUnit `<testcase name>` is the exact name. A section is its own `<testcase>` named
-  `<case>/<section>`; the case's own element exists only if it made an assertion directly. Only the first failing
-  assertion of a section is written, as `<failure>` (or `<error>` for an exception or a caught signal such as
-  SIGABRT), and a SKIP is `<skipped type="SKIP">`. A `[!mayfail]` case that fails gets both a `<skipped>` and a
-  `<failure>`; it is reported as skipped, never as failed.
-* A process that dies without the XML being written (a sanitizer abort, for example) leaves no usable file, which
-  reads as "missing" and so never as proven.
+  `<case>/<section>`. A `<testcase>` is written only for a case or section that made an assertion, so a passing case
+  without assertions has none. Only the first failing assertion of a section is written, as `<failure>` (or `<error>`
+  for an exception or a caught signal such as SIGABRT), and a SKIP is `<skipped type="SKIP">`. A `[!mayfail]` case
+  that fails gets both a `<skipped>` and a `<failure>`; it is reported as skipped, never as failed.
+* Exit codes: 0 passed, 42 an assertion failed, 4 every case skipped, 2/3/5/6 nothing ran (no match, unmatched or bad
+  spec, bad reporter), 1 an unspecified error (and what the sanitizers exit with).
 
 usage:
     python tools/ci/fix_proof.py gate --title "$PR_TITLE" --base "$BASE_SHA" --head "$HEAD_SHA"
@@ -41,23 +49,33 @@ usage:
     python tools/ci/fix_proof.py select --base "$BASE_SHA" --head "$HEAD_SHA" --out cases.json
         `--base` may be the base branch tip or the merge base: both diffs are `base...head`, which starts at the merge
         base. Run in a git checkout with both commits (or pass `--repo DIR`). Prints `selected=<n>`.
-    python tools/ci/fix_proof.py specs --cases cases.json
-        one line per selected case: `<index>\\t<binary>\\t<catch2 test spec>` (tab separated); run
-        `build/<binary> "<spec>" -r junit -o results/case-<index>.xml` for each.
+    python tools/ci/fix_proof.py run --cases cases.json --build-dir build --results-dir results [--timeout 600]
+        for each selected case, in order, runs `<build-dir>/<binary> <spec> -r junit -o <results-dir>/<n>.xml` (n is
+        the case's index in cases.json) with `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1` and
+        `ASAN_OPTIONS=detect_leaks=1` (options already set in the environment are kept), and a timeout per case
+        (seconds, default 600). Next to the XML it writes `<n>.status.json`
+        (`{"started", "exit_code", "signal", "timed_out", "unique"}`; `unique` is the `--list-tests` probe) and
+        `<n>.log` (the tail of the output, evidence for a failure). Always exits 0 unless the arguments are bad.
     python tools/ci/fix_proof.py classify --cases cases.json --results-dir results --base-compiled true|false \\
         [--override] --summary "$GITHUB_STEP_SUMMARY"
-        reads every `*.xml` under --results-dir (one file per case or per binary, either works), appends a Markdown
-        summary to --summary, prints `outcome=<outcome>` and exits 1 for no-test (unless --override, which the
-        workflow sets for the `no-test-needed` label) and does-not-reproduce, else 0. Other errors exit 2.
+        reads `<n>.xml` and `<n>.status.json` of every case from --results-dir, appends a Markdown summary to
+        --summary, prints `outcome=<outcome>` and exits 1 for no-test (unless --override, which the workflow sets for
+        the `no-test-needed` label) and does-not-reproduce, else 0. Other errors exit 2. Per case: failed JUnit is
+        failed; passed JUnit with a failed process is failed; no JUnit element with exit 0 is passed (a case with no
+        assertions); skipped is skipped; anything not attributable is missing (see `case_result`).
+    python tools/ci/fix_proof.py specs --cases cases.json
+        one line per selected case, `<index>\\t<binary>\\t<catch2 test spec>`, for running cases by hand.
 
 cases.json is `{"cases": [{"file", "name", "start", "end", "binary", "spec"}...], "unresolved": ["..."]}`; only
-`file`, `name`, `start`, `end`, `binary` and `unresolved` are read back (the spec is recomputed).
+`file`, `name`, `start`, `end`, `binary` (nibble_tests or nibble_alloc_tests) and `unresolved` are read back (the
+spec is recomputed).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -77,6 +95,9 @@ ALLOC_BINARY = "nibble_alloc_tests"
 _TEST_FILE = re.compile(r"^tests/[^/]+\.cpp$")
 MACRO_BUILT = "<macro-built>"
 MAX_XML_BYTES = 20_000_000
+MAX_LOG_BYTES = 64_000  # the tail of a case's output kept as evidence
+DEFAULT_TIMEOUT = 600.0  # seconds per case in `run`
+LIST_TIMEOUT = 60.0  # seconds for one `--list-tests` probe
 
 
 class Case(NamedTuple):
@@ -473,6 +494,71 @@ def parse_junit(xml: str, name: str) -> CaseResult:
     return best
 
 
+class RunStatus(NamedTuple):
+    """What `run` recorded about the process that ran one case (`<index>.status.json`).
+
+    `started` is False when the binary could not be started. `exit_code` is None when a signal or the timeout ended
+    the process, `signal` the number of that signal. `unique` says that `<binary> <spec> --list-tests` showed the
+    spec to match exactly this one case, so that whatever the process did can be attributed to the case.
+    """
+
+    started: bool
+    exit_code: int | None
+    signal: int | None
+    timed_out: bool
+    unique: bool
+
+
+# Catch2's own exit codes (catch_session.hpp): 0 passed, 4 every case skipped (also true when one section of a case
+# skipped), 42 an assertion failed; 2, 3, 5 and 6 mean it ran nothing (no match, unmatched spec, bad spec, bad
+# reporter). 1 is both Catch2's "unspecified error" (a command line it refused) and what ASan, UBSan and LeakSanitizer
+# exit with, hence the `unique` requirement before a non-zero exit counts against a case.
+_BENIGN_EXITS = frozenset({0, 4})
+_REFUSED_EXITS = frozenset({2, 3, 5, 6})
+
+
+def case_result(name: str, xml: str | None, run: RunStatus | None) -> tuple[CaseResult, str]:
+    """Combine the JUnit text (None when no file) and the process outcome of one case into (result, note).
+
+    * JUnit says failed, or skipped: that.
+    * JUnit says passed, but the process failed (a signal, the timeout, any exit but 0 and 4): failed. This is how
+      LeakSanitizer (reports at exit, after the XML) and non-halting sanitizer findings show up. Only when the
+      listing proved the spec unique.
+    * No JUnit element (Catch2 writes none for a case without assertions): exit 0 means the case passed, exit 4
+      skipped, and a process that died (signal, timeout, other exit) failed, again only for a unique spec; if Catch2
+      itself refused the run (exit 2, 3, 5, 6) or the binary did not start, the case is missing.
+    * No status file: the JUnit alone decides (a missing or unreadable file is missing).
+    The note names the process outcome when it decided the result.
+    """
+    state = parse_junit(xml, name) if xml is not None else "missing"
+    if state in ("failed", "skipped") or run is None:
+        return state, ""
+    if not run.started:
+        return "missing", "the test binary did not start"
+    died = run.timed_out or run.signal is not None or run.exit_code not in _BENIGN_EXITS | _REFUSED_EXITS | {None}
+    how = (
+        "timed out"
+        if run.timed_out
+        else f"killed by signal {run.signal}"
+        if run.signal is not None
+        else f"exited with status {run.exit_code}"
+    )
+    if state == "passed":
+        if died and run.unique:
+            return "failed", f"{how} although the JUnit reported a pass (sanitizer or leak report)"
+        return "passed", ""
+    # no JUnit element for the case
+    if run.exit_code in _REFUSED_EXITS:
+        return "missing", f"Catch2 ran nothing ({how})"
+    if not run.unique:
+        return "missing", "the test spec did not match exactly one case, so the process outcome is not attributed"
+    if died:
+        return "failed", f"{how}, no JUnit result"
+    if run.exit_code == 4:
+        return "skipped", ""
+    return "passed", "no JUnit element (the case made no assertion) and exit status 0"
+
+
 def classify(selection: Selection, base_compiled: bool, results: Mapping[str, CaseResult]) -> Outcome:
     """Judge the run of the selected cases on the base (rules in order, R9 of the plan)."""
     if not selection.cases:
@@ -534,8 +620,14 @@ _HEADLINES: dict[Outcome, str] = {
 }
 
 
-def summary(outcome: Outcome, selection: Selection, results: Mapping[str, CaseResult]) -> str:
-    """The Markdown job summary: the verdict, one line per selected case and every unresolved item."""
+def summary(
+    outcome: Outcome,
+    selection: Selection,
+    results: Mapping[str, CaseResult],
+    notes: Mapping[str, str] | None = None,
+) -> str:
+    """The Markdown job summary: the verdict, one line per selected case (with `notes[name]` when given) and every
+    unresolved item."""
     lines = [f"### Bug-fix proof: {outcome}", "", _HEADLINES[outcome], ""]
     if selection.cases:
         lines.append("Selected test cases and how they ran on the base:")
@@ -543,7 +635,8 @@ def summary(outcome: Outcome, selection: Selection, results: Mapping[str, CaseRe
         for case in selection.cases:
             state = results.get(_name(case), "missing")
             note = " (already passing)" if state == "passed" else ""
-            lines.append(f"- {state}{note}: {_md(_name(case))} ({_md(case.file)}:{case.start})")
+            why = f" [{_md(notes[_name(case)])}]" if notes and notes.get(_name(case)) else ""
+            lines.append(f"- {state}{note}: {_md(_name(case))} ({_md(case.file)}:{case.start}){why}")
         lines.append("")
     if selection.unresolved:
         lines.append("Not checked:")
@@ -615,19 +708,116 @@ def _read_selection(path: str) -> Selection:
     return Selection(cases, unresolved)
 
 
-def read_results(results_dir: str, selection: Selection) -> dict[str, CaseResult]:
-    """The best result per selected case over every `*.xml` in `results_dir` (failed beats passed beats skipped)."""
+def _read_status(path: Path) -> RunStatus | None:
+    """`<index>.status.json` as written by `run`; None when absent or not exactly that shape."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or set(raw) != {"started", "exit_code", "signal", "timed_out", "unique"}:
+        return None
+    started, code, sig, timed_out, unique = (raw[k] for k in ("started", "exit_code", "signal", "timed_out", "unique"))
+
+    def small_int_or_none(v: object) -> bool:
+        return v is None or (isinstance(v, int) and not isinstance(v, bool) and -1000 < v < 1000)
+
+    if not (
+        isinstance(started, bool)
+        and isinstance(timed_out, bool)
+        and isinstance(unique, bool)
+        and small_int_or_none(code)
+        and small_int_or_none(sig)
+    ):
+        return None
+    return RunStatus(started, code, sig, timed_out, unique)
+
+
+def read_results(results_dir: str, selection: Selection) -> tuple[dict[str, CaseResult], dict[str, str]]:
+    """(result, note) per selected case name from the files `run` wrote: `<index>.xml` and `<index>.status.json`.
+
+    `<index>` is the position of the case in `selection.cases`. An absent, oversized or unreadable XML counts as no
+    JUnit; see `case_result` for how it combines with the process status.
+    """
     results: dict[str, CaseResult] = {}
-    for xml_path in sorted(Path(results_dir).glob("*.xml")):
-        if xml_path.stat().st_size > MAX_XML_BYTES:
-            continue  # too large to be a Catch2 report of a handful of cases; counts as missing
-        text = xml_path.read_text(encoding="utf-8", errors="replace")
-        for case in selection.cases:
-            name = _name(case)
-            state = parse_junit(text, name)
-            if _RANK[state] > _RANK[results.get(name, "missing")]:
-                results[name] = state
-    return results
+    notes: dict[str, str] = {}
+    for index, case in enumerate(selection.cases):
+        name = _name(case)
+        xml_path = Path(results_dir, f"{index}.xml")
+        xml: str | None = None
+        if xml_path.is_file() and xml_path.stat().st_size <= MAX_XML_BYTES:
+            xml = xml_path.read_text(encoding="utf-8", errors="replace")
+        state, note = case_result(name, xml, _read_status(Path(results_dir, f"{index}.status.json")))
+        if _RANK[state] >= _RANK[results.get(name, "missing")]:
+            results[name] = state
+            notes[name] = note
+    return results, notes
+
+
+def _merge_options(existing: str | None, wanted: str) -> str:
+    """`existing` (a sanitizer options string `a=1:b=2`) plus those `wanted` options it does not already set."""
+    parts = [p for p in (existing or "").split(":") if p]
+    present = {p.split("=", 1)[0] for p in parts}
+    return ":".join(parts + [w for w in wanted.split(":") if w.split("=", 1)[0] not in present])
+
+
+def _list_probe(binary: Path, spec: str, name: str) -> bool:
+    """True when `<binary> <spec> --list-tests` lists exactly one case and it is `name`."""
+    try:
+        proc = subprocess.run(
+            [str(binary), spec, "--list-tests", "-r", "xml"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=LIST_TIMEOUT,
+            check=False,
+        )
+        listed = [el.findtext("Name", "").strip() for el in ET.fromstring(proc.stdout).iter("TestCase")]
+    except (OSError, subprocess.TimeoutExpired, ET.ParseError):
+        return False
+    return listed == [name]
+
+
+def run_case(build_dir: Path, results_dir: Path, index: int, case: Case, timeout: float) -> RunStatus:
+    """Run one case in its own process and leave `<index>.xml`, `<index>.log` and `<index>.status.json` behind."""
+    binary = build_dir / case.binary
+    spec = catch_spec(_name(case))
+    xml_path = results_dir / f"{index}.xml"
+    xml_path.unlink(missing_ok=True)
+    env = dict(os.environ)
+    env["UBSAN_OPTIONS"] = _merge_options(env.get("UBSAN_OPTIONS"), "halt_on_error=1:print_stacktrace=1")
+    env["ASAN_OPTIONS"] = _merge_options(env.get("ASAN_OPTIONS"), "detect_leaks=1")
+    log = b""
+    if not binary.is_file():
+        status = RunStatus(False, None, None, False, False)
+    else:
+        unique = _list_probe(binary, spec, _name(case))
+        try:
+            proc = subprocess.run(
+                [str(binary), spec, "-r", "junit", "-o", str(xml_path)],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=False,
+            )
+            log = proc.stdout or b""
+            code = proc.returncode
+            status = RunStatus(True, None if code < 0 else code, -code if code < 0 else None, False, unique)
+        except subprocess.TimeoutExpired as exc:
+            log = exc.stdout if isinstance(exc.stdout, bytes) else b""
+            status = RunStatus(True, None, None, True, unique)
+        except OSError:
+            status = RunStatus(False, None, None, False, False)
+    (results_dir / f"{index}.log").write_bytes(log[-MAX_LOG_BYTES:])
+    payload = {
+        "started": status.started,
+        "exit_code": status.exit_code,
+        "signal": status.signal,
+        "timed_out": status.timed_out,
+        "unique": status.unique,
+    }
+    (results_dir / f"{index}.status.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    return status
 
 
 def _cmd_gate(args: argparse.Namespace) -> int:
@@ -661,12 +851,26 @@ def _cmd_specs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run(args: argparse.Namespace) -> int:
+    selection = _read_selection(args.cases)
+    results_dir = Path(args.results_dir).resolve()
+    results_dir.mkdir(parents=True, exist_ok=True)
+    build_dir = Path(args.build_dir).resolve()
+    for index, case in enumerate(selection.cases):
+        status = run_case(build_dir, results_dir, index, case, args.timeout)
+        print(
+            f"{index}: {_name(case)}: started={status.started} exit={status.exit_code} signal={status.signal}",
+            file=sys.stderr,
+        )
+    return 0
+
+
 def _cmd_classify(args: argparse.Namespace) -> int:
     selection = _read_selection(args.cases)
-    results = read_results(args.results_dir, selection)
+    results, notes = read_results(args.results_dir, selection)
     outcome = classify(selection, args.base_compiled == "true", results)
     with open(args.summary, "a", encoding="utf-8") as handle:
-        handle.write(summary(outcome, selection, results) + "\n")
+        handle.write(summary(outcome, selection, results, notes) + "\n")
     print(f"outcome={outcome}")
     return exit_code(outcome, args.override)
 
@@ -693,6 +897,13 @@ def main(argv: Sequence[str]) -> int:
     specs = sub.add_parser("specs", help="print `index<TAB>binary<TAB>spec` per selected case")
     specs.add_argument("--cases", required=True)
     specs.set_defaults(func=_cmd_specs)
+
+    run = sub.add_parser("run", help="run every selected case in its own process and record how it ended")
+    run.add_argument("--cases", required=True)
+    run.add_argument("--build-dir", required=True, help="directory holding nibble_tests and nibble_alloc_tests")
+    run.add_argument("--results-dir", required=True)
+    run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds per case (default 600)")
+    run.set_defaults(func=_cmd_run)
 
     cls = sub.add_parser("classify", help="judge the JUnit results and exit non-zero when the fix is not proven")
     cls.add_argument("--cases", required=True)

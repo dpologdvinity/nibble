@@ -12,11 +12,16 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
 import fix_proof
 from fix_proof import Case, CaseResult, Selection
@@ -513,6 +518,268 @@ class ClassifyTests(unittest.TestCase):
         self.assertNotIn("`tick`", text)
 
 
+def status(**changes: Any) -> fix_proof.RunStatus:
+    """What `run` records about one process: a started one that exited 0 on a unique spec, with `changes` applied."""
+    fields: dict[str, Any] = {"started": True, "exit_code": 0, "signal": None, "timed_out": False, "unique": True}
+    return fix_proof.RunStatus(**(fields | changes))
+
+
+class CaseResultTests(unittest.TestCase):
+    """How one case's JUnit and process outcome combine (P21: crashes, sanitizers and zero-assertion cases)."""
+
+    def result(self, xml: str | None, st: fix_proof.RunStatus | None) -> CaseResult:
+        return fix_proof.case_result("passes", xml, st)[0]
+
+    def test_junit_alone_when_there_is_no_status(self) -> None:
+        self.assertEqual(self.result(_junit(PASSED), None), "passed")
+        self.assertEqual(self.result(_junit(SKIPPED.replace("skips", "passes")), None), "skipped")
+        self.assertEqual(self.result(None, None), "missing")
+        self.assertEqual(self.result("not xml", None), "missing")
+
+    def test_failed_and_skipped_junit_win_over_the_exit_status(self) -> None:
+        failed = _junit(FAILED.replace("fails, with [x] &amp; &lt;b> &quot;q&quot;", "passes"))
+        skipped = _junit(SKIPPED.replace("skips", "passes"))
+        self.assertEqual(self.result(failed, status(exit_code=0)), "failed")
+        self.assertEqual(self.result(skipped, status(exit_code=4)), "skipped")  # exit 4 is Catch2's "all skipped"
+        self.assertEqual(self.result(skipped, status(exit_code=1)), "skipped")
+
+    def test_passed_junit_with_a_failing_process_is_failed(self) -> None:
+        # LeakSanitizer reports at exit, after Catch2 wrote the XML with the case passed (I3).
+        passed = _junit(PASSED)
+        for kwargs in (
+            {"exit_code": 1},
+            {"exit_code": 23},
+            {"exit_code": None, "signal": 6},
+            {"exit_code": None, "timed_out": True},
+        ):
+            with self.subTest(kwargs):
+                self.assertEqual(self.result(passed, status(**kwargs)), "failed")
+        for kwargs in ({"exit_code": 0}, {"exit_code": 4}):  # 4: a skipped section next to a passing one
+            with self.subTest(kwargs):
+                self.assertEqual(self.result(passed, status(**kwargs)), "passed")
+        # Without proof that the spec named exactly this case, a non-zero exit is not attributed to it.
+        self.assertEqual(self.result(passed, status(exit_code=1, unique=False)), "passed")
+
+    def test_no_junit_and_a_died_process_is_failed_only_for_a_unique_spec(self) -> None:
+        for kwargs in (
+            {"exit_code": None, "signal": 6},
+            {"exit_code": None, "signal": 11},
+            {"exit_code": None, "timed_out": True},
+            {"exit_code": 1},
+        ):
+            with self.subTest(kwargs):
+                self.assertEqual(self.result(None, status(**kwargs)), "failed")
+                self.assertEqual(self.result(None, status(unique=False, **kwargs)), "missing")
+
+    def test_no_junit_and_catch2_refusing_the_run_is_missing(self) -> None:
+        # 1 with a bad command line ("Unrecognised token") is indistinguishable from a sanitizer exit, which is
+        # why a unique `--list-tests` match is required above; 2, 3, 5 and 6 say that Catch2 ran nothing.
+        for code in (2, 3, 5, 6):
+            with self.subTest(code):
+                self.assertEqual(self.result(None, status(exit_code=code)), "missing")
+        self.assertEqual(self.result(None, fix_proof.RunStatus(False, None, None, False, True)), "missing")
+
+    def test_zero_assertion_case_that_exits_zero_passed(self) -> None:
+        # Catch2 writes no <testcase> for a case without assertions (M2).
+        self.assertEqual(self.result(_junit(), status(exit_code=0)), "passed")
+        self.assertEqual(self.result(None, status(exit_code=0)), "passed")
+        self.assertEqual(self.result(_junit(), status(exit_code=0, unique=False)), "missing")
+        self.assertEqual(self.result(_junit(), status(exit_code=4)), "skipped")
+
+    def test_notes_say_why(self) -> None:
+        note = fix_proof.case_result("passes", None, status(exit_code=None, signal=6))[1]
+        self.assertIn("signal 6", note)
+        note = fix_proof.case_result("passes", None, status(exit_code=None, timed_out=True))[1]
+        self.assertIn("timed out", note)
+        note = fix_proof.case_result("passes", _junit(PASSED), status(exit_code=1))[1]
+        self.assertIn("status 1", note)
+        self.assertIn("reported a pass", note)
+
+
+# A stand-in for a Catch2 test binary: it understands `<spec> --list-tests -r xml` and `<spec> -r junit -o FILE`, and
+# behaves according to the test name, so `run` can be exercised with real processes (signals, timeouts, exit codes)
+# without building the project. Like the real one it rejects an argument starting with `-` it does not know.
+FAKE_BINARY = """\
+#!{python}
+import json, os, re, signal, sys, time
+args = sys.argv[1:]
+spec = args[0]
+if spec.startswith("-"):
+    print("Error(s) in input:\\n  Unrecognised token: " + spec)
+    sys.exit(1)
+name = re.sub(r"\\\\(.)", r"\\1", spec)
+if "--list-tests" in args:
+    count = 2 if name.startswith("ambiguous") else 0 if name.startswith("nomatch") else 1
+    cases = "".join(f"<TestCase><Name>{{name}}</Name></TestCase>" for _ in range(count))
+    print("<MatchingTests>" + cases + "</MatchingTests>")
+    sys.exit(0)
+out = args[args.index("-o") + 1]
+with open(os.path.join(os.path.dirname(out), "env-" + os.path.basename(out) + ".json"), "w") as f:
+    json.dump({{k: os.environ.get(k) for k in ("ASAN_OPTIONS", "UBSAN_OPTIONS")}}, f)
+def write(element, code):
+    body = ""
+    if element is not None:
+        body = f'<testcase classname="t.global" name="{{name}}" status="run">{{element}}</testcase>'
+    open(out, "w").write(f'<?xml version="1.0"?><testsuites><testsuite name="t">{{body}}</testsuite></testsuites>')
+    print("leak report on stderr" if name == "leaks" else "done", file=sys.stderr)
+    sys.exit(code)
+if name == "aborts":
+    os.kill(os.getpid(), signal.SIGABRT)
+elif name == "hangs":
+    time.sleep(60)
+elif name == "fails":
+    write("<failure message='x'>FAILED</failure>", 42)
+elif name == "leaks":
+    write("", 1)
+elif name == "noassert":
+    write(None, 0)
+elif name == "skips":
+    write("<skipped type='SKIP'>SKIPPED</skipped>", 4)
+elif name.startswith("nomatch"):
+    write(None, 2)
+elif name.startswith("ambiguous"):
+    os.kill(os.getpid(), signal.SIGABRT)
+else:
+    write("", 0)
+"""
+
+
+class RunTests(unittest.TestCase):
+    """`run` and `classify` with fake Catch2 binaries as real subprocesses."""
+
+    NAMES = [
+        "passes",
+        "fails",
+        "leaks",
+        "aborts",
+        "hangs",
+        "noassert",
+        "skips",
+        "ambiguous abort",
+        "-1 handling",
+        "x, [y] *",
+    ]
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.build = Path(self.tmp.name, "build")
+        self.build.mkdir()
+        for binary in ("nibble_tests", "nibble_alloc_tests"):
+            path = self.build / binary
+            path.write_text(FAKE_BINARY.format(python=sys.executable), encoding="utf-8")
+            path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        self.results = Path(self.tmp.name, "results")
+        self.cases = Path(self.tmp.name, "cases.json")
+
+    def write_cases(self, names: list[str], binary: str = "nibble_tests") -> Selection:
+        selection = Selection(
+            [Case("tests/test_x.cpp", n, 1 + 10 * i, 9 + 10 * i, binary) for i, n in enumerate(names)], []
+        )
+        payload = {"cases": [fix_proof._case_to_json(c) for c in selection.cases], "unresolved": []}
+        self.cases.write_text(json.dumps(payload), encoding="utf-8")
+        return selection
+
+    def main(self, *argv: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = fix_proof.main(argv)
+        return code, out.getvalue()
+
+    def run_all(self, *extra: str) -> None:
+        code, _ = self.main(
+            "run", "--cases", str(self.cases), "--build-dir", str(self.build), "--results-dir", str(self.results),
+            "--timeout", "2", *extra,
+        )  # fmt: skip
+        self.assertEqual(code, 0)
+
+    def test_run_then_classify_each_kind_of_process_outcome(self) -> None:
+        selection = self.write_cases(self.NAMES)
+        self.run_all()
+        results, notes = fix_proof.read_results(str(self.results), selection)
+        self.assertEqual(
+            results,
+            {
+                "passes": "passed",
+                "fails": "failed",
+                "leaks": "failed",  # the JUnit says passed, the process exited 1
+                "aborts": "failed",  # no JUnit, SIGABRT, spec unique
+                "hangs": "failed",  # timed out
+                "noassert": "passed",  # no <testcase>, exit 0
+                "skips": "skipped",
+                "ambiguous abort": "missing",  # the spec matched two cases: not attributable
+                "-1 handling": "passed",  # the leading dash was escaped; an unescaped one is refused with exit 1
+                "x, [y] *": "passed",
+            },
+        )
+        self.assertIn("signal 6", notes["aborts"])
+        self.assertIn("timed out", notes["hangs"])
+
+    def test_run_files(self) -> None:
+        self.write_cases(["passes", "aborts"])
+        self.run_all()
+        self.assertTrue((self.results / "0.xml").is_file())
+        self.assertFalse((self.results / "1.xml").exists())
+        recorded = json.loads((self.results / "1.status.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            recorded, {"started": True, "exit_code": None, "signal": 6, "timed_out": False, "unique": True}
+        )
+        self.assertTrue((self.results / "0.log").is_file())  # the process output, as evidence for a failure
+        self.assertTrue((self.results / "1.log").is_file())
+
+    def test_run_sets_sanitizer_options_and_keeps_existing_values(self) -> None:
+        self.write_cases(["passes"])
+        env = {"ASAN_OPTIONS": "abort_on_error=1", "UBSAN_OPTIONS": "halt_on_error=0"}
+        with mock.patch.dict(os.environ, env):
+            self.run_all()
+        seen = json.loads((self.results / "env-0.xml.json").read_text(encoding="utf-8"))
+        self.assertEqual(seen["ASAN_OPTIONS"], "abort_on_error=1:detect_leaks=1")
+        self.assertEqual(seen["UBSAN_OPTIONS"], "halt_on_error=0:print_stacktrace=1")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ASAN_OPTIONS", None)
+            os.environ.pop("UBSAN_OPTIONS", None)
+            self.run_all()
+        seen = json.loads((self.results / "env-0.xml.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            seen, {"ASAN_OPTIONS": "detect_leaks=1", "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"}
+        )
+
+    def test_merge_options(self) -> None:
+        self.assertEqual(fix_proof._merge_options(None, "a=1:b=2"), "a=1:b=2")
+        self.assertEqual(fix_proof._merge_options("", "a=1"), "a=1")
+        self.assertEqual(fix_proof._merge_options("b=0:c=3", "a=1:b=2"), "b=0:c=3:a=1")
+
+    def test_missing_binary_is_recorded_not_fatal(self) -> None:
+        self.write_cases(["passes"], binary="nibble_alloc_tests")
+        (self.build / "nibble_alloc_tests").unlink()
+        self.run_all()
+        recorded = json.loads((self.results / "0.status.json").read_text(encoding="utf-8"))
+        self.assertFalse(recorded["started"])
+        results, _ = fix_proof.read_results(str(self.results), self.write_cases(["passes"], "nibble_alloc_tests"))
+        self.assertEqual(results, {"passes": "missing"})
+
+    def test_classify_cli_proves_a_crash_and_explains_it(self) -> None:
+        self.write_cases(["passes", "aborts"])
+        self.run_all()
+        summary_file = Path(self.tmp.name, "summary.md")
+        code, out = self.main(
+            "classify", "--cases", str(self.cases), "--results-dir", str(self.results),
+            "--base-compiled", "true", "--summary", str(summary_file),
+        )  # fmt: skip
+        self.assertEqual((code, out.strip()), (0, "outcome=proven"))
+        text = summary_file.read_text(encoding="utf-8")
+        self.assertIn("- failed: aborts", text)
+        self.assertIn("signal 6", text)
+
+    def test_a_refused_command_line_never_proves_anything(self) -> None:
+        # Had the leading dash not been escaped, the binary would exit 1 without a JUnit file: with a unique
+        # `--list-tests` match that would read as a crash. Here the listing finds nothing, so it stays missing.
+        selection = self.write_cases(["nomatch case"])
+        self.run_all()
+        results, _ = fix_proof.read_results(str(self.results), selection)
+        self.assertEqual(results, {"nomatch case": "missing"})
+
+
 def git(repo: Path, *args: str) -> str:
     done = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True)
     return done.stdout.strip()
@@ -660,17 +927,20 @@ class CommandLineTests(unittest.TestCase):
     def test_classify_proven(self) -> None:
         failing = _junit(FAILED.replace("fails, with [x] &amp; &lt;b> &quot;q&quot;", "new fails"))
         passing = _junit(PASSED.replace("passes", r"old, [one]"))
-        code, stdout, text = self.classify({"case-0.xml": passing, "case-1.xml": failing})
+        code, stdout, text = self.classify({"0.xml": passing, "1.xml": failing})
         self.assertEqual((code, stdout), (0, "outcome=proven"))
         self.assertIn("- failed: new fails", text)
         self.assertIn("already passing", text)
 
     def test_classify_all_pass_does_not_reproduce(self) -> None:
-        both = _junit(PASSED.replace("passes", "new fails"), PASSED.replace("passes", "old, [one]"))
-        self.assertEqual(self.classify({"nibble_tests.xml": both})[:2], (1, "outcome=does-not-reproduce"))
+        results = {
+            "0.xml": _junit(PASSED.replace("passes", "old, [one]")),
+            "1.xml": _junit(PASSED.replace("passes", "new fails")),
+        }
+        self.assertEqual(self.classify(results)[:2], (1, "outcome=does-not-reproduce"))
 
     def test_classify_no_results_is_not_runnable_and_exit_zero(self) -> None:
-        self.assertEqual(self.classify({"case-0.xml": "not xml"})[:2], (0, "outcome=not-runnable"))
+        self.assertEqual(self.classify({"0.xml": "not xml"})[:2], (0, "outcome=not-runnable"))
 
     def test_classify_base_does_not_compile(self) -> None:
         self.assertEqual(self.classify({}, compiled="false")[:2], (0, "outcome=proven-base-does-not-compile"))
