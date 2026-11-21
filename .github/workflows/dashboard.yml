@@ -4,15 +4,16 @@
 # publishes a static page with the status of every job and the speed, accuracy, fuzzing, size and coverage charts to
 # GitHub Pages (https://dpologdvinity.github.io/nibble/), plus badge.json for the README's nightly badge. See
 # tools/ci/dashboard_data.py (row schema, merge) and tools/ci/dashboard_render.py (the site).
-# By hand (the workflow file must be on the default branch): `gh workflow run dashboard.yml` re-renders the site from
-# the stored rows. To add the rows of a run whose dashboard run was lost (see the concurrency note below), or whose
-# artifacts are still within retention: `gh workflow run dashboard.yml -f run-id=<run id of nightly/portability/ci>`.
+# By hand (the workflow file must be on the default branch): `gh workflow run dashboard.yml` sweeps the last week of runs
+# (below) and re-renders the site.
 # Trust: a workflow_run workflow has a write token, so it never checks out or runs code from the run that triggered it.
 # It runs master's tools and treats the downloaded artifacts as data: `dashboard_data.py merge` validates every row, and
-# only runs of this repository started by schedule, push or workflow_dispatch are accepted (not pull requests).
-# Concurrency: runs queue one at a time and are never cancelled, but GitHub keeps only one *pending* run per group, so
-# a third completion arriving while one run is going and another is waiting replaces the waiting one. Its rows are then
-# not merged; the run-id input above puts them back.
+# only runs of this repository started by schedule, push or workflow_dispatch are accepted (not pull requests); the
+# sweep (tools/ci/dashboard_sweep.py) applies the same filter.
+# Concurrency: runs queue one at a time and are never cancelled, but GitHub keeps only one *pending* run per group, so a
+# third completion arriving while one run is going and another is waiting replaces the waiting one. Nothing is lost
+# because every run also sweeps the nightly, portability and ci runs of the last 7 days (the artifact retention) on
+# master: merge drops the rows it already has, so repeats are free, and the next run picks up what a dropped one missed.
 # Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
 name: dashboard
 
@@ -22,11 +23,6 @@ on:
     types: [completed]
     branches: [master]
   workflow_dispatch:
-    inputs:
-      run-id:
-        description: Optional id of a nightly, portability or ci run whose dashboard rows to add before re-rendering
-        type: string
-        default: ""
 
 concurrency:
   group: dashboard
@@ -52,15 +48,9 @@ jobs:
       contents: write  # pushes the data branch
       actions: read  # downloads the artifacts of the triggering run
     env:
-      # The run whose rows are added: the one that triggered this, else the optional input, else none.
-      SOURCE_RUN: ${{ github.event.workflow_run.id || inputs.run-id }}
+      # The run that triggered this one (empty on a dispatch); it names the commit, and its rows are fetched first.
+      SOURCE_RUN: ${{ github.event.workflow_run.id }}
     steps:
-      - name: Check the run id
-        run: |
-          if [[ -n "$SOURCE_RUN" && ! "$SOURCE_RUN" =~ ^[0-9]+$ ]]; then
-            echo "::error title=run-id::'$SOURCE_RUN' is not a run id (digits only)"
-            exit 1
-          fi
       # Master's code, without credentials: it only runs tools/ci and reads bench/plot.py.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,15 +62,22 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       # Data only. Every nightly/portability job (and ci's coverage job) uploads its own `dashboard-rows-<job>` with a
       # file named rows.jsonl; they must not be merged into one directory, or they would overwrite each other. (With
-      # exactly one match the action extracts straight into `incoming`, with several into incoming/<name>/.)
-      - name: Download the dashboard rows of the run
-        if: ${{ env.SOURCE_RUN != '' }}
+      # exactly one match the action extracts straight into `incoming/trigger`, with several into subdirectories.)
+      - name: Download the dashboard rows of the triggering run
+        if: ${{ github.event_name == 'workflow_run' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           run-id: ${{ env.SOURCE_RUN }}
           github-token: ${{ github.token }}
           pattern: dashboard-rows-*
-          path: incoming
+          path: incoming/trigger
+      # Also every other trusted run of the last week, so a run whose own dashboard run was replaced while waiting is
+      # picked up by the next one. A failure here only costs the sweep (the triggering run's rows are already in).
+      - name: Sweep the rows of the last 7 days
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python code/tools/ci/dashboard_sweep.py --repo "$GITHUB_REPOSITORY" --branch master --days 7 --dest incoming/swept
       # The data branch is a checkout of master that is switched to dashboard-data below (or to a new orphan branch),
       # so this step has the credentials to push and nothing else needs them.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,7 +124,7 @@ jobs:
               python code/tools/ci/dashboard_data.py merge data/data/rows.jsonl "${new[@]}" --out data/data/rows.jsonl
               git -C data add data/rows.jsonl
               if ! git -C data diff --cached --quiet; then
-                git -C data commit --quiet -m "chore(dashboard): rows from run ${SOURCE_RUN}"
+                git -C data commit --quiet -m "chore(dashboard): rows from run ${SOURCE_RUN:-$GITHUB_RUN_ID}"
               fi
             fi
           }

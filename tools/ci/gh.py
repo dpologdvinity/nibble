@@ -13,6 +13,7 @@ import json
 import subprocess
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -30,6 +31,18 @@ def subprocess_runner(argv: Sequence[str], stdin: str | None) -> str:
     if proc.returncode != 0:
         raise GhError(proc.stderr.strip() or f"{argv[0]} exited with status {proc.returncode}")
     return proc.stdout
+
+
+@dataclass(frozen=True)
+class RunInfo:
+    """What a sweep needs to decide whether a workflow run is trusted: its id, the event that started it, the
+    `owner/name` of the repository its head commit lives in ("" when GitHub reports none, as for a deleted fork) and its
+    creation time (`YYYY-MM-DDTHH:MM:SSZ`)."""
+
+    id: int
+    event: str
+    head_repository: str
+    created_at: str
 
 
 class GitHub(Protocol):
@@ -73,6 +86,15 @@ class GitHub(Protocol):
 
     def list_completed_runs(self, workflow_file: str, branch: str, limit: int) -> list[int]:
         """Ids of the `limit` newest runs of `workflow_file` on `branch` (any event or result), newest first."""
+        ...
+
+    def list_recent_runs(self, workflow_file: str, branch: str, since: str) -> list[RunInfo]:
+        """Completed runs of `workflow_file` on `branch` created on or after the date `since` (`YYYY-MM-DD`), newest
+        first, whatever their event or result."""
+        ...
+
+    def list_artifact_names(self, run_id: int) -> list[str]:
+        """Names of the artifacts of run `run_id` that have not expired."""
         ...
 
     def job_conclusion(self, run_id: int, job_name: str) -> str | None:
@@ -189,6 +211,31 @@ class GhCli:
         query = urllib.parse.urlencode({"branch": branch, "status": "completed", "per_page": limit})
         path = f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/runs?{query}"
         return [int(run["id"]) for run in json.loads(self._get(path)).get("workflow_runs", [])]
+
+    def list_recent_runs(self, workflow_file: str, branch: str, since: str) -> list[RunInfo]:
+        query = urllib.parse.urlencode(
+            {"branch": branch, "status": "completed", "created": f">={since}", "per_page": 100}
+        )
+        path = f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/runs?{query}"
+        runs: list[RunInfo] = []
+        for page in _json_values(self._get(path, paginate=True)):
+            for run in page.get("workflow_runs", []) if isinstance(page, dict) else []:
+                head = run.get("head_repository")
+                repo = head.get("full_name") if isinstance(head, dict) else None
+                runs.append(
+                    RunInfo(int(run["id"]), str(run.get("event", "")), str(repo or ""), str(run.get("created_at", "")))
+                )
+        return runs
+
+    def list_artifact_names(self, run_id: int) -> list[str]:
+        names: list[str] = []
+        for page in _json_values(
+            self._get(f"repos/{self.repo}/actions/runs/{run_id}/artifacts?per_page=100", paginate=True)
+        ):
+            for artifact in page.get("artifacts", []) if isinstance(page, dict) else []:
+                if not artifact.get("expired"):
+                    names.append(str(artifact["name"]))
+        return names
 
     def job_conclusion(self, run_id: int, job_name: str) -> str | None:
         # `filter=latest` keeps a re-run attempt's jobs and drops the superseded ones.
