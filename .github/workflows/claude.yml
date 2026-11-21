@@ -8,7 +8,11 @@
 # Claude's pushes use the Claude GitHub App's token (the action trades the run's OIDC token for it), so CI runs on its
 # branches, unlike pushes made with GITHUB_TOKEN. Claude gets the toolchain and the pinned lint tools so a branch can
 # land green.
-# By hand: not runnable with workflow_dispatch; comment `@claude <request>` on an issue or pull request.
+# Untrusted input: `@claude` written by the owner on a stranger's issue or pull request feeds that stranger's text into
+# a write-enabled session. Only tag @claude on content you trust (the owner's judgement; the tool lists below limit
+# the damage but do not remove the risk).
+# How it is triggered: by an event, never by hand and there is no workflow_dispatch; comment `@claude <request>` on
+# an issue or pull request, put it in a review, or in the title or body of a new issue.
 name: claude
 
 on:
@@ -59,31 +63,49 @@ jobs:
       group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
-      - name: Check for the CLAUDE_CODE_OAUTH_TOKEN secret
-        id: secret
+      # The cheap checks come first, so a skipped run installs nothing: the secret must exist (forks, Dependabot and
+      # an unfinished setup have none) and the pull request, if there is one, must not come from a fork (the action
+      # would refuse it after the setup had been paid for). Untrusted values reach the script only through env:.
+      - name: Check the secret and the pull request
+        id: gate
         env:
           TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          COMMENT_ON_PR: ${{ github.event.issue.pull_request != null }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          if [ -n "$TOKEN" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=claude skipped::the CLAUDE_CODE_OAUTH_TOKEN secret is not available to this run"
-            echo "claude skipped: the CLAUDE_CODE_OAUTH_TOKEN secret is not available to this run (forks and Dependabot get no secrets; otherwise set it with \`gh secret set CLAUDE_CODE_OAUTH_TOKEN\`)." >> "$GITHUB_STEP_SUMMARY"
+          skip() {
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=claude skipped::$1"
+            echo "claude skipped: $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          [ -n "$TOKEN" ] || skip "the CLAUDE_CODE_OAUTH_TOKEN secret is not available to this run (forks and Dependabot get no secrets; otherwise set it with \`gh secret set CLAUDE_CODE_OAUTH_TOKEN\`)"
+          head_repo="$EVENT_PR_HEAD_REPO"
+          if [ -z "$head_repo" ] && [ "$COMMENT_ON_PR" = "true" ]; then
+            # issue_comment on a pull request carries no head repository; ask the API.
+            head_repo=$(gh api "repos/$REPO/pulls/$ISSUE_NUMBER" --jq .head.repo.full_name)
           fi
+          if [ -n "$head_repo" ] && [ "$head_repo" != "$REPO" ]; then
+            skip "the pull request comes from a fork (allow_fork_prs is off)"
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.secret.outputs.present == 'true'
+        if: steps.gate.outputs.proceed == 'true'
         with:
           fetch-depth: 1
-      # Without the pinned tools Claude could not run the lint block, and its branches would land red.
+          # The action configures its own git credentials; the contents: write GITHUB_TOKEN stays out of .git/config.
+          persist-credentials: false
+      # Without the pinned tools Claude could not run the lint block, and its branches would land red. No pip cache:
+      # an agent session must not be able to write the cache that ci.yml restores.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: steps.secret.outputs.present == 'true'
+        if: steps.gate.outputs.proceed == 'true'
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements-ci.txt
       - name: Install the build and lint tools
-        if: steps.secret.outputs.present == 'true'
+        if: steps.gate.outputs.proceed == 'true'
         run: |
           python -m pip install -r requirements-ci.txt
           sudo apt-get install -y --no-install-recommends ccache
@@ -91,22 +113,28 @@ jobs:
           g++ --version
           clang++ --version
       - name: Restore Catch2
-        if: steps.secret.outputs.present == 'true'
+        if: steps.gate.outputs.proceed == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DEPS_DIR }}
           key: deps-${{ hashFiles('CMakeLists.txt') }}
       # Configure once so Claude's later `cmake --build build` finds Catch2 (and remembers where it lives).
       - name: Configure (Release)
-        if: steps.secret.outputs.present == 'true'
+        if: steps.gate.outputs.proceed == 'true'
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
       # The action reads CLAUDE.md (which imports AGENTS.md) from the checkout.
       - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
-        if: steps.secret.outputs.present == 'true'
+        if: steps.gate.outputs.proceed == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: "false"
+          # A topic-named branch under agent/ (issue events; on an open pull request Claude pushes to that PR's branch).
           branch_prefix: agent/
+          branch_name_template: "{{prefix}}{{entityType}}-{{entityNumber}}-{{description}}"
+          # Commit and push go through the action's own wrappers (git-add/commit/push/rm.sh, added by the action and
+          # pinned to the session branch), so raw `git add|commit|push|checkout` are deliberately not listed, and
+          # `git push` must not be denied wholesale: that rule is mapped onto the push wrapper too.
           claude_args: |
-            --allowedTools "Bash(cmake:*),Bash(ctest:*),Bash(clang-format:*),Bash(git:*),Bash(gh pr:*),Bash(gh issue:*),Bash(python -m unittest:*),Bash(ruff:*),Bash(mypy:*),Bash(shellcheck:*),Bash(build/nibble:*),Bash(grep:*),Bash(xargs clang-format:*)"
-            --append-system-prompt "Follow AGENTS.md. Work on a branch named agent/<topic>, never push to master, Conventional Commits, label your PRs agent. Before pushing run the lint block from AGENTS.md and ctest --test-dir build -LE e2e. The build directory build/ is already configured (Release); build with cmake --build build -j 4. The pinned lint tools from requirements-ci.txt are installed. Fix every failure and push only when all of them pass. The e2e tests need models that are not available here, so do not run them."
+            --allowedTools "Bash(cmake:*),Bash(ctest:*),Bash(clang-format:*),Bash(xargs clang-format:*),Bash(grep:*),Bash(python -m unittest:*),Bash(ruff:*),Bash(mypy:*),Bash(shellcheck:*),Bash(build/nibble:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git ls-files:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh run view:*),Bash(gh run list:*)"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr review:*),Bash(gh pr checkout:*),Bash(gh pr close:*),Bash(gh pr edit:*),Bash(gh issue delete:*),Bash(gh issue transfer:*),Bash(gh issue close:*),Bash(gh issue lock:*),Bash(gh api:*),Bash(git config:*),Bash(git remote:*),Bash(git branch -D:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git push --delete:*)"
+            --append-system-prompt "Follow AGENTS.md. Never push to master, use Conventional Commits. Before pushing run the lint block from AGENTS.md and ctest --test-dir build -LE e2e. The build directory build/ is already configured (Release); build with cmake --build build -j 4. The pinned lint tools from requirements-ci.txt are installed. Fix every failure and push only when all of them pass. The e2e tests need models that are not available here, so do not run them. When your changes are pushed, open the pull request yourself with gh pr create --base master --label agent, with a Conventional Commit title and a body that says what changed and why, plus Fixes #N when it resolves issue N. This overrides the instructions to post a Create a PR link: do not post such a link. Do not add a Generated with Claude Code signature or any attribution line to commits or pull request bodies. Never merge, approve or close pull requests."
