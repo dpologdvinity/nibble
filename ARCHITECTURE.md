@@ -43,8 +43,11 @@ src/                 the engine
 cli/                 the `nibble` command: info, run, chat, bench
 tests/               Catch2 tests, fixtures, golden data, fuzz targets
 tools/               scripts and programs around the llama.cpp oracle (model/golden generation, benchmarks)
+  ci/                  typed, tested Python the workflows call: failure issues, PR report, fix-proof, dashboard
 bench/               benchmark results (JSONL) and the plotting script
 docs/bench/          generated charts
+.github/workflows/   CI, scheduled checks, release, agent workflows (each file opens with its reason)
+.github/actions/     composite actions: setup-models (cached models and goldens), report-failure (one issue per job)
 ```
 
 ## Layers and component boundaries
@@ -225,7 +228,9 @@ amplifies tiny rounding differences (independent correct implementations agree t
 a per-position floor of 0.97 because llama.cpp's own generic and native builds differ by more than 0.995 on them, and the
 other k-quant files may have one position between 0.99 and 0.995. The quantized goldens come from llama.cpp's *generic*
 build with an F32 KV cache and flash attention off, because that is the algorithm nibble reproduces. End-to-end tests need
-multi-gigabyte model files and are not run in CI; everything else is.
+multi-gigabyte model files, so per-PR CI runs everything else; the nightly workflow runs the Qwen2.5-0.5B end-to-end
+cases on cached models, and the Llama 3.2 and TinyLlama cases run locally. How each workflow fits in is in the README's
+"How nibble is tested" section.
 
 ## Key decisions and trade-offs
 

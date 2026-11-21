@@ -8,7 +8,8 @@
 # The check is green when at least one case FAILS there ("proven": the test catches the bug), and red when none does
 # ("does not reproduce"), when the PR has no test at all ("no test"), or when no case failed but the time budget left
 # a case unrun ("incomplete"). A base that does not compile with the new tests counts as
-# proven (the tests use something the fix adds). The `no-test-needed` label turns a red result green (reason in the PR).
+# proven (the tests use something the fix adds). The `no-test-needed` label turns a "no test" result green (reason in
+# the PR); the other red results stay red.
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
 # without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
 # Where things come from: the workspace is the MERGE REF (GitHub's preview of the PR merged into its base, the default
