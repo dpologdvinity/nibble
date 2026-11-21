@@ -544,8 +544,9 @@ def _snapshot(path: str) -> dict[str, float]:
 
     The file is `{"<model>/<prompt>": {"model", "prompt", "min_cos", "positions", "agree"}, ...}`; a `min_cos` that is
     not finite is written there as a string ("nan", "inf"). Only `min_cos` is used. A non-finite value (the schema
-    cannot carry one) leaves the case out, so it shows as "no head result" instead of the report not being written at
-    all; the workflow's strict `accuracy.py snapshot` gate on the head is what fails the job for it. Any other
+    cannot carry one) leaves the case out, so it shows as "no head result" (or "no base result" when the base has the
+    NaN) instead of the report not being written at all; the workflow's strict `accuracy.py snapshot` gate on the
+    head is what fails the job for it. Any other
     non-numeric value is a ValueError naming the case.
     """
     raw = _parse(read_limited(path), os.path.basename(path))
