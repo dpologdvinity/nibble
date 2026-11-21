@@ -121,6 +121,11 @@ class LineChartTest(unittest.TestCase):
         self.assertEqual(one.count("<circle"), 1)
         self.assertIn("2026-11-18", one)
         self.assertNotIn("no data yet", one)
+        # Past noon its one-day window holds the next midnight; the only tick must still name the point's own day.
+        afternoon = 1_795_265_100.0  # 2026-11-21 12:45 UTC
+        late = plot.line_chart("t", "y", [("a", "#000", [(afternoon, 3.0)])])
+        self.assertIn(">2026-11-21</text>", late)
+        self.assertNotIn("2026-11-22", late)
         no_points: list[list[plot.Series]] = [[], [("a", "#000", []), ("b", "#111", [])]]
         for series in no_points:
             empty = plot.line_chart("t", "y", series)
