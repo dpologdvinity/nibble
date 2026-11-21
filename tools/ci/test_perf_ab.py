@@ -303,6 +303,30 @@ class MainTest(unittest.TestCase):
         self.assertEqual(entry["verdict"], "faster")
         self.assertEqual(entry["ratios"], [1.2, 1.2])
 
+    def test_summarize_survives_a_truncated_or_invalid_line(self) -> None:
+        # A run killed mid-write leaves a cut-off last line; any line that is not a JSON object is dropped with a
+        # warning, and the block it belonged to lacks that position, so the row reads inconclusive instead of the
+        # whole perf section crashing into "skipped".
+        rows = _block(0, (10.0, 10.0), (12.0, 12.0)) + _block(1, (10.0, 10.0), (12.0, 12.0))
+        lines = [json.dumps(r) for r in rows]
+        lines[-1] = lines[-1][:20]  # the last row of block 1, truncated
+        lines.insert(2, "[1, 2]")  # valid JSON, but not a row
+        (self.dir / "rows.jsonl").write_text("\n".join(lines) + "\n")
+        out = self.dir / "perf.json"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(perf_ab.main(["summarize", str(self.dir / "rows.jsonl"), "--out", str(out)]), 0)
+        (entry,) = json.loads(out.read_text())
+        self.assertEqual(entry["verdict"], "inconclusive")
+        self.assertEqual(entry["ratios"], [1.2, 0.0])
+        self.assertIn("line 9", err.getvalue())
+        self.assertIn("line 3", err.getvalue())
+
+    def test_parse_rows_reports_each_bad_line(self) -> None:
+        rows, problems = perf_ab.parse_rows('{"a": 1}\n\nnot json\n"text"\n{"b": 2')
+        self.assertEqual(rows, [{"a": 1}])
+        self.assertEqual(len(problems), 3)
+
     def test_run_parses_arguments(self) -> None:
         seen: list[tuple[object, ...]] = []
 

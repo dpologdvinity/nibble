@@ -20,7 +20,9 @@ by more than SPREAD_MAX are all "inconclusive". Only when every block agrees is 
 
 `summarize` folds the rows into the `perf` section of the PR-report JSON (one entry per (model, test, threads):
 base_median, head_median, ratios, verdict). The report schema has plain numbers only, so a median with no usable run
-and a broken block's ratio are written as 0.0 (the verdict for such a row is "inconclusive").
+and a broken block's ratio are written as 0.0 (the verdict for such a row is "inconclusive"). A line of the rows file
+that is not a JSON object (a run killed mid-write leaves a cut-off line) is dropped with a warning on stderr: its block
+then lacks a position and reads inconclusive, instead of the whole section failing.
 
 usage (command line):
     python tools/ci/perf_ab.py run --base BIN --head BIN --model M [--model M ...] --threads 1,4 --rounds 3 \\
@@ -181,6 +183,25 @@ def run(
                         sink.flush()
 
 
+def parse_rows(text: str) -> tuple[list[dict[str, object]], list[str]]:
+    """The JSON-object lines of a rows file, and one message per other non-blank line (not JSON, or not an object)."""
+    rows: list[dict[str, object]] = []
+    problems: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (ValueError, RecursionError):
+            problems.append(f"line {number}: not JSON (truncated?)")
+            continue
+        if not isinstance(value, dict):
+            problems.append(f"line {number}: not a JSON object")
+            continue
+        rows.append(value)
+    return rows, problems
+
+
 def _json_number(x: float) -> float:
     """Return `x`, or 0.0 if it is NaN or infinite, so the value survives strict JSON."""
     return x if math.isfinite(x) else 0.0
@@ -258,8 +279,10 @@ def main(argv: Sequence[str]) -> int:
             parser.error("--rounds and --reps must be >= 1")
         run(args.base, args.head, args.models, args.threads, args.rounds, args.reps, args.out)
         return 0
-    lines = Path(args.rows).read_text(encoding="utf-8").splitlines()
-    summary = summarize([json.loads(line) for line in lines if line.strip()])
+    rows, problems = parse_rows(Path(args.rows).read_text(encoding="utf-8", errors="replace"))
+    for problem in problems:
+        print(f"::warning title=perf_ab summarize::{args.rows} {problem}; skipped (inconclusive)", file=sys.stderr)
+    summary = summarize(rows)
     Path(args.out).write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return 0
 
