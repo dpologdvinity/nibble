@@ -1,9 +1,12 @@
 # Reason: the owner's own pull requests and Dependabot's minor and patch updates should merge as soon as the required
 # checks are green, without the owner clicking. This only turns on GitHub auto-merge (`gh pr merge --auto --merge`);
-# branch protection still decides when the merge happens. Never for agent pull requests (label `agent`): they wait for
-# the owner, and adding the label to a pull request later switches its auto-merge off.
+# branch protection still decides when the merge happens. It never enables auto-merge for an `agent` pull request, nor
+# for one that Claude has pushed commits to; it switches auto-merge off when `agent` is added later or when Claude pushes
+# to a pull request that is not Claude's own, and says why in a comment. The owner reads and merges those by hand
+# (pull requests authored by claude[bot] wait for an approval through agent-approval.yml instead).
+# Enabling happens only when a pull request is opened, reopened or made ready, so adding a label never re-enables it.
 # Runs on pull_request_target so Dependabot's pull requests get a write token; it never checks out or runs pull request
-# code, and the only values it uses (the URL, the author and the labels) come from the event payload.
+# code, and the only values it uses (the URL, the author, the sender and the labels) come from the event payload.
 # Needs the repository setting allow_auto_merge (set; `gh api repos/dpologdvinity/nibble --jq .allow_auto_merge`).
 # By hand: not runnable (it needs a pull request event); close and reopen the pull request, or run
 # `gh pr merge --auto --merge <number>`.
@@ -11,14 +14,16 @@ name: automerge
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, labeled]
+    types: [opened, reopened, ready_for_review, labeled, synchronize]
 
 permissions: {}
 
 jobs:
   owner:
-    # Not a draft, from a branch of this repository, written by the owner, and not an agent pull request.
+    # Not a draft, from a branch of this repository, written by the owner, not an agent pull request, and only when the
+    # pull request has just been opened, reopened or made ready.
     if: |
+      contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'dpologdvinity' &&
@@ -29,14 +34,23 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Enable auto-merge
+      # A pull request that Claude has already pushed to (reopened, or made ready, after the push) is reviewed by hand.
+      - name: Enable auto-merge unless Claude pushed commits
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --merge "$PR_URL"
+        run: |
+          claude_commits=$(gh pr view "$PR_URL" --json commits \
+            --jq '[.commits[].authors[].login | ascii_downcase | select(. == "claude" or . == "claude[bot]")] | length')
+          if [ "$claude_commits" != "0" ]; then
+            echo "::notice title=automerge::Claude pushed commits to this pull request; auto-merge stays off"
+            exit 0
+          fi
+          gh pr merge --auto --merge "$PR_URL"
 
   dependabot:
     if: |
+      contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       !contains(github.event.pull_request.labels.*.name, 'agent')
     runs-on: ubuntu-24.04
@@ -62,6 +76,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: write
       pull-requests: write
     steps:
       - name: Disable auto-merge
@@ -72,4 +87,28 @@ jobs:
           # --disable-auto fails when auto-merge is not on, which is the usual case here.
           if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
             gh pr merge --disable-auto "$PR_URL"
+          fi
+
+  # Claude's commits on a pull request that is not Claude's own (the owner's or Dependabot's, where @claude works on the
+  # pull request's branch) must be read before they merge: switch auto-merge off and say so, once (it only speaks when
+  # auto-merge was on, and nothing here turns it back on).
+  claude-pushed:
+    if: |
+      github.event.action == 'synchronize' &&
+      github.event.sender.login == 'claude[bot]' &&
+      github.event.pull_request.user.login != 'claude[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Disable auto-merge and explain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            gh pr merge --disable-auto "$PR_URL"
+            gh pr comment "$PR_URL" --body "Claude pushed commits to this pull request, so auto-merge is off. Review the new commits and merge by hand."
           fi
