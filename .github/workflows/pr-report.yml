@@ -220,8 +220,8 @@ jobs:
         run: ctest --test-dir build -L e2e -j2 -V --output-log "$PWD/e2e-head.log" --timeout 1800
       # --lenient: the report must be built whatever the logs hold. A head that breaks argmax, throws or crashes prints
       # fewer min-cosine lines, a merge base may predate a case, and a NaN cosine is left out of the rows (it
-      # shows as "no head result"); none of that may stop the part from being written. The strict gate on the head
-      # runs last.
+      # shows as "no head result", or "no base result" when the base is the side with the NaN); none of that may stop
+      # the part from being written. The strict gate on the head runs last.
       - name: Parse the min-cosine lines
         if: steps.models.outputs.warm == 'true'
         run: |

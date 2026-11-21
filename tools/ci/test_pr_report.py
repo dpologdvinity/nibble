@@ -600,8 +600,9 @@ class MainTests(unittest.TestCase):
             )
 
     def test_accuracy_subcommand_drops_non_finite_cosines_instead_of_failing(self) -> None:
-        # A head whose kernel produces NaN must still get a report (the case shows as "no head result"); the
-        # workflow's own strict `accuracy.py snapshot` gate is what turns the job red.
+        # A head whose kernel produces NaN must still get a report (the case shows as "no head result", or "no
+        # base result" for a NaN on the base side); the workflow's own strict `accuracy.py snapshot` gate is what
+        # turns the job red.
         with tempfile.TemporaryDirectory() as tmp:
             good = self.snapshot(tmp, "good.json", {"q4_0/a": 0.99, "q4_0/b": 0.9})
             out = Path(tmp, "part.json")
