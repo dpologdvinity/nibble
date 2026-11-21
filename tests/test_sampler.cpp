@@ -174,3 +174,10 @@ TEST_CASE("sampler: pick_index falls back to the last token with probability", "
   const double q[] = {0.0};
   CHECK(pick_index(q, 1, 1.0) == 0);
 }
+
+// Demonstration case for the fix-proof workflow: a draw among tied logits must never leave the lowest k indices.
+TEST_CASE("sampler: top-k tie regression demo", "[sampler]") {
+  Sampler s({1.0f, 2, 1.0f, 99}, 4);
+  std::vector<float> l{7, 7, 7, 7};
+  for (int i = 0; i < 300; ++i) REQUIRE(s.sample(l) < 2);
+}
