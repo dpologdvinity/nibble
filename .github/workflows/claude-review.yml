@@ -40,9 +40,10 @@ jobs:
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # A newer push makes the running review stale.
+    # A newer push makes the running review stale. A label event for any label but `agent` is skipped by the `if:`
+    # above, but gets a group of its own anyway so that it can never cancel a running review.
     concurrency:
-      group: claude-review-${{ github.event.pull_request.number }}
+      group: claude-review-${{ github.event.pull_request.number }}${{ github.event.action == 'labeled' && github.event.label.name != 'agent' && format('-label-{0}', github.run_id) || '' }}
       cancel-in-progress: true
     steps:
       - name: Check for the CLAUDE_CODE_OAUTH_TOKEN secret
@@ -102,5 +103,5 @@ jobs:
             - Be concise. No praise, no restating the diff, no style nits that clang-format or ruff already enforce.
             - If there is nothing worth a comment, post nothing.
           claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Read,Grep,Glob"
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Bash(git diff*--output*),Bash(git log*--output*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit"
