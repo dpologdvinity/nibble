@@ -222,10 +222,17 @@ jobs:
       # fewer min-cosine lines, a merge base may predate a case, and a NaN cosine is left out of the rows (it
       # shows as "no head result", or "no base result" when the base is the side with the NaN); none of that may stop
       # the part from being written. The strict gate on the head runs last.
+      # The two sides are parsed independently. A base log that cannot be used (unreadable, or contradicting itself,
+      # which exits 1 even with --lenient) must not cost the head's results: the base side is then empty, so every
+      # row reads "no base result". The head is not given that fallback: an unusable head log fails this step, and
+      # with no accuracy part `assemble` writes no report (a red job, never a pass).
       - name: Parse the min-cosine lines
         if: steps.models.outputs.warm == 'true'
         run: |
-          python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected 0 --lenient
+          if ! python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected 0 --lenient; then
+            echo "::warning title=pr-report accuracy::the base's e2e log could not be parsed; the report shows no base results"
+            echo '{}' > base-cosines.json
+          fi
           python tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary /dev/null --expected 0 --lenient
       # The head's test outcome goes into the part too: a test prints its min cosine before its later checks (batch
       # prefill, greedy continuation), so a failing head can have every row unchanged, and the comment must still say
