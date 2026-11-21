@@ -1,15 +1,20 @@
 # nibble
 
 [![CI](https://github.com/dpologdvinity/nibble/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/dpologdvinity/nibble/actions/workflows/ci.yml)
+[![nightly](https://img.shields.io/endpoint?url=https%3A%2F%2Fdpologdvinity.github.io%2Fnibble%2Fbadge.json)](https://dpologdvinity.github.io/nibble/)
+[![CodeQL](https://github.com/dpologdvinity/nibble/actions/workflows/codeql.yml/badge.svg?branch=master)](https://github.com/dpologdvinity/nibble/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dpologdvinity/nibble/badge)](https://scorecard.dev/viewer/?uri=github.com/dpologdvinity/nibble)
 [![codecov](https://codecov.io/gh/dpologdvinity/nibble/branch/master/graph/badge.svg)](https://codecov.io/gh/dpologdvinity/nibble)
 [![License: MIT](https://img.shields.io/github/license/dpologdvinity/nibble)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
-[![Platform: Linux x86-64](https://img.shields.io/badge/platform-linux--x86--64-lightgrey.svg)](#build)
+[![Platform: Linux x86-64 | arm64](https://img.shields.io/badge/platform-linux%20x86--64%20%7C%20arm64-lightgrey.svg)](#build)
 [![Dependencies: none](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](ARCHITECTURE.md)
 [![Last commit](https://img.shields.io/github/last-commit/dpologdvinity/nibble/master)](https://github.com/dpologdvinity/nibble/commits/master)
 [![Open issues](https://img.shields.io/github/issues/dpologdvinity/nibble)](https://github.com/dpologdvinity/nibble/issues)
 [![Code size](https://img.shields.io/github/languages/code-size/dpologdvinity/nibble)](https://github.com/dpologdvinity/nibble)
 [![Dependabot](https://img.shields.io/badge/dependabot-enabled-025e8c.svg?logo=dependabot)](.github/dependabot.yml)
+[![Latest release](https://img.shields.io/github/v/release/dpologdvinity/nibble)](https://github.com/dpologdvinity/nibble/releases/latest)
+[![Dashboard](https://img.shields.io/badge/dashboard-GitHub%20Pages-blue.svg)](https://dpologdvinity.github.io/nibble/)
 
 nibble is a from-scratch LLM inference engine in C++20. It loads GGUF model
 files directly (mmap, no conversion step), implements its own byte-level BPE
@@ -86,7 +91,8 @@ Requires CMake ≥ 3.25 and g++ 13 or clang 18. Catch2 is fetched at configure t
 
 The SIMD kernels are chosen at startup, from what the CPU supports: AVX2 + FMA + F16C with AVX-VNNI, the same
 without AVX-VNNI, or the scalar kernels. An x86-64 build contains all three (unless `-DNIBBLE_SIMD=OFF`), so the
-same binary runs on any x86-64 CPU; other targets build the scalar kernels only.
+same binary runs on any x86-64 CPU; other targets build the scalar kernels only. Linux arm64 is built and tested
+weekly that way ([portability](.github/workflows/portability.yml)).
 `NIBBLE_NATIVE` defaults to ON (`-march=native` for everything except the kernels), so a native build may not
 run on an older CPU than the build host; `-DNIBBLE_NATIVE=OFF` builds for plain x86-64, which is how the
 release binaries and the container image are built. `-DNIBBLE_SIMD=OFF` leaves the SIMD kernels out (scalar
@@ -169,7 +175,8 @@ ctest --test-dir build -LE e2e    # unit, integration, allocation and CLI tests 
 
 These need no model files and run in CI on every push (see [CONTRIBUTING.md](CONTRIBUTING.md) for the sanitizer,
 scalar-kernel and fuzzing variants). The **end-to-end tests** (`-L e2e`) compare against llama.cpp on the real models
-and need the model files, a pinned llama.cpp build and golden files, so they run locally:
+and need the model files, a pinned llama.cpp build and golden files. CI runs the Qwen2.5-0.5B cases nightly (see
+[How nibble is tested](#how-nibble-is-tested)); the full set runs locally:
 
 ```sh
 tools/build_llama_cpp.sh && tools/build_llama_cpp.sh --generic && tools/make_quants.sh
@@ -232,6 +239,70 @@ Minimum logit cosine over the positions of each prompt, and the lowest top-1 agr
 
 (The numbers move with rounding-level changes; they are re-recorded when kernels change. The k-quant rows were recorded
 at the end of M7.)
+
+## How nibble is tested
+
+Every pull request is built and tested in several configurations before it can merge, and the slower checks
+(real-model accuracy against llama.cpp, long fuzzing, other CPUs and compilers) run on a schedule against `master`. Each
+workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md](CONTRIBUTING.md#ci-and-automation)).
+
+| When | Workflow | What it protects |
+|---|---|---|
+| every PR and push to `master` | [ci](.github/workflows/ci.yml) | The required gate: formatting, clang-tidy, ruff and mypy, the Python tool tests, then the non-e2e suite built with the documented compiler floor (g++ 13, clang 18), as released (runtime kernel dispatch), with scalar kernels only, under ASan+UBSan and under TSan; a minimum line coverage; 60 s of fuzzing each for the GGUF parser and the loader. |
+| every PR and push to `master`, and tags | [package](.github/workflows/package.yml) | The release tarballs and container image still build and run (called by ci and release). |
+| PRs touching the engine, CLI, build or tests | [pr-report](.github/workflows/pr-report.yml) | One comment per PR with the change's effect on decode/prefill speed (interleaved ABBA runs against the merge base), binary size, peak memory and the min cosine of the Qwen2.5-0.5B end-to-end tests against llama.cpp. A second workflow, which never runs PR code, posts it. |
+| `fix:` PRs touching `src/`, `include/` or `cli/` | [fix-proof](.github/workflows/fix-proof.yml) | A bug fix carries a test that fails without it: the PR's tests are run on its merge base, built with ASan+UBSan, and at least one must fail. |
+| every PR and push to `master`, weekly | [codeql](.github/workflows/codeql.yml) | CodeQL over the C++ (nibble parses untrusted GGUF files) and the workflow files (injection, token permissions). |
+| every PR and push to `master`, weekly | [gitleaks](.github/workflows/gitleaks.yml) | No secret in the commits being added; weekly over the full history, so new rules reach old commits. |
+| PRs touching workflows | [actionlint](.github/workflows/actionlint.yml) | A typo in a workflow (expression, `needs:`, input) cannot silently stop it from running; shellcheck on `run:` blocks. |
+| every PR | [labeler](.github/workflows/labeler.yml) | Area labels (`kernels`, `gguf`, ...) from the changed paths, for the changelog and triage. |
+| every PR | [claude-review](.github/workflows/claude-review.yml) | Inline review comments from Claude on PRs by the owner, Dependabot and the agent; it never approves or blocks. |
+| every PR | [agent-approval](.github/workflows/agent-approval.yml) | A PR opened by Claude stays red until the owner approves its current head commit (not yet a required check). |
+| every PR | [automerge](.github/workflows/automerge.yml) | Auto-merge only for the owner's own PRs and Dependabot's minor and patch updates, never for agent PRs. |
+| nightly | [nightly](.github/workflows/nightly.yml) | Every end-to-end test on the Qwen2.5-0.5B family (F16, Q8_0, Q4_0, Q4_K_M, Q5_K_M, Q6_K) against llama.cpp; ASan+UBSan on a real Q4_K_M model; about 2 h of fuzzing each for the parser and the loader, with a corpus kept between nights; a trend benchmark. |
+| weekly | [portability](.github/workflows/portability.yml) | The suite on 64-bit ARM (scalar kernels), the newest GCC and Clang with warnings as errors, and the build with SIMD off. |
+| weekly, and pushes to `master` | [scorecard](.github/workflows/scorecard.yml) | OpenSSF Scorecard grades the supply chain: pinned actions, token permissions, branch protection, dependency updates. |
+| weekly | [link-check](.github/workflows/link-check.yml) | Links in the README and docs; one open issue lists the broken ones. |
+| after nightly, portability and ci on `master` | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
+| a failing scheduled job | [claude-triage](.github/workflows/claude-triage.yml) | Claude diagnoses the `ci-failure` issue and, with a reproducer, opens an `agent/` PR (below). |
+| `@claude` from the owner | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or PR; it answers or opens an `agent` PR. |
+| a `v*` tag | [release](.github/workflows/release.yml) | The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
+
+When a scheduled job fails, the fix comes back as a pull request that has to prove itself:
+
+```mermaid
+flowchart LR
+  A["nightly or portability job fails"] --> B["one ci-failure issue per job"]
+  B --> C["claude-triage: diagnosis from the issue and the logs"]
+  C --> D["agent/ PR: failing test, then the fix"]
+  D --> E["fix-proof on the merge base, CI, PR report"]
+  E --> F["agent-approval: red until the owner approves"]
+  F --> G["owner merges"]
+```
+
+- The nightly and portability jobs report through a small `report-job` step: it opens one `ci-failure` issue per job
+  (or comments on the open one), and closes it when the job is green again at the tip of `master`. A job that hits
+  its time limit counts as a failure.
+- claude-triage reads the issue body and the failing run's log. Only with a reproducer and high confidence does it
+  open an `agent/` PR with the failing test as the first commit and the fix as the second; otherwise it stops at a
+  diagnosis comment.
+- Agent PRs are never auto-merged: the owner reviews and merges them. The owner can also hand Claude work with
+  `@claude` on any issue or PR, and claude-review comments on every PR the owner, Dependabot or the agent opens.
+
+The [dashboard](https://dpologdvinity.github.io/nibble/) charts the scheduled runs over time: speed, accuracy, fuzzing
+hours, binary size and coverage, and the latest status of every scheduled job. CI-runner speed numbers are trends; the
+benchmark tables below come from an idle dedicated machine.
+
+**Verifying a release.** From the next release on, the tarballs and the container image carry build-provenance and
+SBOM attestations signed by the release workflow. To check that a download was built from this repository by that
+workflow (here for a tag `v0.9.0`; the image tag has no `v`):
+
+```sh
+gh attestation verify nibble-v0.9.0-linux-x86_64.tar.gz -R dpologdvinity/nibble
+gh attestation verify oci://ghcr.io/dpologdvinity/nibble:0.9.0 -R dpologdvinity/nibble
+```
+
+The SPDX SBOMs (`*.spdx.json`) are attached to the release next to the tarballs.
 
 ## Performance
 
