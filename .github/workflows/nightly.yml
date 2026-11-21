@@ -55,7 +55,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: read  # report-failure and the accuracy comparison list earlier runs
+      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
     env:
       MIN_KEYS: "18"  # 6 models x 3 prompts; fewer means models or goldens went missing
     steps:
@@ -143,7 +143,7 @@ jobs:
           area: model
           # Only a failing night attaches the (large) -V log; a green one must not upload anything.
           attachments: ${{ job.status != 'success' && 'e2e*.*' || '' }}
-          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
 
   sanitizers-real-model:
     name: sanitizers-real-model
@@ -156,7 +156,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: read  # report-failure and the accuracy comparison list earlier runs
+      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -209,7 +209,7 @@ jobs:
           job: sanitizers-real-model
           outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
           area: build
-          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
 
   fuzz:
     name: ${{ matrix.target }}
@@ -222,7 +222,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: read  # report-failure and the accuracy comparison list earlier runs
+      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
     strategy:
       fail-fast: false  # one target crashing must not stop the other's two hours
       matrix:
@@ -320,7 +320,7 @@ jobs:
           outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
           area: gguf
           attachments: ${{ job.status != 'success' && 'crashes/*' || '' }}
-          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
 
   trend-bench:
     name: trend-bench
@@ -333,7 +333,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: read  # report-failure and the accuracy comparison list earlier runs
+      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -388,4 +388,4 @@ jobs:
           job: trend-bench
           outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
           area: bench
-          triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
+          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
