@@ -102,6 +102,8 @@ jobs:
           mypy
       - name: bench/ unit tests
         run: python -m unittest discover -s bench -p 'test_*.py'
+      - name: tools/ci unit tests
+        run: python -m unittest discover -s tools/ci -p 'test_*.py'
       - name: shellcheck
         run: shellcheck tools/*.sh tests/*.sh
       - name: Conventional-commit subjects (pull requests)
