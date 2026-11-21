@@ -1,0 +1,68 @@
+# CodeQL code scanning for nibble. nibble parses untrusted GGUF files (and builds from workflows that hold tokens), so
+# the C++ sources and the workflow files get GitHub's `security-and-quality` query suite. Findings show up under
+# Security > Code scanning; the PR check fails only on new alerts at or above the repository's configured severity.
+#
+#   c-cpp    manual build: the Release CMake build without tests and without -march=native. Both SIMD tier object
+#            libraries are built either way, because tiers compile on x86-64 regardless of NIBBLE_NATIVE.
+#   actions  scans .github/workflows for injection and permission problems (no build)
+#
+# Runs on pull requests and pushes to master, weekly (Tuesday 06:11 UTC, so new queries also reach untouched code)
+# and by hand:  gh workflow run codeql.yml
+# Actions are pinned by commit SHA; the tag each SHA corresponds to is in the comment.
+name: codeql
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    - cron: "11 6 * * 2"
+  workflow_dispatch:
+
+concurrency:
+  # One scan per ref; a newer push cancels the older pull-request scan, other events get a group of their own.
+  group: codeql-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      security-events: write  # upload the SARIF results
+      contents: read
+      actions: read  # CodeQL reads workflow run metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: manual
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+      - name: Build (c-cpp only)
+        if: matrix.build-mode == 'manual'
+        # Runner defaults (g++ 13, CMake >= 3.25) are what the project needs. Tests are off: CodeQL should see the
+        # shipped code, and the Catch2 fetch is wasted time.
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build build -j "$(nproc)"
+      - name: Analyze
+        uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          category: "/language:${{ matrix.language }}"

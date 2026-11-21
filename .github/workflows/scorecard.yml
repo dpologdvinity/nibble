@@ -1,0 +1,45 @@
+# OpenSSF Scorecard: grades the repository's supply-chain practices (pinned actions, branch protection, token
+# permissions, dependency updates, signed releases, ...) and publishes the result to the public Scorecard API, which
+# backs the badge in the README. The SARIF output also lands in Security > Code scanning.
+#
+# Runs on pushes to master, weekly (Monday 05:37 UTC), whenever a branch protection rule changes (one of the checks
+# reads it) and by hand:  gh workflow run scorecard.yml
+# Scorecard requires a read-all top-level token; the job widens only what it uploads with. Actions are pinned by
+# commit SHA; the tag each SHA corresponds to is in the comment.
+name: scorecard
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "37 5 * * 1"
+  branch_protection_rule:
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      security-events: write  # upload the SARIF results to code scanning
+      id-token: write  # publish_results: sign in to the Scorecard API with the workflow's OIDC token
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@23f22cd43608bae7a1f1fa2603d7314dee9538a5 # v2.6.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - name: Upload results to code scanning
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: results.sarif
+          category: scorecard
