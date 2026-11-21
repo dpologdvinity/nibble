@@ -860,8 +860,8 @@ def _read_status(path: Path) -> RunStatus | None:
 def read_results(results_dir: str, selection: Selection) -> tuple[dict[str, CaseResult], dict[str, str]]:
     """(result, note) per selected case name from the files `run` wrote: `<index>.xml` and `<index>.status.json`.
 
-    `<index>` is the position of the case in `selection.cases`. An absent, oversized or unreadable XML counts as no
-    JUnit; see `case_result` for how it combines with the process status.
+    `<index>` is the position of the case in `selection.cases`. An absent, oversized or unreadable XML (one that
+    cannot be opened included) counts as no JUnit; see `case_result` for how it combines with the process status.
     """
     results: dict[str, CaseResult] = {}
     notes: dict[str, str] = {}
@@ -869,8 +869,11 @@ def read_results(results_dir: str, selection: Selection) -> tuple[dict[str, Case
         name = _name(case)
         xml_path = Path(results_dir, f"{index}.xml")
         xml: str | None = None
-        if xml_path.is_file() and xml_path.stat().st_size <= MAX_XML_BYTES:
-            xml = xml_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            if xml_path.is_file() and xml_path.stat().st_size <= MAX_XML_BYTES:
+                xml = xml_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            xml = None  # unreadable: like an absent file, the process status decides; the next cases still count
         state, note = case_result(name, xml, _read_status(Path(results_dir, f"{index}.status.json")))
         if _RANK[state] >= _RANK[results.get(name, "missing")]:
             results[name] = state

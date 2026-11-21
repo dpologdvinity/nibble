@@ -629,6 +629,31 @@ class ClassifyTests(unittest.TestCase):
         self.assertNotIn("`tick`", text)
 
 
+class ReadResultsTests(unittest.TestCase):
+    def test_an_unreadable_xml_does_not_stop_the_other_cases(self) -> None:
+        # 0.xml exists and is small but cannot be opened; 1.xml holds a real failure, which must still prove the fix.
+        sel = selection_of("first", "fails")
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "0.xml").write_text(_junit(PASSED.replace("passes", "first")), encoding="utf-8")
+            Path(tmp, "1.xml").write_text(
+                _junit(FAILED.replace("fails, with [x] &amp; &lt;b> &quot;q&quot;", "fails")), encoding="utf-8"
+            )
+            for i in (0, 1):
+                Path(tmp, f"{i}.status.json").write_text(json.dumps(status(exit_code=42 * i)._asdict()))
+            real_read_text = Path.read_text
+
+            def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+                if self.name == "0.xml":
+                    raise PermissionError(13, "Permission denied", str(self))
+                return real_read_text(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", read_text):
+                results, _ = fix_proof.read_results(tmp, sel)
+        self.assertEqual(fix_proof.classify(sel, True, results), "proven")
+        self.assertEqual(results["first"], "passed")  # no JUnit, exit 0: the process status decides
+        self.assertEqual(results["fails"], "failed")
+
+
 def status(**changes: Any) -> fix_proof.RunStatus:
     """What `run` records about one process: a started one that exited 0 on a unique spec, with `changes` applied."""
     fields: dict[str, Any] = {"started": True, "exit_code": 0, "signal": None, "timed_out": False, "unique": True}
