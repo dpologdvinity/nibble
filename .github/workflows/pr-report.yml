@@ -245,7 +245,18 @@ jobs:
         run: |
           python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json \
             --head-outcome "$HEAD_OUTCOME" --out part-accuracy.json
+      # Also after a failure, so that this attempt's part always replaces an earlier attempt's (overwrite): when no
+      # real part was written (an unusable head log, a failed build), the marker goes up instead, and `assemble`
+      # refuses it. Otherwise a re-run of failed jobs would assemble a report from the earlier attempt's head result.
+      - name: Mark a failed accuracy attempt
+        if: ${{ !cancelled() }}
+        run: |
+          if [ ! -f part-accuracy.json ]; then
+            python tools/ci/pr_report.py accuracy --failed --out part-accuracy.json
+            echo "::error title=pr-report accuracy::no usable accuracy result in this attempt, so no report is built"
+          fi
       - name: Upload the accuracy part
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: part-accuracy
@@ -272,7 +283,8 @@ jobs:
     needs: [perf, accuracy]
     # Whatever the other jobs concluded: a perf job that failed still uploaded its runner and the report shows speed,
     # size and memory as skipped (the red job is the signal); an accuracy job that failed only on a head e2e gate still
-    # wrote its part, and one that died earlier did not, which `assemble` rejects loudly (no report, a red job).
+    # wrote its part, and one that died earlier uploaded the failed-accuracy marker (or nothing, if it never got to
+    # that step), which `assemble` rejects loudly (no report, a red job).
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -289,8 +301,8 @@ jobs:
           pattern: part-*
           path: parts
           merge-multiple: true
-      # A missing accuracy or meta part (a job that died early) is an error here, never a silent "skipped"; a missing
-      # perf part is just null speed, size and memory.
+      # A missing accuracy or meta part (a job that died early), or the failed-accuracy marker, is an error here,
+      # never a silent "skipped"; a missing perf part is just null speed, size and memory.
       - name: Assemble pr-report.json
         run: python tools/ci/pr_report.py assemble parts/part-*.json --out pr-report.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

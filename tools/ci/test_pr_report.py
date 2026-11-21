@@ -577,6 +577,20 @@ class AssembleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "accuracy"):
             pr_report.assemble([json.dumps(self.META)])
 
+    def test_assemble_refuses_a_failed_accuracy_attempt(self) -> None:
+        # The accuracy job uploads this marker when it could not write a real part, so that it replaces an earlier
+        # attempt's part-accuracy artifact: a re-run must never assemble a report from that stale head result.
+        failed = pr_report.accuracy_failed_part()
+        with self.assertRaisesRegex(ValueError, "accuracy job failed"):
+            pr_report.assemble([json.dumps(self.META), failed])
+        with self.assertRaisesRegex(ValueError, "accuracy job failed"):
+            pr_report.assemble([json.dumps(self.META), json.dumps(self.ACCURACY), failed])
+        # It is not a report section either: load refuses it.
+        d = make_dict()
+        d["accuracy_failed"] = True
+        with self.assertRaises(ValueError):
+            pr_report.load(json.dumps(d))
+
     def test_assemble_requires_kernels_changed(self) -> None:
         meta = {k: v for k, v in self.META.items() if k != "kernels_changed"}
         with self.assertRaisesRegex(ValueError, "kernels_changed"):
@@ -679,6 +693,19 @@ class MainTests(unittest.TestCase):
             ):
                 with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     pr_report.main(argv)
+
+    def test_accuracy_subcommand_failed_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp, "part-accuracy.json")
+            self.assertEqual(self.run_main(["accuracy", "--failed", "--out", str(out)])[0], 0)
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8")), {"accuracy_failed": True})
+            snap = self.snapshot(tmp, "s.json", {"q4_0/a": 0.99})
+            for args in (
+                ["--failed", "--skipped-cold-cache"],
+                ["--failed", "--base", snap, "--head", snap, "--head-outcome", "success"],
+            ):
+                with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    pr_report.main(["accuracy", *args, "--out", str(out)])
 
     def test_accuracy_subcommand_skipped_cold_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

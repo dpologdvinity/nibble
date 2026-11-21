@@ -47,6 +47,7 @@ usage:
     python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --head-outcome success \\
         --out part-accuracy.json
     python tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
+    python tools/ci/pr_report.py accuracy --failed --out part-accuracy.json     # no usable result: assemble refuses it
     python tools/ci/pr_report.py assemble meta.json perf.json part-accuracy.json --out pr-report.json
     python tools/ci/pr_report.py post pr-report.json --head-sha "$HEAD_SHA"   # GITHUB_REPOSITORY and GH_TOKEN set
 """
@@ -374,12 +375,24 @@ def _inert_runner(name: str) -> str:
     return _RUNNER_UNSAFE.sub("_", name.replace("@", "at"))[:MAX_RUNNER]
 
 
+# Key of the part the accuracy job uploads when it has no usable result (an unreadable head log, a failed build).
+# It replaces an earlier attempt's part-accuracy artifact (upload with overwrite), and `assemble` refuses it, so a
+# partial re-run can never build a report from a stale head result. It is not a report key: `load` refuses it too.
+ACCURACY_FAILED = "accuracy_failed"
+
+
+def accuracy_failed_part() -> str:
+    """The text of the failed-accuracy marker part (see ACCURACY_FAILED)."""
+    return json.dumps({ACCURACY_FAILED: True})
+
+
 def assemble(parts: Sequence[str]) -> str:
     """Merge the JSON texts of the partial files into the text of a validated pr-report.json.
 
     Each part is an object holding some top-level keys of the schema (no key in two parts) or a bare list, taken as
     the `perf` section. `base_sha`, `head_sha`, `runner`, `kernels_changed` and `accuracy` must be provided (a missing
-    accuracy part is an error, not a cold cache); `perf`, `size` and `rss` default to skipped. The runner is made
+    accuracy part, or the failed-accuracy marker, is an error, not a cold cache); `perf`, `size` and `rss` default to
+    skipped. The runner is made
     inert (`_inert_runner`). The merged result goes through `load`, so `assemble` never writes a report `post` would
     refuse.
     """
@@ -387,6 +400,10 @@ def assemble(parts: Sequence[str]) -> str:
     seen: set[str] = set()
     for index, text in enumerate(parts):
         part = _parse(text, f"part {index}")
+        if isinstance(part, dict) and ACCURACY_FAILED in part:
+            raise ValueError(
+                f"part {index}: the accuracy job failed in this attempt (no usable head result): no report"
+            )
         if isinstance(part, list):
             part = {"perf": part}
         if not isinstance(part, dict):
@@ -635,12 +652,20 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
         help="outcome of the head's e2e test step (steps.<id>.outcome); required with --base and --head",
     )
     p_acc.add_argument("--skipped-cold-cache", action="store_true", help="write the explicit cold-cache status instead")
+    p_acc.add_argument(
+        "--failed",
+        action="store_true",
+        help="write the marker of an accuracy attempt with no usable result (assemble refuses it)",
+    )
     p_acc.add_argument("--out", required=True, help="file to write")
     p_post = sub.add_parser("post", help="comment the report on the pull request of the triggering run")
     p_post.add_argument("report", help="downloaded pr-report.json (untrusted)")
     p_post.add_argument("--head-sha", required=True, help="head SHA of the workflow run that triggered this job")
     args = parser.parse_args(list(argv))
-    if args.command == "accuracy":
+    if args.command == "accuracy" and args.failed:
+        if args.base or args.head or args.head_outcome or args.skipped_cold_cache:
+            parser.error("--failed takes no other input")
+    elif args.command == "accuracy":
         has_snapshots = bool(args.base and args.head)
         if has_snapshots == args.skipped_cold_cache or (args.skipped_cold_cache and (args.base or args.head)):
             # Neither given, or both, or only one of --base and --head.
@@ -654,6 +679,9 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
             Path(args.out).write_text(text + "\n", encoding="utf-8")
             return 0
         if args.command == "accuracy":
+            if args.failed:
+                Path(args.out).write_text(accuracy_failed_part() + "\n", encoding="utf-8")
+                return 0
             if args.skipped_cold_cache:
                 cold: Accuracy = {"status": "skipped-cold-cache", "head_tests": None, "rows": []}
                 text = json.dumps({"accuracy": cold}, indent=2)
