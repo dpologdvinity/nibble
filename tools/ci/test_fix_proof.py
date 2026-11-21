@@ -616,6 +616,26 @@ class ClassifyTests(unittest.TestCase):
         tricky = selection_of('x, [y] * "z" ~')
         self.assertEqual(fix_proof.classify(tricky, True, by_name(tricky, {})), "not-runnable")
 
+    def test_a_case_the_budget_left_unrun_is_never_a_green_verdict(self) -> None:
+        # Skipped cases are "not-runnable" (green), but a case the time budget never started could have passed and
+        # made it "does-not-reproduce": the verdict is "incomplete" and red, and the label does not excuse it.
+        two = selection_of("a", "b")
+        cases: list[list[CaseResult]] = [
+            ["skipped", "not-run"],
+            ["missing", "not-run"],
+            ["passed", "not-run"],
+            ["not-run", "not-run"],
+        ]
+        for states in cases:
+            with self.subTest(states=states):
+                self.assertEqual(fix_proof.classify(two, True, states), "incomplete")
+        self.assertEqual(fix_proof.classify(two, True, ["not-run", "failed"]), "proven")  # a failure still proves it
+        self.assertEqual(fix_proof.exit_code("incomplete", False), 1)
+        self.assertEqual(fix_proof.exit_code("incomplete", True), 1)
+        text = fix_proof.summary("incomplete", two, ["skipped", "not-run"], ["", "not run (time budget)"])
+        self.assertIn("Bug-fix proof: incomplete", text)
+        self.assertIn("- not-run: b", text)
+
     def test_exit_codes_with_label(self) -> None:
         self.assertEqual(fix_proof.exit_code("no-test", False), 1)
         self.assertEqual(fix_proof.exit_code("no-test", True), 0)
@@ -922,7 +942,7 @@ class RunTests(unittest.TestCase):
         self.assertFalse((self.results / "1.status.json").exists())
         self.assertFalse((self.results / "2.xml").exists())
         results, notes = fix_proof.read_results(str(self.results), selection)
-        self.assertEqual(results, ["failed", "missing", "missing"])
+        self.assertEqual(results, ["failed", "not-run", "not-run"])
         self.assertIn("timed out", notes[0])
         self.assertIn("not run", notes[1])
         self.assertIn("not run", notes[2])
@@ -950,6 +970,21 @@ class RunTests(unittest.TestCase):
         self.assertTrue((self.results / "7.log").exists())
         results, _ = fix_proof.read_results(str(self.results), selection)
         self.assertNotEqual(results[1], "failed")
+
+    def test_budget_and_timeout_are_checked(self) -> None:
+        self.write_cases(["passes"])
+        base = ["run", "--cases", str(self.cases), "--build-dir", str(self.build), "--results-dir", str(self.results)]
+        for extra in (
+            ["--timeout", "2", "--budget", "1"],  # no case could ever start
+            ["--timeout", "2", "--budget", "nan"],
+            ["--timeout", "2", "--budget", "inf"],
+            ["--timeout", "0"],
+            ["--timeout", "nan"],
+            ["--timeout", "-5"],
+        ):
+            with self.subTest(extra=extra), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                fix_proof.main([*base, *extra])
+        self.assertFalse(self.results.exists())
 
     def test_run_files(self) -> None:
         self.write_cases(["passes", "aborts"])
@@ -1204,7 +1239,11 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(self.classify(results)[:2], (1, "outcome=does-not-reproduce"))
 
     def test_classify_no_results_is_not_runnable_and_exit_zero(self) -> None:
-        self.assertEqual(self.classify({"0.xml": "not xml"})[:2], (0, "outcome=not-runnable"))
+        # Both cases ran but left no usable result: not-runnable. (A case with no file at all was never started.)
+        self.assertEqual(self.classify({"0.xml": "not xml", "1.xml": "not xml"})[:2], (0, "outcome=not-runnable"))
+
+    def test_classify_a_case_with_no_file_at_all_is_incomplete_and_red(self) -> None:
+        self.assertEqual(self.classify({"0.xml": "not xml"})[:2], (1, "outcome=incomplete"))
 
     def test_classify_base_does_not_compile(self) -> None:
         self.assertEqual(self.classify({}, compiled="false")[:2], (0, "outcome=proven-base-does-not-compile"))

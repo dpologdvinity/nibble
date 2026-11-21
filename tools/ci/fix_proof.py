@@ -28,6 +28,8 @@ What can never be proven, by design (the "unresolved" and "not-runnable" paths):
   nothing and is listed by line, even when a case uses the helper: the check cannot tell which cases a helper
   affects, and running the neighbouring case would prove nothing about it.
 * A case that SKIPs on the base (the end-to-end cases without models), or whose run left no result, is not-runnable.
+  A case `run` never started (the time budget ran out) is not-run, and with no failure the verdict is incomplete
+  (red), never not-runnable: that case could have passed and made the fix "does not reproduce".
 * Edits to tests/*.cpp files that neither nibble_tests nor nibble_alloc_tests builds (simd_helpers_test.cpp and so on)
   are listed as unresolved.
 
@@ -72,7 +74,8 @@ usage:
         [--override] --summary "$GITHUB_STEP_SUMMARY"
         reads `<n>.xml` and `<n>.status.json` of every case from --results-dir, appends a Markdown summary to
         --summary, prints `outcome=<outcome>` and exits 1 for no-test (unless --override, which the workflow sets for
-        the `no-test-needed` label) and does-not-reproduce, else 0. Other errors exit 2. Per case: failed JUnit is
+        the `no-test-needed` label), does-not-reproduce and incomplete (a case `run` never started, no case failed),
+        else 0. Other errors exit 2. Per case: failed JUnit is
         failed; passed JUnit with a failed process is failed; no JUnit element with exit 0 is passed (a case with no
         assertions); skipped is skipped; anything not attributable is missing (see `case_result`).
     python tools/ci/fix_proof.py specs --cases cases.json
@@ -87,6 +90,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -137,8 +141,11 @@ class Selection(NamedTuple):
     unresolved: list[str]
 
 
-CaseResult = Literal["passed", "failed", "skipped", "missing"]
-Outcome = Literal["proven", "proven-base-does-not-compile", "no-test", "does-not-reproduce", "not-runnable"]
+# "not-run": `run` left no file at all for the case (the time budget ran out before it, or the run step stopped).
+CaseResult = Literal["passed", "failed", "skipped", "missing", "not-run"]
+Outcome = Literal[
+    "proven", "proven-base-does-not-compile", "no-test", "does-not-reproduce", "not-runnable", "incomplete"
+]
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -709,16 +716,20 @@ def classify(selection: Selection, base_compiled: bool, results: Sequence[CaseRe
     states = list(results)
     if "failed" in states:
         return "proven"
+    # A case that never started might have passed and made this does-not-reproduce, so the run is not finished: it
+    # must not read as not-runnable (green) just because every case that did run skipped.
+    if "not-run" in states:
+        return "incomplete"
     if all(s in ("skipped", "missing") for s in states):
         return "not-runnable"
     return "does-not-reproduce"
 
 
 def exit_code(outcome: Outcome, override_label: bool) -> int:
-    """1 for no-test (unless the `no-test-needed` label is set) and for does-not-reproduce, else 0."""
+    """1 for no-test (unless the `no-test-needed` label is set), does-not-reproduce and incomplete, else 0."""
     if outcome == "no-test":
         return 0 if override_label else 1
-    return 1 if outcome == "does-not-reproduce" else 0
+    return 1 if outcome in ("does-not-reproduce", "incomplete") else 0
 
 
 def _name(case: Case) -> str:
@@ -753,6 +764,10 @@ _HEADLINES: dict[Outcome, str] = {
     "does-not-reproduce": (
         "Does not reproduce: every selected test passes on the base, so none of them shows the bug. (A fix for a "
         "data race that only ThreadSanitizer sees ends up here; the base is built with ASan and UBSan.)"
+    ),
+    "incomplete": (
+        "Incomplete: no selected test failed on the base, but some were never run (the time budget ran out), so "
+        "this is not a verdict. Make the slow or hanging tests faster, or run them by hand."
     ),
     "not-runnable": (
         "Not runnable: every selected test skipped or left no result on the base (end-to-end cases skip without "
@@ -899,7 +914,9 @@ def read_results(results_dir: str, selection: Selection) -> tuple[list[CaseResul
             xml = None  # unreadable: like an absent file, the process status decides; the next cases still count
         run = _read_status(Path(results_dir, f"{index}.status.json"))
         state, note = case_result(name, xml, run)
-        if xml is None and run is None:
+        if xml is None and run is None and not Path(results_dir, f"{index}.status.json").exists():
+            # `run` writes a status for every case it starts and clears old files first: no file means not started.
+            state = "not-run"
             note = "not run (no JUnit and no process status: the run's time budget ran out, or the run step stopped)"
         results.append(state)
         notes.append(note)
@@ -1046,6 +1063,17 @@ def _cmd_classify(args: argparse.Namespace) -> int:
     return exit_code(outcome, args.override)
 
 
+def _seconds(text: str) -> float:
+    """A finite, positive number of seconds (argparse type): NaN or infinity would disable the limits silently."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text!r}") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"expected a finite number of seconds above 0: {text!r}")
+    return value
+
+
 def main(argv: Sequence[str]) -> int:
     """Command line entry point; see the module docstring. Returns the process exit code."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0] if __doc__ else None)
@@ -1073,10 +1101,10 @@ def main(argv: Sequence[str]) -> int:
     run.add_argument("--cases", required=True)
     run.add_argument("--build-dir", required=True, help="directory holding nibble_tests and nibble_alloc_tests")
     run.add_argument("--results-dir", required=True)
-    run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds per case (default 600)")
+    run.add_argument("--timeout", type=_seconds, default=DEFAULT_TIMEOUT, help="seconds per case (default 600)")
     run.add_argument(
         "--budget",
-        type=float,
+        type=_seconds,
         default=None,
         help="seconds for all cases: a case starts only while a whole --timeout still fits (default: no limit)",
     )
@@ -1091,6 +1119,8 @@ def main(argv: Sequence[str]) -> int:
     cls.set_defaults(func=_cmd_classify)
 
     args = parser.parse_args(list(argv))
+    if args.command == "run" and args.budget is not None and args.budget < args.timeout:
+        parser.error("--budget must be at least --timeout, or no case could ever start")
     try:
         code: int = args.func(args)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
