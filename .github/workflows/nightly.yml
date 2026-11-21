@@ -48,7 +48,6 @@ jobs:
       issues: write
       actions: write
     env:
-      GH_TOKEN: ${{ github.token }}
       MIN_KEYS: "18"  # 6 models x 3 prompts; fewer means models or goldens went missing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,6 +69,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
           cmake --build build -j "$(nproc)"
+          { echo '### Disk after the build'; echo '```'; df -h /; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # -V puts the output of passing tests into the log too (ctest keeps it out otherwise), and the min-cosine lines
       # are printed by tests that pass. The absolute log path is because --test-dir makes ctest change directory.
       # continue-on-error: a failing case must not hide the parse and the comparison below; "Fail the job" ends it.
@@ -133,6 +133,7 @@ jobs:
       - name: Compare with the previous night
         if: ${{ !cancelled() && hashFiles('e2e-cosines.json') != '' }}
         env:
+          GH_TOKEN: ${{ github.token }}  # only this step lists and downloads runs; the build and tests never see it
           REPO: ${{ github.repository }}
         run: |
           prev_json=""
@@ -201,6 +202,7 @@ jobs:
           path: e2e-cosines.json
           retention-days: 30
           if-no-files-found: warn
+          overwrite: true
       - name: Dashboard rows (min cosine)
         if: always()
         continue-on-error: true
@@ -223,6 +225,7 @@ jobs:
           path: rows.jsonl
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       - name: Report
         if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
         uses: ./.github/actions/report-failure
@@ -230,9 +233,8 @@ jobs:
           job: accuracy
           outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
           area: model
-          attachments: |
-            e2e.log
-            e2e-cosines.json
+          # Only a failing night attaches the (large) -V log; a green one must not upload anything.
+          attachments: ${{ job.status != 'success' && 'e2e*.*' || '' }}
           triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
 
   sanitizers-real-model:
@@ -288,6 +290,7 @@ jobs:
           path: rows.jsonl
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       - name: Report
         if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' && github.ref == 'refs/heads/master' }}
         uses: ./.github/actions/report-failure
@@ -383,6 +386,7 @@ jobs:
           path: rows.jsonl
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       # A crash leaves its reproducer (crash-*, oom-*, timeout-*) in crashes/; report-failure uploads it and links
       # it from the issue.
       - name: Report
@@ -392,7 +396,7 @@ jobs:
           job: ${{ matrix.target }}
           outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
           area: gguf
-          attachments: ${{ job.status == 'success' && '' || 'crashes/*' }}
+          attachments: ${{ job.status != 'success' && 'crashes/*' || '' }}
           triage: "false"  # claude-triage.yml does not exist yet; a later phase turns this on
 
   trend-bench:
@@ -450,6 +454,7 @@ jobs:
           path: rows.jsonl
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
       - name: Report
         if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' && github.ref == 'refs/heads/master' }}
         uses: ./.github/actions/report-failure
