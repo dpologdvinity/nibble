@@ -682,13 +682,24 @@ def case_result(name: str, xml: str | None, run: RunStatus | None) -> tuple[Case
     return "passed", "no JUnit element (the case made no assertion) and exit status 0"
 
 
-def classify(selection: Selection, base_compiled: bool, results: Mapping[str, CaseResult]) -> Outcome:
-    """Judge the run of the selected cases on the base (rules in order, R9 of the plan)."""
+def _per_case(selection: Selection, values: Sequence[str], what: str) -> None:
+    """`values` must hold one entry per selected case (they are matched by position, not by name)."""
+    if len(values) != len(selection.cases):
+        raise ValueError(f"{len(values)} {what} for {len(selection.cases)} selected cases")
+
+
+def classify(selection: Selection, base_compiled: bool, results: Sequence[CaseResult]) -> Outcome:
+    """Judge the run of the selected cases on the base (rules in order, R9 of the plan).
+
+    `results[i]` is how `selection.cases[i]` ended. They go by position because two binaries can hold cases of the
+    same name (nibble_tests and nibble_alloc_tests), and each is its own result.
+    """
     if not selection.cases:
         return "no-test"
     if not base_compiled:
         return "proven-base-does-not-compile"
-    states = [results.get(_name(c), "missing") for c in selection.cases]
+    _per_case(selection, results, "results")
+    states = list(results)
     if "failed" in states:
         return "proven"
     if all(s in ("skipped", "missing") for s in states):
@@ -746,19 +757,22 @@ _HEADLINES: dict[Outcome, str] = {
 def summary(
     outcome: Outcome,
     selection: Selection,
-    results: Mapping[str, CaseResult],
-    notes: Mapping[str, str] | None = None,
+    results: Sequence[CaseResult],
+    notes: Sequence[str] | None = None,
 ) -> str:
-    """The Markdown job summary: the verdict, one line per selected case (with `notes[name]` when given) and every
-    unresolved item."""
+    """The Markdown job summary: the verdict, one line per selected case (`results[i]` and, when given and not empty,
+    `notes[i]` belong to `selection.cases[i]`) and every unresolved item."""
     lines = [f"### Bug-fix proof: {outcome}", "", _HEADLINES[outcome], ""]
     if selection.cases:
+        _per_case(selection, results, "results")
+        if notes is not None:
+            _per_case(selection, notes, "notes")
         lines.append("Selected test cases and how they ran on the base:")
         lines.append("")
-        for case in selection.cases:
-            state = results.get(_name(case), "missing")
+        for index, case in enumerate(selection.cases):
+            state = results[index]
             note = " (already passing)" if state == "passed" else ""
-            why = f" [{_md(notes[_name(case)])}]" if notes and notes.get(_name(case)) else ""
+            why = f" [{_md(notes[index])}]" if notes and notes[index] else ""
             lines.append(f"- {state}{note}: {_md(_name(case))} ({_md(case.file)}:{case.start}){why}")
         lines.append("")
     if selection.unresolved:
@@ -857,14 +871,16 @@ def _read_status(path: Path) -> RunStatus | None:
     return RunStatus(started, code, sig, timed_out, unique)
 
 
-def read_results(results_dir: str, selection: Selection) -> tuple[dict[str, CaseResult], dict[str, str]]:
-    """(result, note) per selected case name from the files `run` wrote: `<index>.xml` and `<index>.status.json`.
+def read_results(results_dir: str, selection: Selection) -> tuple[list[CaseResult], list[str]]:
+    """(results, notes), one entry per selected case in order, from the files `run` wrote: `<index>.xml` and
+    `<index>.status.json`.
 
-    `<index>` is the position of the case in `selection.cases`. An absent, oversized or unreadable XML (one that
+    `<index>` is the position of the case in `selection.cases`; two cases of the same name (in different binaries)
+    keep their own result. An absent, oversized or unreadable XML (one that
     cannot be opened included) counts as no JUnit; see `case_result` for how it combines with the process status.
     """
-    results: dict[str, CaseResult] = {}
-    notes: dict[str, str] = {}
+    results: list[CaseResult] = []
+    notes: list[str] = []
     for index, case in enumerate(selection.cases):
         name = _name(case)
         xml_path = Path(results_dir, f"{index}.xml")
@@ -875,9 +891,8 @@ def read_results(results_dir: str, selection: Selection) -> tuple[dict[str, Case
         except OSError:
             xml = None  # unreadable: like an absent file, the process status decides; the next cases still count
         state, note = case_result(name, xml, _read_status(Path(results_dir, f"{index}.status.json")))
-        if _RANK[state] >= _RANK[results.get(name, "missing")]:
-            results[name] = state
-            notes[name] = note
+        results.append(state)
+        notes.append(note)
     return results, notes
 
 

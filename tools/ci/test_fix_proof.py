@@ -563,37 +563,57 @@ def selection_of(*names: str, unresolved: Sequence[str] = ()) -> Selection:
     return Selection([case(n, 1 + i * 10, 9 + i * 10) for i, n in enumerate(names)], list(unresolved))
 
 
+def by_name(selection: Selection, results: dict[str, CaseResult]) -> list[CaseResult]:
+    """Results in the per-case list form `classify` and `summary` take, from a name map (absent names: missing)."""
+    return [results.get(c.name or "", "missing") for c in selection.cases]
+
+
+def named(selection: Selection, results: Sequence[str]) -> dict[str, str]:
+    """`read_results`' per-case list as a name map, for readable assertions (names must be distinct)."""
+    return {c.name or "": r for c, r in zip(selection.cases, results, strict=True)}
+
+
 class ClassifyTests(unittest.TestCase):
     def test_classify_table(self) -> None:
         one = selection_of("a")
         two = selection_of("a", "b")
         res: dict[str, CaseResult]
         # 1. no resolved case, whatever else is true
-        self.assertEqual(fix_proof.classify(Selection([], []), True, {}), "no-test")
-        self.assertEqual(fix_proof.classify(Selection([], ["x: macro"]), False, {"a": "failed"}), "no-test")
+        self.assertEqual(fix_proof.classify(Selection([], []), True, by_name(Selection([], []), {})), "no-test")
+        self.assertEqual(
+            fix_proof.classify(
+                Selection([], ["x: macro"]), False, by_name(Selection([], ["x: macro"]), {"a": "failed"})
+            ),
+            "no-test",
+        )
         # 2. the base does not compile
-        self.assertEqual(fix_proof.classify(one, False, {}), "proven-base-does-not-compile")
+        self.assertEqual(fix_proof.classify(one, False, by_name(one, {})), "proven-base-does-not-compile")
         # 3. any failed case proves it, the passing ones do not count against it (R9)
         res = {"a": "passed", "b": "failed"}
-        self.assertEqual(fix_proof.classify(two, True, res), "proven")
+        self.assertEqual(fix_proof.classify(two, True, by_name(two, res)), "proven")
         # 4. all skipped or missing
-        self.assertEqual(fix_proof.classify(two, True, {"a": "skipped"}), "not-runnable")
-        self.assertEqual(fix_proof.classify(two, True, {}), "not-runnable")
-        self.assertEqual(fix_proof.classify(two, True, {"a": "skipped", "b": "missing"}), "not-runnable")
+        self.assertEqual(fix_proof.classify(two, True, by_name(two, {"a": "skipped"})), "not-runnable")
+        self.assertEqual(fix_proof.classify(two, True, by_name(two, {})), "not-runnable")
+        self.assertEqual(fix_proof.classify(two, True, by_name(two, {"a": "skipped", "b": "missing"})), "not-runnable")
         # 5. otherwise
-        self.assertEqual(fix_proof.classify(two, True, {"a": "passed", "b": "skipped"}), "does-not-reproduce")
-        self.assertEqual(fix_proof.classify(two, True, {"a": "passed", "b": "passed"}), "does-not-reproduce")
+        self.assertEqual(
+            fix_proof.classify(two, True, by_name(two, {"a": "passed", "b": "skipped"})), "does-not-reproduce"
+        )
+        self.assertEqual(
+            fix_proof.classify(two, True, by_name(two, {"a": "passed", "b": "passed"})), "does-not-reproduce"
+        )
 
     def test_unresolved_and_unrunnable_cases_are_never_proven(self) -> None:
         # Review Focus 3: a macro-built name, a case that skips, and a name needing escapes.
         macro_only = Selection([], ["tests/test_e2e_golden.cpp:233: test name is not one plain string literal"])
-        self.assertEqual(fix_proof.classify(macro_only, True, {}), "no-test")
+        self.assertEqual(fix_proof.classify(macro_only, True, by_name(macro_only, {})), "no-test")
         skipping = selection_of("e2e prompt tokens match llama.cpp")
         self.assertEqual(
-            fix_proof.classify(skipping, True, {"e2e prompt tokens match llama.cpp": "skipped"}), "not-runnable"
+            fix_proof.classify(skipping, True, by_name(skipping, {"e2e prompt tokens match llama.cpp": "skipped"})),
+            "not-runnable",
         )
         tricky = selection_of('x, [y] * "z" ~')
-        self.assertEqual(fix_proof.classify(tricky, True, {}), "not-runnable")
+        self.assertEqual(fix_proof.classify(tricky, True, by_name(tricky, {})), "not-runnable")
 
     def test_exit_codes_with_label(self) -> None:
         self.assertEqual(fix_proof.exit_code("no-test", False), 1)
@@ -609,21 +629,37 @@ class ClassifyTests(unittest.TestCase):
             "fails", "passes", unresolved=["deleted: gone", "tests/t.cpp:9: test name is not one plain string literal"]
         )
         res: dict[str, CaseResult] = {"fails": "failed", "passes": "passed"}
-        text = fix_proof.summary("proven", sel, res)
+        text = fix_proof.summary("proven", sel, by_name(sel, res))
         self.assertIn("Bug-fix proof: proven", text)
         self.assertIn("- failed: fails", text)
         self.assertIn("- passed (already passing): passes", text)
         self.assertIn("deleted: gone", text)
         for outcome in ("no-test", "does-not-reproduce", "not-runnable", "proven-base-does-not-compile"):
             with self.subTest(outcome):
-                body = fix_proof.summary(outcome, sel, res)
+                body = fix_proof.summary(outcome, sel, by_name(sel, res))
                 self.assertIn(f"Bug-fix proof: {outcome}", body)
-        self.assertNotIn("Proven:", fix_proof.summary("not-runnable", sel, {}))
-        self.assertIn("no-test-needed", fix_proof.summary("no-test", Selection([], []), {}))
+        self.assertNotIn("Proven:", fix_proof.summary("not-runnable", sel, by_name(sel, {})))
+        self.assertIn("no-test-needed", fix_proof.summary("no-test", Selection([], []), by_name(Selection([], []), {})))
+
+    def test_same_name_in_two_binaries_keeps_two_results(self) -> None:
+        # nibble_tests and nibble_alloc_tests may both have a case called "empty input"; each row is its own result.
+        sel = Selection(
+            [
+                Case("tests/test_x.cpp", "empty input", 3, 9, "nibble_tests"),
+                Case("tests/alloc_tests.cpp", "empty input", 5, 8, "nibble_alloc_tests"),
+            ],
+            [],
+        )
+        text = fix_proof.summary("proven", sel, ["passed", "failed"], ["", "killed by signal 6, no JUnit result"])
+        self.assertIn("- passed (already passing): empty input (tests/test\\_x.cpp:3)\n", text)
+        self.assertIn("- failed: empty input (tests/alloc\\_tests.cpp:5) [killed by signal 6, no JUnit result]", text)
+        self.assertEqual(fix_proof.classify(sel, True, ["passed", "failed"]), "proven")
+        with self.assertRaises(ValueError):
+            fix_proof.classify(sel, True, ["passed"])  # one result per selected case, no fewer
 
     def test_summary_neutralises_markdown_in_names(self) -> None:
         sel = selection_of("[x](http://evil) @user `tick`\nnewline")
-        text = fix_proof.summary("does-not-reproduce", sel, {})
+        text = fix_proof.summary("does-not-reproduce", sel, by_name(sel, {}))
         self.assertNotIn("](", text)
         self.assertNotIn("\nnewline", text)
         self.assertNotIn("`tick`", text)
@@ -650,8 +686,7 @@ class ReadResultsTests(unittest.TestCase):
             with mock.patch.object(Path, "read_text", read_text):
                 results, _ = fix_proof.read_results(tmp, sel)
         self.assertEqual(fix_proof.classify(sel, True, results), "proven")
-        self.assertEqual(results["first"], "passed")  # no JUnit, exit 0: the process status decides
-        self.assertEqual(results["fails"], "failed")
+        self.assertEqual(results, ["passed", "failed"])  # "first": no JUnit, exit 0, so the process status decides
 
 
 def status(**changes: Any) -> fix_proof.RunStatus:
@@ -859,7 +894,7 @@ class RunTests(unittest.TestCase):
         self.run_all()
         results, notes = fix_proof.read_results(str(self.results), selection)
         self.assertEqual(
-            results,
+            named(selection, results),
             {
                 "passes": "passed",
                 "fails": "failed",
@@ -873,8 +908,8 @@ class RunTests(unittest.TestCase):
                 "x, [y] *": "passed",
             },
         )
-        self.assertIn("signal 6", notes["aborts"])
-        self.assertIn("timed out", notes["hangs"])
+        self.assertIn("signal 6", named(selection, notes)["aborts"])
+        self.assertIn("timed out", named(selection, notes)["hangs"])
 
     def test_run_files(self) -> None:
         self.write_cases(["passes", "aborts"])
@@ -921,7 +956,7 @@ class RunTests(unittest.TestCase):
         recorded = json.loads((self.results / "0.status.json").read_text(encoding="utf-8"))
         self.assertFalse(recorded["unique"])
         results, _ = fix_proof.read_results(str(self.results), selection)
-        self.assertEqual(results, {"listcrash case": "missing"})
+        self.assertEqual(results, ["missing"])
 
     def test_merge_options(self) -> None:
         self.assertEqual(fix_proof._merge_options(None, "a=1:b=2"), "a=1:b=2")
@@ -935,7 +970,7 @@ class RunTests(unittest.TestCase):
         recorded = json.loads((self.results / "0.status.json").read_text(encoding="utf-8"))
         self.assertFalse(recorded["started"])
         results, _ = fix_proof.read_results(str(self.results), self.write_cases(["passes"], "nibble_alloc_tests"))
-        self.assertEqual(results, {"passes": "missing"})
+        self.assertEqual(results, ["missing"])
 
     def test_classify_cli_proves_a_crash_and_explains_it(self) -> None:
         self.write_cases(["passes", "aborts"])
@@ -956,7 +991,7 @@ class RunTests(unittest.TestCase):
         selection = self.write_cases(["nomatch case"])
         self.run_all()
         results, _ = fix_proof.read_results(str(self.results), selection)
-        self.assertEqual(results, {"nomatch case": "missing"})
+        self.assertEqual(results, ["missing"])
 
 
 def git(repo: Path, *args: str) -> str:
