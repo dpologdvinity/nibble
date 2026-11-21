@@ -35,6 +35,13 @@ def make_ctx(
     )
 
 
+def at_tip() -> FakeGitHub:
+    """A FakeGitHub whose master tip is make_ctx()'s default sha, so a run of that commit is not stale."""
+    gh = FakeGitHub()
+    gh.branch_tips["master"] = "abc1234"
+    return gh
+
+
 class DecideTests(unittest.TestCase):
     def test_decide_table(self) -> None:
         self.assertEqual(report_failure.decide(None, "failure"), "open")
@@ -69,7 +76,7 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(all(not i.comments for i in gh.issues.values()))
 
     def test_same_job_name_in_two_workflows_gets_two_issues(self) -> None:
-        gh = FakeGitHub()
+        gh = at_tip()
         nightly = make_ctx("arm64", workflow_file="nightly.yml")
         portability = make_ctx("arm64", workflow_file="portability.yml")
         self.assertEqual(report_failure.report(gh, nightly, "failure", triage=False), "open")
@@ -82,7 +89,7 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(gh.issues[2].open)
 
     def test_success_closes_only_own_issue(self) -> None:
-        gh = FakeGitHub()
+        gh = at_tip()
         report_failure.report(gh, make_ctx("fuzz_gguf"), "failure", triage=False)
         report_failure.report(gh, make_ctx("fuzz_load"), "failure", triage=False)
         self.assertEqual(report_failure.report(gh, make_ctx("fuzz_gguf"), "success", triage=False), "close")
@@ -91,6 +98,37 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(gh.issues[1].comments), 1, "closing leaves a recovery comment")
         self.assertEqual(gh.issues[2].comments, [])
 
+    def test_stale_rerun_success_comments_but_never_closes(self) -> None:
+        # A newer commit opened the issue; a rerun of an older commit (same SHA and ref as its original run) passes.
+        gh = FakeGitHub()
+        gh.branch_tips["master"] = "newer99"
+        report_failure.report(gh, make_ctx(sha="newer99"), "failure", triage=False)
+        self.assertEqual(report_failure.report(gh, make_ctx(sha="older11"), "success", triage=False), "stale")
+        issue = gh.issues[1]
+        self.assertTrue(issue.open)
+        self.assertEqual(len(issue.comments), 1)
+        self.assertIn("older11", issue.comments[0])
+        self.assertIn("newer99", issue.comments[0])
+        self.assertIn("Not closing", issue.comments[0])
+
+    def test_success_with_unknown_branch_tip_is_treated_as_stale(self) -> None:
+        gh = FakeGitHub()  # no tip on record: the lookup found nothing, so closing would be a guess
+        report_failure.report(gh, make_ctx(), "failure", triage=False)
+        self.assertEqual(report_failure.report(gh, make_ctx(), "success", triage=False), "stale")
+        self.assertTrue(gh.issues[1].open)
+
+    def test_stale_success_without_issue_is_noop_and_needs_no_lookup(self) -> None:
+        gh = FakeGitHub()
+        gh.fail_tip = True  # would raise if the tip were looked up
+        self.assertEqual(report_failure.report(gh, make_ctx(sha="older11"), "success", triage=False), "none")
+
+    def test_stale_failure_still_comments(self) -> None:
+        gh = FakeGitHub()
+        gh.branch_tips["master"] = "newer99"
+        report_failure.report(gh, make_ctx(sha="newer99"), "failure", triage=False)
+        self.assertEqual(report_failure.report(gh, make_ctx(sha="older11"), "failure", triage=False), "comment")
+        self.assertTrue(gh.issues[1].open)
+
     def test_success_without_issue_is_noop(self) -> None:
         gh = FakeGitHub()
         self.assertEqual(report_failure.report(gh, make_ctx(), "success", triage=True), "none")
@@ -98,14 +136,14 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(gh.dispatches, [])
 
     def test_failure_after_recovery_opens_new_issue(self) -> None:
-        gh = FakeGitHub()
+        gh = at_tip()
         report_failure.report(gh, make_ctx(), "failure", triage=False)
         report_failure.report(gh, make_ctx(), "success", triage=False)
         self.assertEqual(report_failure.report(gh, make_ctx(), "failure", triage=False), "open")
         self.assertEqual(len(gh.issues), 2)
 
     def test_triage_dispatched_only_on_open(self) -> None:
-        gh = FakeGitHub()
+        gh = at_tip()
         report_failure.report(gh, make_ctx(), "failure", triage=True)
         self.assertEqual(gh.dispatches, [("claude-triage.yml", "master", {"issue": "1"})])
         report_failure.report(gh, make_ctx(), "failure", triage=True)  # comment: no second dispatch

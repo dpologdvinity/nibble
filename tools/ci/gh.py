@@ -67,6 +67,10 @@ class GitHub(Protocol):
         """Start `workflow_file` on `ref` through workflow_dispatch (exempt from the GITHUB_TOKEN no-trigger rule)."""
         ...
 
+    def branch_tip(self, branch: str) -> str | None:
+        """Head commit of `branch` right now, or None if the API reports no commit for it."""
+        ...
+
     def list_completed_runs(self, workflow_file: str, branch: str, limit: int) -> list[int]:
         """Ids of the `limit` newest runs of `workflow_file` on `branch` (any event or result), newest first."""
         ...
@@ -172,6 +176,14 @@ class GhCli:
             f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/dispatches",
             {"ref": ref, "inputs": dict(inputs)},
         )
+
+    def branch_tip(self, branch: str) -> str | None:
+        # Slashes stay (a branch "release/v1" is one path in this endpoint); everything else is percent-encoded.
+        commit = json.loads(self._get(f"repos/{self.repo}/branches/{urllib.parse.quote(branch, safe='/')}")).get(
+            "commit"
+        )
+        sha = commit.get("sha") if isinstance(commit, dict) else None
+        return str(sha) if sha else None
 
     def list_completed_runs(self, workflow_file: str, branch: str, limit: int) -> list[int]:
         query = urllib.parse.urlencode({"branch": branch, "status": "completed", "per_page": limit})

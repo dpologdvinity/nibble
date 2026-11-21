@@ -221,6 +221,21 @@ class RunLookupTests(unittest.TestCase):
                 self.assertEqual(len(runner.calls), 1)  # no download attempted
 
 
+class BranchTipTests(unittest.TestCase):
+    def test_branch_tip_reads_the_commit_sha(self) -> None:
+        runner = ScriptedRunner({"branches/master": json.dumps({"name": "master", "commit": {"sha": "abc123"}})})
+        self.assertEqual(gh.GhCli(REPO, runner).branch_tip("master"), "abc123")
+        self.assertEqual(runner.calls[0][0][-1], f"repos/{REPO}/branches/master")
+
+    def test_branch_tip_keeps_slashes_and_encodes_the_rest(self) -> None:
+        runner = ScriptedRunner({"branches/": json.dumps({"commit": {"sha": "abc123"}})})
+        gh.GhCli(REPO, runner).branch_tip("release/v1#hotfix")
+        self.assertEqual(runner.calls[0][0][-1], f"repos/{REPO}/branches/release/v1%23hotfix")
+
+    def test_branch_tip_none_without_a_commit(self) -> None:
+        self.assertIsNone(gh.GhCli(REPO, ScriptedRunner({"branches/": "{}"})).branch_tip("master"))
+
+
 class SubprocessRunnerTests(unittest.TestCase):
     def test_runner_error_raises(self) -> None:
         # `sh -c 'echo boom >&2; exit 3'` stands in for a failing gh invocation.
@@ -264,6 +279,15 @@ class FakeGitHubTests(unittest.TestCase):
         self.assertEqual(fake.pr_for_sha("def"), 4)
         self.assertIsNone(fake.pr_for_sha("nope"))
         self.assertEqual(fake.dispatches, [("w.yml", "master", {"k": "v"})])
+
+    def test_fake_branch_tip(self) -> None:
+        fake = FakeGitHub()
+        fake.branch_tips["master"] = "abc"
+        self.assertEqual(fake.branch_tip("master"), "abc")
+        self.assertIsNone(fake.branch_tip("other"))
+        fake.fail_tip = True
+        with self.assertRaises(gh.GhError):
+            fake.branch_tip("master")
 
     def test_fake_run_lookups(self) -> None:
         fake = FakeGitHub()

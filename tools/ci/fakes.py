@@ -31,7 +31,8 @@ class FakeGitHub:
     Tests inspect `issues` (number -> FakeIssue) and `dispatches` ((workflow, ref, inputs) in call order), and
     seed `green_shas` ((workflow, branch) -> sha), `prs_by_sha` (head sha -> PR number), `completed_runs`
     ((workflow, branch) -> run ids, newest first), `job_conclusions` ((run id, job name) -> conclusion) and
-    `artifacts` ((run id, artifact name) -> {file name: text}). `fail_listing` makes list_completed_runs raise GhError.
+    `artifacts` ((run id, artifact name) -> {file name: text}) and `branch_tips` (branch -> head sha).
+    `fail_listing` and `fail_tip` make list_completed_runs and branch_tip raise GhError.
     """
 
     def __init__(self) -> None:
@@ -42,7 +43,9 @@ class FakeGitHub:
         self.completed_runs: dict[tuple[str, str], list[int]] = {}
         self.job_conclusions: dict[tuple[int, str], str] = {}
         self.artifacts: dict[tuple[int, str], dict[str, str]] = {}
+        self.branch_tips: dict[str, str] = {}
         self.fail_listing = False
+        self.fail_tip = False
         self._next_number = 1
 
     def find_open_issue(self, title: str) -> int | None:
@@ -97,3 +100,8 @@ class FakeGitHub:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
         return True
+
+    def branch_tip(self, branch: str) -> str | None:
+        if self.fail_tip:
+            raise GhError("simulated branch lookup failure")
+        return self.branch_tips.get(branch)

@@ -8,7 +8,9 @@ this script with the job's outcome:
     also start `claude-triage.yml` with `issue=<number>` (an issue created with GITHUB_TOKEN does not trigger other
     workflows, but `workflow_dispatch` is exempt);
   - failure and an open issue: add a comment, never a second issue;
-  - success and an open issue: comment that the job recovered and close it;
+  - success and an open issue: comment that the job recovered and close it, but only when the run tested the current
+    tip of master. A re-run keeps the SHA of its original run, so an old commit's re-run that passes says nothing
+    about a failure a newer commit introduced: it comments that and leaves the issue open;
   - success and no open issue: do nothing.
 
 The issue is found by exact title (gh.GitHub.find_open_issue), so `fuzz_gguf` and `fuzz_load` never share an issue and
@@ -34,7 +36,7 @@ import gh as gh_module
 from gh import GitHub
 
 Outcome = Literal["success", "failure"]
-Action = Literal["open", "comment", "close", "none"]
+Action = Literal["open", "comment", "close", "stale", "none"]
 
 # Branch whose last green run anchors the compare link, and the ref the triage workflow is dispatched on.
 DEFAULT_BRANCH = "master"
@@ -100,11 +102,21 @@ def recovery_body(ctx: RunContext) -> str:
     return f"The `{ctx.job}` job of `{ctx.workflow_file}` passed again at `{ctx.sha}` ({ctx.run_url}). Closing."
 
 
+def stale_body(ctx: RunContext, tip: str | None) -> str:
+    """The comment left when a passing run is not of master's current tip, so the issue stays open."""
+    current = f"`{tip}`" if tip else "an unknown commit (the branch lookup returned nothing)"
+    return (
+        f"The `{ctx.job}` job of `{ctx.workflow_file}` passed at `{ctx.sha}` ({ctx.run_url}), but master is now at "
+        f"{current}, so this run says nothing about the failure. Not closing."
+    )
+
+
 def report(gh: GitHub, ctx: RunContext, outcome: Outcome, triage: bool) -> Action:
     """Apply `decide` to the job's open issue and return the action taken.
 
     Dispatches `claude-triage.yml` with the new issue number only when an issue is opened (a comment or close needs no
-    new triage) and `triage` is true.
+    new triage) and `triage` is true. A passing run whose `sha` is not master's current tip (a re-run of an older
+    commit, or no tip on record) comments and returns "stale" instead of closing; the tip is looked up only then.
     """
     title = issue_title(ctx.workflow_file, ctx.job)
     existing = gh.find_open_issue(title)
@@ -117,6 +129,10 @@ def report(gh: GitHub, ctx: RunContext, outcome: Outcome, triage: bool) -> Actio
     elif action == "comment" and existing is not None:
         gh.comment(existing, failure_body(ctx, gh.last_green_sha(ctx.workflow_file, DEFAULT_BRANCH)))
     elif action == "close" and existing is not None:
+        tip = gh.branch_tip(DEFAULT_BRANCH)
+        if tip != ctx.sha:
+            gh.comment(existing, stale_body(ctx, tip))
+            return "stale"
         gh.comment(existing, recovery_body(ctx))
         gh.close_issue(existing)
     return action
