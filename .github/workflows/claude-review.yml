@@ -3,6 +3,7 @@
 # handling, tests, least-privilege workflows) before the owner reads it. It posts inline comments only; it never
 # approves or requests changes, so it can never satisfy or block branch protection. Runs on the owner's Claude
 # subscription through the CLAUDE_CODE_OAUTH_TOKEN repository secret.
+# Also starts when the `agent` label is added to a pull request.
 # Skips with a notice, never red, when the secret is not available: forks always, Dependabot unless the same token is
 # also stored as a Dependabot secret (and GitHub gives Dependabot runs a read-only token, so its inline comments may
 # not post). Drafts are skipped; marking a draft ready for review starts the review.
@@ -11,12 +12,12 @@
 # and Write are denied on top of that, because `permissions: contents: read` only limits GITHUB_TOKEN, not the Claude
 # GitHub App token the action obtains.
 # How it is triggered: by a pull_request event, never by hand and there is no workflow_dispatch; push to the pull
-# request or mark it ready for review.
+# request, mark it ready for review or add the `agent` label.
 name: claude-review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, ready_for_review, labeled]
 
 # The review reads the pull request and writes comments; id-token is how the action gets the Claude GitHub App's token.
 permissions:
@@ -28,8 +29,10 @@ jobs:
   review:
     # Not a draft, and one of: a pull request by an OWNER/MEMBER/COLLABORATOR, by Dependabot, or an `agent` pull
     # request from a branch of this repository (a fork cannot use the label to get a review).
+    # A `labeled` event only counts when the label is `agent` (any other label would start a review per label).
     if: |
-      github.event.pull_request.draft == false && (
+      github.event.pull_request.draft == false &&
+      (github.event.action != 'labeled' || github.event.label.name == 'agent') && (
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) ||
         github.event.pull_request.user.login == 'dependabot[bot]' ||
         (contains(github.event.pull_request.labels.*.name, 'agent') &&
@@ -100,4 +103,4 @@ jobs:
             - If there is nothing worth a comment, post nothing.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Read,Grep,Glob"
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Bash(git diff*--output*),Bash(git log*--output*)"
