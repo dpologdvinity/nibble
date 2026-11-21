@@ -50,7 +50,7 @@ clang-format, typos).
   public and non-obvious members state their contract. Keep README.md and ARCHITECTURE.md true when behavior changes.
 - Tests come with the change; a bug fix gets a test that fails without the fix (write and run it first).
   CI checks it: `fix-proof.yml` runs the cases a `fix:` PR adds or changes on the merge base and wants one to fail
-  (the `no-test-needed` label, with the reason in the PR, overrides it).
+  (the `no-test-needed` label, with the reason in the PR, waives only a PR that changes no test case).
 - Input-caused errors throw `nibble::Error` (file-derived text through `escape_control`); internal invariants use
   `NIBBLE_DCHECK`. No allocation on the decode path (`alloc_tests` enforces it).
 - Kernel translation units that must match the scalar code bit for bit stay in the `-ffp-contract=off` list in

@@ -251,7 +251,7 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 | every PR and push to `master` | [ci](.github/workflows/ci.yml) | The required gate: formatting, clang-tidy, ruff and mypy, the Python tool tests, then the non-e2e suite built with the documented compiler floor (g++ 13, clang 18), as released (runtime kernel dispatch), with scalar kernels only, under ASan+UBSan and under TSan; a minimum line coverage; 60 s of fuzzing each for the GGUF parser and the loader. |
 | every PR and push to `master`, and tags | [package](.github/workflows/package.yml) | The release tarballs and container image still build and run (called by ci and release). |
 | PRs touching the engine, CLI, build or tests | [pr-report](.github/workflows/pr-report.yml) | One comment per PR with the change's effect on decode/prefill speed (interleaved ABBA runs against the merge base), binary size, peak memory and the min cosine of the Qwen2.5-0.5B end-to-end tests against llama.cpp. A second workflow, which never runs PR code, posts it. |
-| `fix:` PRs touching `src/`, `include/` or `cli/` | [fix-proof](.github/workflows/fix-proof.yml) | A bug fix carries a test that fails without it: the PR's tests are run on its merge base, built with ASan+UBSan, and at least one must fail. |
+| `fix:` PRs touching `src/`, `include/` or `cli/` | [fix-proof](.github/workflows/fix-proof.yml) | A bug fix carries a test that fails without it: the PR's tests are run on its merge base, built with ASan+UBSan, and at least one must fail. A base that does not build with the new tests also passes, and a `no-test-needed` label (reason in the PR) waives a PR without a test. Not yet required. |
 | every PR and push to `master`, weekly | [codeql](.github/workflows/codeql.yml) | CodeQL over the C++ (nibble parses untrusted GGUF files) and the workflow files (injection, token permissions). |
 | every PR and push to `master`, weekly | [gitleaks](.github/workflows/gitleaks.yml) | No secret in the commits being added; weekly over the full history, so new rules reach old commits. |
 | PRs touching workflows | [actionlint](.github/workflows/actionlint.yml) | A typo in a workflow (expression, `needs:`, input) cannot silently stop it from running; shellcheck on `run:` blocks. |
@@ -265,7 +265,7 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 | weekly | [link-check](.github/workflows/link-check.yml) | Links in the README and docs; one open issue lists the broken ones. |
 | after nightly, portability and ci on `master` | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
 | a failing scheduled job | [claude-triage](.github/workflows/claude-triage.yml) | Claude diagnoses the `ci-failure` issue and, with a reproducer, opens an `agent/` PR (below). |
-| `@claude` from the owner | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or PR; it answers or opens an `agent` PR. |
+| `@claude` from the owner or a collaborator | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or PR; it answers or opens an `agent` PR. |
 | a `v*` tag | [release](.github/workflows/release.yml) | The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
 
 When a scheduled job fails, the fix comes back as a pull request that has to prove itself:
@@ -295,11 +295,14 @@ benchmark tables below come from an idle dedicated machine.
 
 **Verifying a release.** From the next release on, the tarballs and the container image carry build-provenance and
 SBOM attestations signed by the release workflow. To check that a download was built from this repository by that
-workflow (here for a tag `v0.9.0`; the image tag has no `v`):
+workflow (here for a tag `v0.9.0`; the image tag has no `v`, and the image check reads the registry, so log in with
+`docker login ghcr.io` first):
 
 ```sh
-gh attestation verify nibble-v0.9.0-linux-x86_64.tar.gz -R dpologdvinity/nibble
-gh attestation verify oci://ghcr.io/dpologdvinity/nibble:0.9.0 -R dpologdvinity/nibble
+gh attestation verify nibble-v0.9.0-linux-x86_64.tar.gz -R dpologdvinity/nibble \
+  --signer-workflow dpologdvinity/nibble/.github/workflows/release.yml
+gh attestation verify oci://ghcr.io/dpologdvinity/nibble:0.9.0 -R dpologdvinity/nibble \
+  --signer-workflow dpologdvinity/nibble/.github/workflows/release.yml
 ```
 
 The SPDX SBOMs (`*.spdx.json`) are attached to the release next to the tarballs.

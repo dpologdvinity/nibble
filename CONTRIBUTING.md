@@ -128,8 +128,9 @@ README), which ruff and mypy cover and which has its own tests:
 python -m unittest discover -s tools/ci -p 'test_*.py'
 ```
 
-`gh workflow run` uses the workflow file on `master`, so a workflow that a pull request adds or changes can only be
-dispatched after it is merged.
+A workflow can be dispatched once its file is on `master`; `gh workflow run <file> --ref <branch>` then runs the
+branch's copy, so a change to an existing workflow can be tried before it merges (nightly and portability open no
+issue from another branch). A new workflow can only be dispatched after it is merged.
 
 | workflow | runs | by hand |
 |---|---|---|
@@ -162,16 +163,17 @@ from another branch (`--ref`) opens no issue and saves no cache. The end-to-end 
 Catch2 `TEST_CASE`s the pull request adds or changes in `tests/*.cpp`, builds the merge base with the pull request's
 `tests/` in Debug with ASan and UBSan, and runs each of those cases there:
 
-* **proven** (green): at least one case fails on the merge base. A merge base that does not compile with the new tests
-  also counts, because the tests use something the fix adds.
+* **proven** (green): at least one case fails on the merge base. A merge base that does not build with the new tests
+  also counts, on the assumption that the tests use something the fix adds; the build failure is not checked further,
+  so read the base build log in the job before taking that as proof.
 * **does not reproduce**, **no test**, **incomplete** (red): every case passes on the merge base, the pull request
   changes no test case, or no case failed before the time budget ran out.
 * Cases it cannot run prove nothing: names built by a macro are reported as unresolved, and end-to-end cases as
   not-runnable (it has no models).
 
 If a fix cannot have a reproducing test (a build-only or documentation fix to code, for example), add the
-`no-test-needed` label and say why in the pull request; the label turns the red result green. The check is not
-required yet. The verdict and the cases are in the job summary.
+`no-test-needed` label and say why in the pull request: the label turns **no test** green, and only that result
+(**does not reproduce** and **incomplete** stay red). The check is not required yet. The verdict and the cases are in the job summary.
 
 ### Releases
 
