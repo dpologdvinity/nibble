@@ -55,6 +55,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
     env:
       MIN_KEYS: "18"  # 6 models x 3 prompts; fewer means models or goldens went missing
     steps:
@@ -155,6 +156,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -220,6 +222,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
     strategy:
       fail-fast: false  # one target crashing must not stop the other's two hours
       matrix:
@@ -330,6 +333,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read  # report-failure and the accuracy comparison list earlier runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
