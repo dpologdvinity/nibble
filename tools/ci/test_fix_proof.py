@@ -1115,13 +1115,28 @@ class CommandLineTests(unittest.TestCase):
 
     def test_malformed_cases_json_is_an_error(self) -> None:
         bad = Path(self.tmp.name, "bad.json")
-        bad.write_text('{"cases": [{"file": 1}], "unresolved": []}', encoding="utf-8")
         results = self.write_results({})
-        code, _ = self.run_main(
+        # `cases` that is not a list must not iterate as zero cases (with --override that would exit 0).
+        for text in (
+            '{"cases": [{"file": 1}], "unresolved": []}',
+            '{"cases": {}, "unresolved": []}',
+            '{"cases": "", "unresolved": []}',
+            '{"cases": null, "unresolved": []}',
+        ):
+            with self.subTest(text=text):
+                bad.write_text(text, encoding="utf-8")
+                code, _ = self.run_main(
+                    "classify", "--cases", str(bad), "--results-dir", str(results), "--base-compiled", "true",
+                    "--summary", str(Path(self.tmp.name, "s.md")), "--override",
+                )  # fmt: skip
+                self.assertEqual(code, 2)
+        # An empty list is valid: no case selected, which is the no-test verdict (green with the label).
+        bad.write_text('{"cases": [], "unresolved": []}', encoding="utf-8")
+        code, out = self.run_main(
             "classify", "--cases", str(bad), "--results-dir", str(results), "--base-compiled", "true",
-            "--summary", str(Path(self.tmp.name, "s.md")),
+            "--summary", str(Path(self.tmp.name, "s.md")), "--override",
         )  # fmt: skip
-        self.assertEqual(code, 2)
+        self.assertEqual((code, out.strip()), (0, "outcome=no-test"))
 
 
 if __name__ == "__main__":

@@ -815,6 +815,8 @@ def _read_selection(path: str) -> Selection:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or set(raw) != {"cases", "unresolved"}:
         raise ValueError(f"{path}: expected an object with exactly the keys cases and unresolved")
+    if not isinstance(raw["cases"], list):  # an object or a string would iterate as no case at all
+        raise ValueError(f"{path}: cases must be a list")
     cases: list[Case] = []
     for item in raw["cases"]:
         if not isinstance(item, dict):
