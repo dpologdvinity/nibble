@@ -6,7 +6,8 @@
 #   - uses: ./.github/actions/report-failure
 #     if: always()
 #     with: {job: fuzz_gguf, outcome: "${{ job.status == 'success' && 'success' || 'failure' }}"}
-# The calling job needs `issues: write`, plus `actions: write` when `triage` is true. Logic: tools/ci/report_failure.py.
+# The calling job needs `issues: write`, plus `actions: write` when `triage` is true (nightly and portability call it from the
+# small report-job.yml job, so their long work jobs hold neither). Logic: tools/ci/report_failure.py.
 name: report-failure
 description: Open, update or close the single issue for a failing scheduled job.
 inputs:
@@ -21,6 +22,9 @@ inputs:
     default: ci
   attachments:
     description: 'Newline-separated paths uploaded as artifact `failure-<job>` and linked from the issue. Empty means none.'
+    default: ""
+  attachments-url:
+    description: Link to an artifact the caller already uploaded; used when `attachments` is empty.
     default: ""
   triage:
     description: '`true` to start claude-triage.yml for a newly opened issue (needs `actions: write`).'
@@ -51,7 +55,7 @@ runs:
         OUTCOME: ${{ inputs.outcome }}
         AREA: ${{ inputs.area }}
         TRIAGE: ${{ inputs.triage }}
-        ATTACHMENTS_URL: ${{ steps.upload.outputs.artifact-url }}
+        ATTACHMENTS_URL: ${{ steps.upload.outputs.artifact-url || inputs.attachments-url }}
         WORKFLOW_REF: ${{ github.workflow_ref }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         SHA: ${{ github.sha }}

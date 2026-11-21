@@ -19,9 +19,9 @@ Metrics, their keys and units (METRICS below is the single source for the metric
     job_status     "<workflow>/<job>"                ok      1 = success, 0 = failure (see below)
 
 `job_status` is written by the job's "Dashboard rows (job status)" step from `job.status`, which covers the job's
-checks up to that step. The `Report` step (issue open/comment/close) runs after it, so a Report step that fails by
-itself (a GitHub API error) leaves a green row on a job GitHub marks red. That is deliberate: the row says whether the
-code and the checks passed, and the red Report step is visible in the run.
+checks up to that step. The issue open/comment/close happens afterwards in a separate `report-<job>` job, so a report
+job that fails by itself (a GitHub API error) leaves a green row next to a red report job. That is deliberate: the row
+says whether the code and the checks passed, and the red report job is visible in the run.
 
 `validate` is the gate: every row built here, and every new row `merge` accepts, passes through it.
 `merge` appends rows to existing JSONL text and drops repeats of the same (run_id, metric, key), so re-running a job

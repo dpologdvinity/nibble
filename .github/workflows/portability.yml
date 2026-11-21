@@ -14,14 +14,18 @@
 # The four jobs are independent and run the whole non-e2e suite (no models needed).
 # By hand (the workflow file must be on the default branch): `gh workflow run portability.yml`. A run from another
 # branch (`--ref`) never opens an issue.
-# Each job also uploads a job_status dashboard row. It records the job's result before its Report step runs, so a Report
-# step that fails on its own (a GitHub API error) leaves a green row on a red job. See tools/ci/dashboard_data.py.
+# Each job also uploads a job_status dashboard row and ends by recording its result as a job output. A small
+# `report-<job>` job per work job (report-job.yml) then opens, updates or closes the issue, so the long jobs hold no
+# `issues` or `actions: write` token; a report job that fails on its own (a GitHub API error) leaves a green row on a
+# red report job. See tools/ci/dashboard_data.py.
 # Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
 name: portability
 
 on:
+
   schedule:
     - cron: "23 4 * * 0"
+
   workflow_dispatch:
 
 permissions:
@@ -43,12 +47,14 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
     env:
       CCACHE_MAXSIZE: 300M
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -93,14 +99,26 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
-        with:
-          job: arm64
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: build
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-arm64:
+    needs: arm64
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: arm64
+      status: ${{ needs.arm64.outputs.status || needs.arm64.result }}
+      area: build
 
   newest-gcc:
     name: newest-gcc
@@ -111,10 +129,12 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -165,14 +185,26 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
-        with:
-          job: newest-gcc
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: build
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-newest-gcc:
+    needs: newest-gcc
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: newest-gcc
+      status: ${{ needs.newest-gcc.outputs.status || needs.newest-gcc.result }}
+      area: build
 
   newest-clang:
     name: newest-clang
@@ -183,8 +215,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
     env:
       # llvm.sh runs as root, so it is pinned. The hash below is the script whose CURRENT_LLVM_STABLE is 22 (the newest
       # stable release it knew when it was pinned); the version is passed explicitly so a new default cannot slip in.
@@ -192,6 +224,8 @@ jobs:
       LLVM_SH_SHA256: 03878e08f47b66cc95bc4b544b0db3c6d9ce8d60e6cf2492ae357984330a9eae
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -233,14 +267,26 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
-        with:
-          job: newest-clang
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: build
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-newest-clang:
+    needs: newest-clang
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: newest-clang
+      status: ${{ needs.newest-clang.outputs.status || needs.newest-clang.result }}
+      area: build
 
   simd-off-portable:
     name: simd-off-portable
@@ -251,10 +297,12 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -288,11 +336,23 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
-        with:
-          job: simd-off-portable
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: build
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-simd-off-portable:
+    needs: simd-off-portable
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: simd-off-portable
+      status: ${{ needs.simd-off-portable.outputs.status || needs.simd-off-portable.result }}
+      area: build

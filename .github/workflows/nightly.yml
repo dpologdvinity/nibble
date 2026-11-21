@@ -16,15 +16,18 @@
 # By hand (the workflow file must be on the default branch): run everything with `gh workflow run nightly.yml`, or one
 # job with `gh workflow run nightly.yml -f jobs=fuzz` (jobs is all, accuracy, sanitizers-real-model, fuzz or
 # trend-bench). A run from another branch (`--ref`) never saves a cache and never opens an issue.
-# Each job also uploads dashboard rows, including a job_status row. That row records the job's result before its Report
-# step runs, so a Report step that fails on its own (a GitHub API error) leaves a green row on a red job; the run
-# shows that step in red. See tools/ci/dashboard_data.py.
+# Each job also uploads dashboard rows, including a job_status row, and ends by recording its result as job outputs. A
+# small `report-<job>` job per work job (report-job.yml) then opens, updates or closes the issue, so the long jobs hold
+# no `issues` or `actions: write` token; a report job that fails on its own (a GitHub API error) leaves a green row
+# on a red report job. See tools/ci/dashboard_data.py.
 # Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
 name: nightly
 
 on:
+
   schedule:
     - cron: "17 3 * * *"
+
   workflow_dispatch:
     inputs:
       jobs:
@@ -40,9 +43,10 @@ env:
   PYTHON_VERSION: "3.12"
   DEPS_DIR: ${{ github.workspace }}/.deps-cache
 
-# Each job serializes with itself (concurrency group nightly-<job>[-<target>]-<ref>, never cancelling): a scheduled and
-# a hand-started run of the same job on master would otherwise both look up "nightly: <job> failing" before either
-# creates it and open two issues. GitHub keeps at most one run pending per group, so a third run replaces a waiting one.
+# Each job serializes with itself (concurrency group nightly-<job>[-<target>]-<ref>, never cancelling), and so does its
+# report job (report-job.yml): a scheduled and a hand-started run of the same job on master would otherwise both look up
+# "nightly: <job> failing" before either creates it and open two issues. GitHub keeps at most one run pending per group,
+# so a third run replaces a waiting one.
 jobs:
   accuracy:
     name: accuracy
@@ -54,12 +58,16 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+      actions: read  # the comparison step lists and downloads earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
+      attachments_url: ${{ steps.attachments.outputs.artifact-url }}
     env:
       MIN_KEYS: "18"  # 6 models x 3 prompts; fewer means models or goldens went missing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -134,16 +142,39 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
+      # Only a failing run attaches anything (the log or the reproducer); the separate report job links the artifact.
+      - name: Upload failure attachments
+        id: attachments
+        if: ${{ always() && job.status == 'failure' }}
+        # An upload problem (e.g. a 409 on a re-run attempt) must not fail the job; the link is then empty.
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          job: accuracy
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: model
-          # Only a failing night attaches the (large) -V log; a green one must not upload anything.
-          attachments: ${{ job.status != 'success' && 'e2e*.*' || '' }}
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+          name: failure-accuracy
+          path: e2e*.*
+          if-no-files-found: warn
+          overwrite: true
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-accuracy:
+    needs: accuracy
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: accuracy
+      status: ${{ needs.accuracy.outputs.status || needs.accuracy.result }}
+      area: model
+      attachments-url: ${{ needs.accuracy.outputs.attachments_url }}
 
   sanitizers-real-model:
     name: sanitizers-real-model
@@ -155,10 +186,13 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
+      warm: ${{ steps.models.outputs.warm }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -202,14 +236,27 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
-        with:
-          job: sanitizers-real-model
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: build
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-sanitizers-real-model:
+    needs: sanitizers-real-model
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: sanitizers-real-model
+      status: ${{ needs.sanitizers-real-model.outputs.status || needs.sanitizers-real-model.result }}
+      area: build
+      warm: ${{ needs.sanitizers-real-model.outputs.warm }}
 
   fuzz:
     name: ${{ matrix.target }}
@@ -221,14 +268,19 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      fuzz_gguf_status: ${{ steps.final.outputs.fuzz_gguf_status }}
+      fuzz_load_status: ${{ steps.final.outputs.fuzz_load_status }}
+      fuzz_gguf_attachments_url: ${{ matrix.target == 'fuzz_gguf' && steps.attachments.outputs.artifact-url || '' }}
+      fuzz_load_attachments_url: ${{ matrix.target == 'fuzz_load' && steps.attachments.outputs.artifact-url || '' }}
     strategy:
       fail-fast: false  # one target crashing must not stop the other's two hours
       matrix:
         target: [fuzz_gguf, fuzz_load]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -310,17 +362,54 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      # A crash leaves its reproducer (crash-*, oom-*, timeout-*) in crashes/; report-failure uploads it and links
-      # it from the issue.
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
+      # Only a failing run attaches anything (the log or the reproducer); the separate report job links the artifact.
+      - name: Upload failure attachments
+        id: attachments
+        if: ${{ always() && job.status == 'failure' }}
+        # An upload problem (e.g. a 409 on a re-run attempt) must not fail the job; the link is then empty.
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          job: ${{ matrix.target }}
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: gguf
-          attachments: ${{ job.status != 'success' && 'crashes/*' || '' }}
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+          name: failure-${{ matrix.target }}
+          path: crashes/*
+          if-no-files-found: warn
+          overwrite: true
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          TARGET: ${{ matrix.target }}
+        run: echo "${TARGET}_status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-fuzz_gguf:
+    needs: fuzz
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: fuzz_gguf
+      status: ${{ needs.fuzz.outputs.fuzz_gguf_status || needs.fuzz.result }}
+      area: gguf
+      attachments-url: ${{ needs.fuzz.outputs.fuzz_gguf_attachments_url }}
+
+  report-fuzz_load:
+    needs: fuzz
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: fuzz_load
+      status: ${{ needs.fuzz.outputs.fuzz_load_status || needs.fuzz.result }}
+      area: gguf
+      attachments-url: ${{ needs.fuzz.outputs.fuzz_load_attachments_url }}
 
   trend-bench:
     name: trend-bench
@@ -332,10 +421,13 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      issues: write
-      actions: write  # report-failure starts claude-triage.yml; it and the accuracy comparison also list earlier runs
+    outputs:
+      status: ${{ steps.final.outputs.status }}
+      warm: ${{ steps.models.outputs.warm }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -381,11 +473,24 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           overwrite: true
-      - name: Report
-        if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/report-failure
-        with:
-          job: trend-bench
-          outcome: ${{ job.status == 'success' && 'success' || 'failure' }}
-          area: bench
-          triage: "true"  # starts claude-triage.yml for a newly opened issue (needs actions: write)
+      # Last step: the job's real result, for the small report job that needs this one.
+      - name: Record the result
+        id: final
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: echo "status=$JOB_STATUS" >> "$GITHUB_OUTPUT"
+
+  report-trend-bench:
+    needs: trend-bench
+    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+    uses: ./.github/workflows/report-job.yml
+    with:
+      job: trend-bench
+      status: ${{ needs.trend-bench.outputs.status || needs.trend-bench.result }}
+      area: bench
+      warm: ${{ needs.trend-bench.outputs.warm }}
