@@ -911,6 +911,25 @@ class RunTests(unittest.TestCase):
         self.assertIn("signal 6", named(selection, notes)["aborts"])
         self.assertIn("timed out", named(selection, notes)["hangs"])
 
+    def test_the_time_budget_stops_before_a_case_could_be_cut_short(self) -> None:
+        # The job has a hard limit, and the verdict is written after `run`: a few hanging cases must not use it all.
+        # A case starts only while a whole per-case timeout (2 s here) still fits in the budget, so no case is ever
+        # killed by the budget and mistaken for a timeout of its own.
+        selection = self.write_cases(["hangs", "fails", "passes"])
+        self.run_all("--budget", "3")
+        self.assertTrue((self.results / "0.status.json").is_file())
+        self.assertFalse((self.results / "1.status.json").exists())
+        self.assertFalse((self.results / "2.xml").exists())
+        results, notes = fix_proof.read_results(str(self.results), selection)
+        self.assertEqual(results, ["failed", "missing", "missing"])
+        self.assertIn("timed out", notes[0])
+        self.assertIn("not run", notes[1])
+        self.assertIn("not run", notes[2])
+        # Without a budget every case runs.
+        self.results = Path(self.tmp.name, "results-2")
+        self.run_all()
+        self.assertEqual(fix_proof.read_results(str(self.results), selection)[0], ["failed", "failed", "passed"])
+
     def test_run_files(self) -> None:
         self.write_cases(["passes", "aborts"])
         self.run_all()

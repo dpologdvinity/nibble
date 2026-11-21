@@ -119,11 +119,15 @@ jobs:
         continue-on-error: true
         run: |
           cmake --build base-build -j "$(nproc)" --target nibble_tests nibble_alloc_tests
+      # --budget keeps the job's 150 minutes for setup, the build and the verdict: 90 minutes for the cases, and a
+      # case starts only while its whole 30-minute timeout still fits, so a few hanging cases cannot reach the job
+      # limit before `Judge` writes a verdict. Cases left over are reported as not run.
       - name: Run the selected cases on the base
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0' && steps.build.outcome == 'success'
         run: |
           rm -rf fix-proof-results
-          python tools/ci/fix_proof.py run --cases cases.json --build-dir base-build --results-dir fix-proof-results --timeout 1800
+          python tools/ci/fix_proof.py run --cases cases.json --build-dir base-build --results-dir fix-proof-results \
+            --timeout 1800 --budget 5400
       # Whatever happened above (a build failure included), but not when the run was cancelled or the configure step
       # failed (infrastructure: the job is red with that error and no verdict is written).
       - name: Judge

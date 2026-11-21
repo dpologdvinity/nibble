@@ -55,13 +55,18 @@ usage:
     python tools/ci/fix_proof.py select --base "$BASE_SHA" --head "$HEAD_SHA" --out cases.json
         `--base` may be the base branch tip or the merge base: both diffs are `base...head`, which starts at the merge
         base. Run in a git checkout with both commits (or pass `--repo DIR`). Prints `selected=<n>`.
-    python tools/ci/fix_proof.py run --cases cases.json --build-dir build --results-dir results [--timeout 600]
+    python tools/ci/fix_proof.py run --cases cases.json --build-dir build --results-dir results [--timeout 600] \\
+        [--budget SECONDS]
         for each selected case, in order, runs `<build-dir>/<binary> <spec> -r junit -o <results-dir>/<n>.xml` (n is
         the case's index in cases.json) with `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1` and
         `ASAN_OPTIONS=detect_leaks=1` (options already set in the environment are kept), and a timeout per case
         (seconds, default 600). Next to the XML it writes `<n>.status.json`
         (`{"started", "exit_code", "signal", "timed_out", "unique"}`; `unique` is the `--list-tests` probe) and
-        `<n>.log` (the tail of the output, evidence for a failure). Always exits 0 unless the arguments are bad.
+        `<n>.log` (the tail of the output, evidence for a failure). With `--budget`, a case starts only while a whole
+        per-case timeout still fits in that many seconds since `run` began, so the job's own time limit is never
+        reached before `classify` writes a verdict, and no case is cut short by the budget (which would read as a
+        timeout of its own); the cases left over get no files and are reported as not run. Always exits 0 unless the
+        arguments are bad.
     python tools/ci/fix_proof.py classify --cases cases.json --results-dir results --base-compiled true|false \\
         [--override] --summary "$GITHUB_STEP_SUMMARY"
         reads `<n>.xml` and `<n>.status.json` of every case from --results-dir, appends a Markdown summary to
@@ -85,6 +90,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -890,7 +896,10 @@ def read_results(results_dir: str, selection: Selection) -> tuple[list[CaseResul
                 xml = xml_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             xml = None  # unreadable: like an absent file, the process status decides; the next cases still count
-        state, note = case_result(name, xml, _read_status(Path(results_dir, f"{index}.status.json")))
+        run = _read_status(Path(results_dir, f"{index}.status.json"))
+        state, note = case_result(name, xml, run)
+        if xml is None and run is None:
+            note = "not run (no JUnit and no process status: the run's time budget ran out, or the run step stopped)"
         results.append(state)
         notes.append(note)
     return results, notes
@@ -1007,7 +1016,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     results_dir = Path(args.results_dir).resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
     build_dir = Path(args.build_dir).resolve()
+    started = time.monotonic()
     for index, case in enumerate(selection.cases):
+        if args.budget is not None and args.budget - (time.monotonic() - started) < args.timeout:
+            left = len(selection.cases) - index
+            print(f"time budget of {args.budget:.0f} s used up: {left} case(s) not run", file=sys.stderr)
+            break
         status = run_case(build_dir, results_dir, index, case, args.timeout)
         print(
             f"{index}: {_name(case)}: started={status.started} exit={status.exit_code} signal={status.signal}",
@@ -1054,6 +1068,12 @@ def main(argv: Sequence[str]) -> int:
     run.add_argument("--build-dir", required=True, help="directory holding nibble_tests and nibble_alloc_tests")
     run.add_argument("--results-dir", required=True)
     run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds per case (default 600)")
+    run.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="seconds for all cases: a case starts only while a whole --timeout still fits (default: no limit)",
+    )
     run.set_defaults(func=_cmd_run)
 
     cls = sub.add_parser("classify", help="judge the JUnit results and exit non-zero when the fix is not proven")
