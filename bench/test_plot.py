@@ -11,6 +11,7 @@ import contextlib
 import io
 import os
 import re
+import time
 import unittest
 
 import plot
@@ -157,6 +158,63 @@ class LineChartTest(unittest.TestCase):
     def test_line_chart_default_ticks_unchanged(self) -> None:
         svg = plot.line_chart("t", "y", self.two_series())
         self.assertEqual(self.y_labels(svg), ["0", "40", "80", "120", "160", "200"])
+
+    def test_date_ticks_cost_does_not_depend_on_the_span(self) -> None:
+        start = time.monotonic()
+        for hi in (1e9, 1e15, 1e300):
+            ticks = plot.date_ticks(0.0, hi)
+            self.assertTrue(1 <= len(ticks) <= 9, (hi, len(ticks)))
+            self.assertTrue(all(0.0 <= t <= hi for t in ticks))
+            if hi <= 1e15:  # beyond 2^53 seconds a float cannot hold a whole midnight
+                self.assertTrue(all(t % plot.DAY == 0 for t in ticks))
+        self.assertLess(time.monotonic() - start, 2.0)
+
+    def test_date_label_out_of_range_falls_back_to_a_number(self) -> None:
+        for t in (1e13, 1e18, -1e18, 1e300):
+            self.assertTrue(plot.date_label(t))  # no ValueError or OSError
+        self.assertEqual(plot.date_label(0.0), "1970-01-01")
+
+    def test_line_chart_drops_timestamps_outside_the_calendar(self) -> None:
+        """Millisecond timestamps (year 58851) and 1e15 s are not dates: dropped, never a crash or a hang."""
+        start = time.monotonic()
+        ms = plot.line_chart("t", "y", [("a", "#000", [(T0 * 1000, 1.0), (T0 * 1000 + DAY, 2.0)])])
+        self.assertIn("no data yet", ms)
+        wide = plot.line_chart("t", "y", [("a", "#000", [(0.0, 1.0), (1e15, 2.0), (T0, 3.0)])])
+        self.assertEqual(wide.count("<circle"), 2)
+        self.assertLess(time.monotonic() - start, 2.0)
+
+    def test_line_chart_negative_data_has_nice_labelled_ticks(self) -> None:
+        pts = [(T0, -3.0), (T0 + DAY, 5.0)]
+        svg = plot.line_chart("t", "y", [("a", "#000", pts)])
+        labels = [float(v) for v in self.y_labels(svg)]
+        steps = {round(b - a, 9) for a, b in zip(labels, labels[1:], strict=False)}
+        self.assertEqual(len(steps), 1)
+        self.assertIn(steps.pop(), (1.0, 2.0, 5.0))  # a nice step
+        self.assertLessEqual(labels[0], -3.0)
+        self.assertGreaterEqual(labels[-1], 5.0)
+        self.assertNotIn("-0", self.y_labels(svg))
+        # the gridlines sit exactly where the labels say: evenly spaced and the 0 label on a gridline
+        ys = [float(v) for v in re.findall(r'<line x1="70.0" y1="([\d.]+)"', svg)]
+        self.assertEqual(len(ys), len(labels))
+        zero_y = ys[labels.index(0.0)]
+        self.assertAlmostEqual((400.0 - zero_y) / 360.0, (0.0 - labels[0]) / (labels[-1] - labels[0]), places=2)
+
+    def test_line_chart_all_negative_data(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, -10.0), (T0 + DAY, -3.0)])])
+        labels = [float(v) for v in self.y_labels(svg)]
+        self.assertLessEqual(labels[0], -10.0)
+        self.assertGreaterEqual(labels[-1], -3.0)
+
+    def test_line_chart_rejects_non_finite_y_min(self) -> None:
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaisesRegex(ValueError, "y_min"):
+                plot.line_chart("t", "y", [("a", "#000", [(T0, 1.0)])], y_min=bad)
+
+    def test_line_chart_footnote_names_the_axis_minimum_when_points_are_clamped(self) -> None:
+        low = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.5), (T0 + DAY, 1.0)])], y_min=0.99)
+        self.assertIn("Hollow = below the axis minimum (0.99)", low)
+        fine = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.995), (T0 + DAY, 1.0)])], y_min=0.99)
+        self.assertNotIn("Hollow", fine)
 
     def test_line_chart_default_axis_starts_at_zero(self) -> None:
         svg = plot.line_chart("t", "y", self.two_series())
