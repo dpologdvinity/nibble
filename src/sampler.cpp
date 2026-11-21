@@ -1,5 +1,5 @@
 // Sampler implementation: top-k selection, temperature softmax in double precision, top-p truncation and
-// inverse-CDF draw from a xoshiro256** stream.
+// inverse-CDF draw from a xoshiro256** stream (one per sampler).
 #include "sampler.h"
 
 #include <algorithm>
