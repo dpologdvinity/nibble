@@ -1,6 +1,6 @@
 #pragma once
 // Flag parsing and reply-statistics helpers shared by `nibble run` and `nibble chat`. Uses the public API
-// only.
+// only. (Demo for the fix-proof trusted-tools change: a comment-only edit, never to be merged.)
 #include <chrono>
 #include <string>
 
