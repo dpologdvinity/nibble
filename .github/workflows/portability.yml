@@ -109,7 +109,7 @@ jobs:
 
   report-arm64:
     needs: arm64
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -117,8 +117,10 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: arm64
-      # A cancel can land after the job recorded its status (in post-step cleanup), so a cancelled result wins.
-      status: ${{ needs.arm64.result == 'cancelled' && 'cancelled' || needs.arm64.outputs.status || needs.arm64.result }}
+      # In a run that was not cancelled, a recorded `cancelled` means the job hit its own timeout-minutes (a hang):
+      # reported as `timed-out`, a failure. A job superseded in its concurrency group never started and recorded
+      # nothing, so it passes its result, `cancelled`, which report-job.yml skips.
+      status: ${{ needs.arm64.outputs.status == 'cancelled' && 'timed-out' || needs.arm64.outputs.status || needs.arm64.result }}
       area: build
 
   newest-gcc:
@@ -196,7 +198,7 @@ jobs:
 
   report-newest-gcc:
     needs: newest-gcc
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -204,7 +206,7 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: newest-gcc
-      status: ${{ needs.newest-gcc.result == 'cancelled' && 'cancelled' || needs.newest-gcc.outputs.status || needs.newest-gcc.result }}
+      status: ${{ needs.newest-gcc.outputs.status == 'cancelled' && 'timed-out' || needs.newest-gcc.outputs.status || needs.newest-gcc.result }}
       area: build
 
   newest-clang:
@@ -278,7 +280,7 @@ jobs:
 
   report-newest-clang:
     needs: newest-clang
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -286,7 +288,7 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: newest-clang
-      status: ${{ needs.newest-clang.result == 'cancelled' && 'cancelled' || needs.newest-clang.outputs.status || needs.newest-clang.result }}
+      status: ${{ needs.newest-clang.outputs.status == 'cancelled' && 'timed-out' || needs.newest-clang.outputs.status || needs.newest-clang.result }}
       area: build
 
   simd-off-portable:
@@ -347,7 +349,7 @@ jobs:
 
   report-simd-off-portable:
     needs: simd-off-portable
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -355,5 +357,5 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: simd-off-portable
-      status: ${{ needs.simd-off-portable.result == 'cancelled' && 'cancelled' || needs.simd-off-portable.outputs.status || needs.simd-off-portable.result }}
+      status: ${{ needs.simd-off-portable.outputs.status == 'cancelled' && 'timed-out' || needs.simd-off-portable.outputs.status || needs.simd-off-portable.result }}
       area: build

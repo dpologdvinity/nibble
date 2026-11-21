@@ -164,7 +164,7 @@ jobs:
 
   report-accuracy:
     needs: accuracy
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -172,8 +172,10 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: accuracy
-      # A cancel can land after the job recorded its status (in post-step cleanup), so a cancelled result wins.
-      status: ${{ needs.accuracy.result == 'cancelled' && 'cancelled' || needs.accuracy.outputs.status || needs.accuracy.result }}
+      # In a run that was not cancelled, a recorded `cancelled` means the job hit its own timeout-minutes (a hang):
+      # reported as `timed-out`, a failure. A job superseded in its concurrency group never started and recorded
+      # nothing, so it passes its result, `cancelled`, which report-job.yml skips.
+      status: ${{ needs.accuracy.outputs.status == 'cancelled' && 'timed-out' || needs.accuracy.outputs.status || needs.accuracy.result }}
       area: model
       attachments-url: ${{ needs.accuracy.outputs.attachments_url }}
 
@@ -247,7 +249,7 @@ jobs:
 
   report-sanitizers-real-model:
     needs: sanitizers-real-model
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -255,7 +257,7 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: sanitizers-real-model
-      status: ${{ needs.sanitizers-real-model.result == 'cancelled' && 'cancelled' || needs.sanitizers-real-model.outputs.status || needs.sanitizers-real-model.result }}
+      status: ${{ needs.sanitizers-real-model.outputs.status == 'cancelled' && 'timed-out' || needs.sanitizers-real-model.outputs.status || needs.sanitizers-real-model.result }}
       area: build
       warm: ${{ needs.sanitizers-real-model.outputs.warm }}
 
@@ -386,7 +388,7 @@ jobs:
 
   report-fuzz_gguf:
     needs: fuzz
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -394,15 +396,15 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: fuzz_gguf
-      # No cancelled override here: the matrix's result covers both targets, and the other target being cancelled
-      # must not hide this one's failure.
-      status: ${{ needs.fuzz.outputs.fuzz_gguf_status || needs.fuzz.result }}
+      # As for accuracy, but on this target's own status: the matrix's result covers both targets. The fuzzer
+      # stops itself after 2 hours (-max_total_time) inside a 150-minute limit, so a timeout here is a hang.
+      status: ${{ needs.fuzz.outputs.fuzz_gguf_status == 'cancelled' && 'timed-out' || needs.fuzz.outputs.fuzz_gguf_status || needs.fuzz.result }}
       area: gguf
       attachments-url: ${{ needs.fuzz.outputs.fuzz_gguf_attachments_url }}
 
   report-fuzz_load:
     needs: fuzz
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -410,7 +412,7 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: fuzz_load
-      status: ${{ needs.fuzz.outputs.fuzz_load_status || needs.fuzz.result }}
+      status: ${{ needs.fuzz.outputs.fuzz_load_status == 'cancelled' && 'timed-out' || needs.fuzz.outputs.fuzz_load_status || needs.fuzz.result }}
       area: gguf
       attachments-url: ${{ needs.fuzz.outputs.fuzz_load_attachments_url }}
 
@@ -486,7 +488,7 @@ jobs:
 
   report-trend-bench:
     needs: trend-bench
-    if: ${{ always() }}  # the called workflow skips cancelled, skipped and cold-cache runs, and any ref but master
+    if: ${{ !cancelled() }}  # a cancelled run reports nothing; report-job.yml skips the rest (see its header)
     permissions:
       contents: read
       issues: write
@@ -494,6 +496,6 @@ jobs:
     uses: ./.github/workflows/report-job.yml
     with:
       job: trend-bench
-      status: ${{ needs.trend-bench.result == 'cancelled' && 'cancelled' || needs.trend-bench.outputs.status || needs.trend-bench.result }}
+      status: ${{ needs.trend-bench.outputs.status == 'cancelled' && 'timed-out' || needs.trend-bench.outputs.status || needs.trend-bench.result }}
       area: bench
       warm: ${{ needs.trend-bench.outputs.warm }}

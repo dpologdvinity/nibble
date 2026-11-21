@@ -2,8 +2,10 @@
 # `actions: write` to start claude-triage.yml), and the long build and test jobs must not hold those scopes while they
 # run third-party code (FetchContent, apt, llvm.sh). So each work job only records its result as job outputs, and a
 # small job that `needs:` it calls this workflow with the real result.
-# Skips, with the job shown as skipped, when the result is `cancelled` or `skipped`, when `warm` is `false` (the job
-# skipped its work on a cold model cache) and on any ref but master (a hand run from another branch opens no issue).
+# Skips, with the job shown as skipped, when the result is `cancelled` (a job superseded in its concurrency group that
+# never started) or `skipped`, when `warm` is `false` (the job skipped its work on a cold model cache) and on any ref
+# but master (a hand run from another branch opens no issue). A cancelled run never calls it: the callers use
+# `!cancelled()`. `timed-out` (the job hit its own timeout-minutes) is reported as a failure, with a warning saying so.
 # By hand: not runnable (workflow_call only); the nightly and portability workflows call it.
 # Logic: .github/actions/report-failure and tools/ci/report_failure.py.
 name: report-job
@@ -16,7 +18,7 @@ on:
         type: string
         required: true
       status:
-        description: The work job's result - success, failure, cancelled or skipped.
+        description: The work job's result - success, failure, timed-out (reported as a failure), cancelled or skipped.
         type: string
         required: true
       warm:
@@ -61,6 +63,13 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: Say that the job hit its time limit
+        if: inputs.status == 'timed-out'
+        env:
+          JOB: ${{ inputs.job }}
+        run: |
+          echo "::warning title=report ${JOB}::${JOB} hit its timeout-minutes; reported as a failure"
+          echo "${JOB} hit its timeout-minutes (a hang, not a test failure); reported as a failure." >> "$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/report-failure
         with:
           job: ${{ inputs.job }}
