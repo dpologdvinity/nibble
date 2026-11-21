@@ -263,7 +263,7 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 | weekly | [portability](.github/workflows/portability.yml) | The suite on 64-bit ARM (scalar kernels), the newest GCC and Clang with warnings as errors, and the build with SIMD off. |
 | weekly, and pushes to `master` | [scorecard](.github/workflows/scorecard.yml) | OpenSSF Scorecard grades the supply chain: pinned actions, token permissions, branch protection, dependency updates. |
 | weekly | [link-check](.github/workflows/link-check.yml) | Links in the README and docs; one open issue lists the broken ones. |
-| after nightly, portability and ci on `master` | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
+| after nightly, portability and ci on `master`, and daily | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
 | a failing scheduled job | [claude-triage](.github/workflows/claude-triage.yml) | Claude diagnoses the `ci-failure` issue and, with a reproducer, opens an `agent/` PR (below). |
 | `@claude` from the owner or a collaborator | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or a PR in this repository (fork PRs are skipped); it answers or opens an `agent` PR. |
 | a `v*` tag | [release](.github/workflows/release.yml) | The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
@@ -291,8 +291,9 @@ flowchart LR
   Dependabot or the agent opens.
 
 The [dashboard](https://dpologdvinity.github.io/nibble/) charts the scheduled runs over time: speed, accuracy, fuzzing
-hours, binary size and coverage, and the latest status of every scheduled job. CI-runner speed numbers are trends; the
-benchmark tables below come from an idle dedicated machine.
+hours, binary size and coverage, and the latest status of every scheduled job. A job that hits its time limit counts as
+failing, and the nightly badge reads "stale" (orange) when no nightly result has arrived for 36 hours. CI-runner speed
+numbers are trends; the benchmark tables below come from an idle dedicated machine.
 
 **Verifying a release.** From the next release on, the tarballs and the container image carry build-provenance and
 SBOM attestations signed by the release workflow. To check that a download was built from this repository by that

@@ -5,7 +5,8 @@
 # GitHub Pages (https://dpologdvinity.github.io/nibble/), plus badge.json for the README's nightly badge. See
 # tools/ci/dashboard_data.py (row schema, merge) and tools/ci/dashboard_render.py (the site).
 # By hand (the workflow file must be on the default branch): `gh workflow run dashboard.yml` sweeps the last week of runs
-# (below) and re-renders the site.
+# (below) and re-renders the site. A daily scheduled run does the same, so the page and the badge turn "stale" (see
+# tools/ci/dashboard_render.py) when no nightly result has arrived for 36 hours, even if no other workflow runs.
 # Trust: a workflow_run workflow has a write token, so it never checks out or runs code from the run that triggered it.
 # It runs master's tools and treats the downloaded artifacts as data: `dashboard_data.py merge` validates every row (a
 # file with an invalid row is skipped whole and named in the job summary, so one bad artifact cannot stall the
@@ -24,6 +25,8 @@ on:
     workflows: [nightly, portability, ci]
     types: [completed]
     branches: [master]
+  schedule:
+    - cron: "47 9 * * *"  # after the nightly (03:17, at most about 4 h), so a missed night shows up the same day
   workflow_dispatch:
 
 concurrency:
@@ -39,9 +42,9 @@ jobs:
   rows:
     name: collect rows and render
     # Not for pull requests, forks or anything started by another event: only the rows of master's own scheduled,
-    # pushed or hand-started runs are trusted.
+    # pushed or hand-started runs are trusted. Its own schedule and a dispatch only sweep (the default branch's runs).
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
       (github.event.workflow_run.head_repository.full_name == github.repository &&
        contains(fromJSON('["schedule", "push", "workflow_dispatch"]'), github.event.workflow_run.event))
     runs-on: ubuntu-24.04

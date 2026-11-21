@@ -182,6 +182,72 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(badge["message"], "no data")
         self.assertEqual(badge["color"], "lightgrey")
 
+    def render_at(self, rows: list[Row], now: str) -> tuple[dict[str, object], str]:
+        """Render `rows` as if the clock read `now`; return the badge object and the page."""
+        out = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="dash-test-"))) / "site"
+        when = dashboard_render.parse_now(now)
+        dashboard_render.render_site(jsonl(rows), str(out), REPO, now=when)
+        badge = json.loads((out / "badge.json").read_text(encoding="utf-8"))
+        return badge, (out / "index.html").read_text(encoding="utf-8")
+
+    def test_badge_is_stale_when_the_newest_nightly_status_is_over_36_hours_old(self) -> None:
+        # Rows stop arriving (schedules disabled, the dashboard run broken, an artifact skipped): the last "passing"
+        # must not stand forever.
+        rows = [status("accuracy", True, "2026-11-21T03:17:00Z"), status("fuzz_gguf", True, "2026-11-21T03:17:00Z")]
+        badge, _ = self.render_at(rows, "2026-11-22T15:17:00Z")  # exactly 36 h: still current
+        self.assertEqual(badge["message"], "passing")
+        badge, html = self.render_at(rows, "2026-11-22T15:18:00Z")
+        self.assertEqual(badge, {"schemaVersion": 1, "label": "nightly", "message": "stale", "color": "orange"})
+        self.assertIn("stale", html)
+        self.assertIn("2026-11-21 03:17 UTC", html)
+
+    def test_a_stale_failure_stays_failing(self) -> None:
+        rows = [status("accuracy", False, "2026-11-01T03:17:00Z")]
+        badge, _ = self.render_at(rows, "2026-11-21T03:17:00Z")
+        self.assertEqual((badge["message"], badge["color"]), ("failing", "red"))
+
+    def test_staleness_counts_only_nightly_statuses(self) -> None:
+        rows = [
+            status("accuracy", True, "2026-11-19T03:17:00Z"),
+            status("arm64", True, "2026-11-21T04:00:00Z", workflow="portability"),
+            row("line_coverage", "src+cli", 85.0, date="2026-11-21T05:00:00Z", source="ci"),
+        ]
+        badge, _ = self.render_at(rows, "2026-11-21T06:00:00Z")
+        self.assertEqual(badge["message"], "stale")
+
+    def test_status_table_marks_old_nightly_rows_stale_but_not_weekly_ones(self) -> None:
+        rows = [
+            status("accuracy", True, "2026-11-21T03:17:00Z"),
+            status("trend-bench", True, "2026-11-18T03:17:00Z"),  # a job that stopped reporting
+            status("arm64", True, "2026-11-16T04:00:00Z", workflow="portability"),  # weekly: 5 days is normal
+        ]
+        _, html = self.render_at(rows, "2026-11-21T06:00:00Z")
+        self.assertRegex(html, r'<th scope="row">trend-bench</th>\s*<td>[^<]*stale')
+        self.assertRegex(html, r'<th scope="row">accuracy</th>\s*<td>✅ passing</td>')
+        self.assertRegex(html, r'<th scope="row">arm64</th>\s*<td>✅ passing</td>')
+
+    def test_fresh_page_has_no_stale_notice(self) -> None:
+        _, html = self.render_at([status("accuracy", True, "2026-11-21T03:17:00Z")], "2026-11-21T06:00:00Z")
+        self.assertNotIn("stale", html)
+
+    def test_main_takes_the_clock_from_now(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "rows.jsonl"
+            src.write_text(jsonl([status("accuracy", True, "2026-11-01T03:17:00Z")]), encoding="utf-8")
+            out = Path(tmp) / "site"
+            with contextlib.redirect_stdout(io.StringIO()):
+                args = [str(src), "--out", str(out), "--repo", REPO, "--now", "2026-11-21T00:00:00Z"]
+                self.assertEqual(dashboard_render.main(args, env={}), 0)
+            self.assertEqual(json.loads((out / "badge.json").read_text(encoding="utf-8"))["message"], "stale")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(dashboard_render.main([str(src), "--out", str(out), "--repo", REPO], env={}), 0)
+            # Without --now the real clock counts, and 2026-11-01 is long past.
+            self.assertEqual(json.loads((out / "badge.json").read_text(encoding="utf-8"))["message"], "stale")
+
+    def test_bad_now_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            dashboard_render.parse_now("yesterday")
+
     def test_cumulative_fuzz_hours(self) -> None:
         rows = [
             row("fuzz_seconds", "fuzz_gguf", 7200.0, "2026-11-21T03:17:00Z", run_id=2),
