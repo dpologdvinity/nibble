@@ -90,8 +90,9 @@ Findings from the PR #49 review (CodeRabbit, each verified against the plan befo
 - **R19. Deleting a line selects its case.** A pure-deletion hunk (`git diff -U0 --no-ext-diff --no-color`,
   `@@ -a,b +c,0 @@`) is mapped to head line `c`, the line just before the gap, and so to the case whose span contains `c`.
   A deletion-only edit to a test therefore still selects that test, and one at a case boundary selects the case it
-  left, not the next one. A deleted `TEST_CASE` header is "deleted: <name>" under `unresolved` and selects nothing
-  (Task 4.4).
+  left, not the next one. A pure-deletion hunk whose removed lines include a `TEST_CASE` header is a deleted case:
+  `changed_lines` contributes no line for it, so it selects neither that case nor its neighbours, and `select` lists
+  "deleted: <name>" under `unresolved` (Task 4.4).
 
 ## Global Constraints
 
@@ -496,8 +497,8 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str   # JSONL text; drops d
 **Interfaces:**
 - Consumes: `setup-models` (3.3), `report-failure` (3.2), `cosine.py` (3.1) and `dashboard_data.py` (3.4).
 - Every job's last steps:
-  - `dashboard_data.py status --workflow nightly --job <job> --outcome "$JOB_STATUS" --out rows.jsonl`, with `JOB_STATUS: ${{ job.status }}` passed through `env:`, then upload the artifact `dashboard-rows-<job>` (retention 7 days, `if-no-files-found: ignore`). Both steps run under `if: always() && job.status != 'cancelled'` (R14).
-  - `report-failure` with `outcome: ${{ job.status == 'success' && 'success' || 'failure' }}` under `if: always() && job.status != 'cancelled' && github.ref == 'refs/heads/master'`: a cancelled job neither reports nor closes. A job that skipped its work on a cold cache (`steps.<models>.outputs.warm != 'true'`) skips both this step and the status step, so it records no row: only a run that executed may close an issue (R15).
+  - `dashboard_data.py status --workflow nightly --job <job> --outcome "$JOB_STATUS" --out rows.jsonl`, with `JOB_STATUS: ${{ job.status }}` passed through `env:`, then upload the artifact `dashboard-rows-<job>` (retention 7 days, `if-no-files-found: ignore`). Both steps run under `if: always() && job.status != 'cancelled' && <warm>` (R14), where `<warm>` is `steps.models.outputs.warm != 'false'` in the jobs that call `setup-models` with `require-warm: true` (`sanitizers-real-model`, `trend-bench`; give the step the id `models`) and is left out in `accuracy` and `fuzz`, which never skip.
+  - `report-failure` with `outcome: ${{ job.status == 'success' && 'success' || 'failure' }}` under the same `if:` plus `&& github.ref == 'refs/heads/master'`: a cancelled job neither reports nor closes. A job that skipped its work on a cold cache (`warm == 'false'`) skips both this step and the status step through that `<warm>` clause, so it records no row: only a run that executed may close an issue (R15).
   - Permissions: `contents: read`, `issues: write`, `actions: write`.
 
 Jobs:
@@ -701,7 +702,7 @@ class Case(NamedTuple): file: str; name: str | None; start: int; end: int; binar
 def is_fix(title: str, subjects: Sequence[str]) -> bool
 def touches_code(paths: Sequence[str]) -> bool
 def test_cases(path: str, source: str) -> list[Case]      # name None when the first TEST_CASE argument is not one plain string literal; end = line before the next TEST_CASE or EOF
-def changed_lines(diff: str) -> dict[str, set[int]]        # tests/*.cpp only, from `git diff -U0 --no-ext-diff --no-color`: head-side numbers of added lines, plus `c` for each pure-deletion hunk `@@ -a,b +c,0 @@` (c = the line before the gap, 0 when at the top of the file) (R19)
+def changed_lines(diff: str) -> dict[str, set[int]]        # tests/*.cpp only, from `git diff -U0 --no-ext-diff --no-color`: head-side numbers of added lines, plus `c` for each pure-deletion hunk `@@ -a,b +c,0 @@` (c = the line before the gap, 0 when at the top of the file), except that a hunk whose removed lines include a `TEST_CASE` header contributes nothing (R19)
 def deleted_case_names(diff: str) -> dict[str, list[str]]  # per file, the names on `TEST_CASE` header lines removed by pure-deletion hunks ("<macro-built>" when not one plain string literal)
 class Selection(NamedTuple): cases: list[Case]; unresolved: list[str]
 def select(diff: str, head_sources: Mapping[str, str]) -> Selection  # a line selects the case whose span contains it; lines outside every span select nothing; each deleted header adds "deleted: <name>" to unresolved
@@ -728,6 +729,7 @@ def main(argv: Sequence[str]) -> int  # select --base B --head H (runs git diff,
   - `test_select_added_and_modified_cases`: a unified-diff fixture adding a case and editing inside another.
   - `test_select_deletion_only_edit`: a diff that only deletes lines inside a case selects that case (R19).
   - `test_select_deletion_at_case_boundary`: deleting the last lines of case A, directly before case B's `TEST_CASE` line, selects A and not B; deleting the lines right after B's `TEST_CASE` line selects B; deleting a whole case selects nothing and lists `deleted: <name>` under `unresolved`.
+  - `test_select_whole_case_deletion`: a fixture with cases A, B and C where the diff deletes all of B selects no cases (not A, not C) and gives `unresolved == ["deleted: B"]`.
   - `test_select_macro_case_is_unresolved`
   - `test_catch_spec_escapes`: `catch_spec('a, b [x] *') == r'a\, b \[x\] \*'`
   - `test_parse_junit_states`: fixtures for passed, failed, skipped (a Catch2 SKIP gives `<skipped/>`) and missing.
