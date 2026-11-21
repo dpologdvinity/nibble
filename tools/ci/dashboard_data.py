@@ -127,8 +127,14 @@ def validate(row: Mapping[str, object]) -> Row:
         if not isinstance(text, str) or not 1 <= len(text) <= MAX_TEXT:
             raise ValueError(f"field '{field}' must be a string of 1 to {MAX_TEXT} characters, got {text!r:.60}")
     value = row["value"]
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
-        raise ValueError(f"field 'value' must be a finite number, got {value!r}")
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"field 'value' must be a finite number, got {value!r:.60}")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:  # an integer too big for a float
+        finite = False
+    if not finite:
+        raise ValueError(f"field 'value' must be a finite number, got {value!r:.60}")
     run_id = row["run_id"]
     if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 0:
         raise ValueError(f"field 'run_id' must be a non-negative integer, got {run_id!r}")
@@ -423,6 +429,8 @@ def _read_rows(path: Path) -> list[Row]:
             if not isinstance(obj, dict):
                 raise ValueError("not a JSON object")
             rows.append(validate(obj))
+        except RecursionError as e:  # JSON nested deeper than the interpreter allows
+            raise ValueError(f"{path.name} line {number}: JSON is nested too deeply") from e
         except ValueError as e:
             raise ValueError(f"{path.name} line {number}: {e}") from e
     return rows

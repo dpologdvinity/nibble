@@ -34,8 +34,9 @@ class FakeGitHub:
     ((workflow, branch) -> run ids, newest first), `job_conclusions` ((run id, job name) -> conclusion) and
     `recent_runs` ((workflow, branch) -> RunInfo, newest first; list_recent_runs filters by `created_at`),
     `artifacts` ((run id, artifact name) -> {file name: text}) and `branch_tips` (branch -> head sha).
-    `vanished` ((run id, name) pairs that are listed but cannot
-    be downloaded). `fail_listing` and `fail_tip` make the run listings and branch_tip raise GhError.
+    `vanished` ((run id, name) pairs that are listed but cannot be downloaded) and `failing_artifact_runs` (run ids
+    whose artifact listing raises GhError). `fail_listing` and `fail_tip` make the run listings and branch_tip raise
+    GhError.
     """
 
     def __init__(self) -> None:
@@ -49,6 +50,7 @@ class FakeGitHub:
         self.artifacts: dict[tuple[int, str], dict[str, str]] = {}
         self.branch_tips: dict[str, str] = {}
         self.vanished: set[tuple[int, str]] = set()
+        self.failing_artifact_runs: set[int] = set()
         self.fail_listing = False
         self.fail_tip = False
         self._next_number = 1
@@ -99,6 +101,8 @@ class FakeGitHub:
         return [r for r in self.recent_runs.get((workflow_file, branch), []) if r.created_at[:10] >= since]
 
     def list_artifact_names(self, run_id: int) -> list[str]:
+        if run_id in self.failing_artifact_runs:
+            raise GhError(f"simulated artifact listing failure for run {run_id}")
         return [name for (run, name) in self.artifacts if run == run_id]
 
     def job_conclusion(self, run_id: int, job_name: str) -> str | None:

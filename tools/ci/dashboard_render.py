@@ -76,6 +76,8 @@ def parse_rows(text: str) -> tuple[list[Row], list[str]]:
             if not isinstance(obj, dict):
                 raise ValueError("not a JSON object")
             rows.append(validate(obj))
+        except RecursionError:  # JSON nested deeper than the interpreter allows
+            problems.append(f"line {number}: JSON is nested too deeply")
         except ValueError as e:
             problems.append(f"line {number}: {e}"[:200])
     return rows, problems

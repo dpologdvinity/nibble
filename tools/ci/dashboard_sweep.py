@@ -13,7 +13,7 @@ DEST/<run id>-<artifact name>/ (the artifact holds `rows.jsonl`); the caller mer
 
 usage: dashboard_sweep.py --repo OWNER/NAME --dest DIR [--branch master] [--days 7]   (GH_TOKEN set for `gh`)
 All GitHub access goes through the `GitHub` protocol of gh.py. Exit status is 0 on success (problems with single
-artifacts are printed as `::warning` lines) and 1 when GitHub could not be asked at all.
+runs or artifacts are printed as `::warning` lines) and 1 when GitHub could not list the runs at all.
 """
 
 from __future__ import annotations
@@ -53,7 +53,8 @@ def sweep(
     workflows: Sequence[str] = WORKFLOW_FILES,
 ) -> SweepReport:
     """Download the rows artifacts of the trusted completed runs of `workflows` on `branch` created on or after the
-    date `since` (`YYYY-MM-DD`) into `dest`. A listing failure raises GhError."""
+    date `since` (`YYYY-MM-DD`) into `dest`. Failing to list the runs raises GhError; failing to list or download one
+    run's artifacts is a problem in the report and the sweep goes on."""
     report = SweepReport()
     for workflow in workflows:
         for info in gh.list_recent_runs(workflow, branch, since):
@@ -61,13 +62,23 @@ def sweep(
                 report.skipped += 1
                 continue
             report.runs += 1
-            for name in gh.list_artifact_names(info.id):
+            try:
+                names = gh.list_artifact_names(info.id)
+            except GhError as e:  # say, the run was deleted after it was listed: the others are still worth sweeping
+                report.problems.append(f"run {info.id}: artifacts could not be listed ({e})")
+                continue
+            for name in names:
                 if not name.startswith("dashboard-rows-"):
                     continue
                 if _ARTIFACT.fullmatch(name) is None:
                     report.problems.append(f"run {info.id}: artifact name {name!r} is not an allowed rows artifact")
                     continue
-                if gh.download_artifact(info.id, name, dest / f"{info.id}-{name}"):
+                try:
+                    downloaded = gh.download_artifact(info.id, name, dest / f"{info.id}-{name}")
+                except GhError as e:
+                    report.problems.append(f"run {info.id}: artifact {name} could not be downloaded ({e})")
+                    continue
+                if downloaded:
                     report.artifacts += 1
                 else:
                     report.problems.append(f"run {info.id}: artifact {name} could not be downloaded")

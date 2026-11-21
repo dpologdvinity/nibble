@@ -100,6 +100,17 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(len(report.problems), 1)
         self.assertIn("dashboard-rows-a", report.problems[0])
 
+    def test_a_run_whose_artifacts_cannot_be_listed_is_reported_and_the_rest_still_sweep(self) -> None:
+        self.fake.recent_runs[("nightly.yml", "master")] = [run(3), run(2), run(1)]
+        for run_id in (1, 3):
+            self.fake.artifacts[(run_id, "dashboard-rows-a")] = {"rows.jsonl": "x\n"}
+        self.fake.failing_artifact_runs.add(2)  # say, a run that was deleted after it was listed
+        report = self.sweep()
+        self.assertEqual(self.downloaded(), ["1-dashboard-rows-a/rows.jsonl", "3-dashboard-rows-a/rows.jsonl"])
+        self.assertEqual((report.runs, report.artifacts), (3, 2))
+        self.assertEqual(len(report.problems), 1)
+        self.assertIn("run 2", report.problems[0])
+
     def test_a_listing_failure_propagates(self) -> None:
         self.fake.fail_listing = True
         with self.assertRaises(GhError):

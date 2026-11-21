@@ -317,6 +317,11 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("tx", svg)
         self.assertEqual(len(dashboard_render.speed_series(rows, "pp")), 1)
 
+    def test_parse_rows_skips_json_nested_too_deeply_and_huge_numbers(self) -> None:
+        huge = json.dumps(row("line_coverage", "src+cli", 1.0)).replace('"value": 1.0', '"value": ' + "9" * 400)
+        rows, problems = dashboard_render.parse_rows("[" * 100000 + "\n" + huge + "\n")
+        self.assertEqual((rows, len(problems)), ([], 2))
+
     def test_main_parses_once_and_reports_skipped_rows_in_the_job_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "rows.jsonl"

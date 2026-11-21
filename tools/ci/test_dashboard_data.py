@@ -468,6 +468,23 @@ class CliTests(unittest.TestCase):
             self.assertEqual((d / "o.jsonl").read_text(), "")
             self.assertEqual(err.count("::warning"), 3)
 
+    def test_merge_cli_skip_bad_skips_files_that_overflow_or_nest_too_deeply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "good.jsonl").write_text(dashboard_data.merge("", [good_row(key="good")]))
+            huge = json.dumps(good_row()).replace('"value": 1234.0', '"value": ' + "9" * 400)
+            self.assertIn("9" * 400, huge)
+            (d / "huge.jsonl").write_text(huge + "\n")  # an integer too big for a float: isfinite() overflows
+            (d / "deep.jsonl").write_text("[" * 100000 + "\n")  # JSON nested deeper than Python's recursion limit
+            code, err = self.merge_with_skip_bad(d, "good.jsonl", "huge.jsonl", "deep.jsonl")
+            self.assertEqual(code, 0)
+            self.assertEqual([json.loads(x)["key"] for x in (d / "o.jsonl").read_text().splitlines()], ["good"])
+            self.assertEqual(err.count("::warning"), 2)
+
+    def test_validate_rejects_a_huge_integer_value_as_a_value_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "value"):
+            dashboard_data.validate(good_row(value=10**400))
+
     def test_merge_cli_skip_bad_still_fails_on_a_broken_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
