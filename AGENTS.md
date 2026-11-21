@@ -101,7 +101,8 @@ not a sandbox, so read what Claude pushes.
   change requests).
 - `automerge.yml` enables auto-merge only for the owner's own pull requests that carry no `agent` label and no commit by
   Claude, and for Dependabot's minor and patch updates. It switches auto-merge off when `agent` is added or Claude
-  pushes to a pull request that is not Claude's own. Pull requests that Claude opens are not auto-merged.
+  pushes to a pull request that is not Claude's own; such a push also adds `agent`, so reopening does not re-enable it.
+  Pull requests that Claude opens are not auto-merged.
 - `agent-approval.yml` (logic in `tools/ci/agent_gate.py`) fails for a pull request authored by `claude[bot]` until the
   owner, a member or a collaborator approves its current head commit. It only blocks a merge once the owner makes it a
   required check.
