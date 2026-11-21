@@ -617,8 +617,9 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(fix_proof.classify(tricky, True, by_name(tricky, {})), "not-runnable")
 
     def test_a_case_the_budget_left_unrun_is_never_a_green_verdict(self) -> None:
-        # Skipped cases are "not-runnable" (green), but a case the time budget never started could have passed and
-        # made it "does-not-reproduce": the verdict is "incomplete" and red, and the label does not excuse it.
+        # Skipped cases are "not-runnable" (red, but the label excuses it), while a case the time budget never started
+        # could have passed and made it "does-not-reproduce": the verdict is "incomplete", and the label does not
+        # excuse it.
         two = selection_of("a", "b")
         cases: list[list[CaseResult]] = [
             ["skipped", "not-run"],
@@ -640,10 +641,19 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(fix_proof.exit_code("no-test", False), 1)
         self.assertEqual(fix_proof.exit_code("no-test", True), 0)
         self.assertEqual(fix_proof.exit_code("does-not-reproduce", False), 1)
-        self.assertEqual(fix_proof.exit_code("does-not-reproduce", True), 1)  # the label excuses a missing test only
-        for outcome in ("proven", "proven-base-does-not-compile", "not-runnable"):
+        # The label excuses a test that is missing or cannot run here, never one that ran and passed.
+        self.assertEqual(fix_proof.exit_code("does-not-reproduce", True), 1)
+        for outcome in ("proven", "proven-base-does-not-compile"):
             with self.subTest(outcome):
                 self.assertEqual(fix_proof.exit_code(outcome, False), 0)
+
+    def test_not_runnable_is_red_unless_waived(self) -> None:
+        # Nothing was proven (an e2e case that skips without models, a [!mayfail] case, an ambiguous spec), so a
+        # green check named fix-proof would read as "proven". The owner's no-test-needed label waives it.
+        self.assertEqual(fix_proof.exit_code("not-runnable", False), 1)
+        self.assertEqual(fix_proof.exit_code("not-runnable", True), 0)
+        text = fix_proof.summary("not-runnable", selection_of("e2e"), ["skipped"])
+        self.assertIn("no-test-needed", text)
 
     def test_summary_lists_cases_and_unresolved(self) -> None:
         sel = selection_of(
@@ -1246,9 +1256,12 @@ class CommandLineTests(unittest.TestCase):
         }
         self.assertEqual(self.classify(results)[:2], (1, "outcome=does-not-reproduce"))
 
-    def test_classify_no_results_is_not_runnable_and_exit_zero(self) -> None:
-        # Both cases ran but left no usable result: not-runnable. (A case with no file at all was never started.)
-        self.assertEqual(self.classify({"0.xml": "not xml", "1.xml": "not xml"})[:2], (0, "outcome=not-runnable"))
+    def test_classify_no_results_is_not_runnable_and_red_unless_waived(self) -> None:
+        # Both cases ran but left no usable result: not-runnable, which proves nothing and so is red; the
+        # no-test-needed label (--override) waives it. (A case with no file at all was never started.)
+        unusable = {"0.xml": "not xml", "1.xml": "not xml"}
+        self.assertEqual(self.classify(unusable)[:2], (1, "outcome=not-runnable"))
+        self.assertEqual(self.classify(unusable, "--override")[:2], (0, "outcome=not-runnable"))
 
     def test_classify_a_case_with_no_file_at_all_is_incomplete_and_red(self) -> None:
         self.assertEqual(self.classify({"0.xml": "not xml"})[:2], (1, "outcome=incomplete"))

@@ -5,13 +5,14 @@
 #      landed on the base branch later do not count) with the PR head's whole tests/ tree put over it, in Debug with
 #      ASan and UBSan, and
 #   3. runs each selected case on that build, one process per case (`fix_proof.py run`).
-# The check is green when at least one case FAILS there ("proven": the test catches the bug), and red when none does
-# ("does not reproduce"), when the PR has no test at all ("no test"), or when no case failed but the time budget left
-# a case unrun ("incomplete"). A base that does not compile with the new tests counts as
-# proven (the tests use something the fix adds). The `no-test-needed` label turns a "no test" result green (reason in
-# the PR); the other red results stay red.
+# The check is green only when the fix is proven: at least one case FAILS there ("proven": the test catches the bug), or
+# the base does not compile with the new tests (they use something the fix adds). It is red whenever nothing was
+# proven: every case passes ("does not reproduce"), the PR has no test at all ("no test"), every selected case skipped
+# or left no result ("not runnable"), or no case failed but the time budget left a case unrun ("incomplete").
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
-# without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
+# without models, are "not runnable" (this workflow provisions no models). The owner's `no-test-needed` label turns
+# "no test" and "not runnable" green (reason in the PR); "does not reproduce" and "incomplete" stay red. The verdict is
+# in the job summary.
 # Where things come from: the workspace is the MERGE REF (GitHub's preview of the PR merged into its base, the default
 # `actions/checkout` ref for `pull_request`), so tools/ci is the base branch's current copy with the PR's own changes
 # to it merged in. The PR's own head would break every branch cut before a tools/ci change (PR #61 predated
@@ -139,7 +140,7 @@ jobs:
       # --budget keeps the job's 150 minutes for setup, the build and the verdict: 90 minutes for the cases, and a
       # case starts only while its whole 30-minute timeout still fits, so a few hanging cases cannot reach the job
       # limit before `Judge` writes a verdict. Cases left over are reported as not run, and unless another case
-      # failed the verdict is "incomplete" (red), never a green "not runnable".
+      # failed the verdict is "incomplete" (red), never "not runnable" (which the label can waive).
       - name: Run the selected cases on the base
         if: steps.gate.outputs.apply == 'true' && steps.select.outputs.selected != '0' && steps.build.outcome == 'success'
         run: |

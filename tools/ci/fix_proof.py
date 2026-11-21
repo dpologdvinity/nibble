@@ -27,7 +27,8 @@ What can never be proven, by design (the "unresolved" and "not-runnable" paths):
 * A change outside every TEST_CASE body (a helper, the `E2E_MODEL` invocations, code between or after cases) selects
   nothing and is listed by line, even when a case uses the helper: the check cannot tell which cases a helper
   affects, and running the neighbouring case would prove nothing about it.
-* A case that SKIPs on the base (the end-to-end cases without models), or whose run left no result, is not-runnable.
+* A case that SKIPs on the base (the end-to-end cases without models), or whose run left no result, is not-runnable
+  (red, like no test, and waived by the same label).
   A case `run` never started (the time budget ran out) is not-run, and with no failure the verdict is incomplete
   (red), never not-runnable: that case could have passed and made the fix "does not reproduce".
 * Edits to tests/*.cpp files that neither nibble_tests nor nibble_alloc_tests builds (simd_helpers_test.cpp and so on)
@@ -74,11 +75,11 @@ usage:
     python tools/ci/fix_proof.py classify --cases cases.json --results-dir results --base-compiled true|false \\
         [--override] --summary "$GITHUB_STEP_SUMMARY"
         reads `<n>.xml` and `<n>.status.json` of every case from --results-dir, appends a Markdown summary to
-        --summary, prints `outcome=<outcome>` and exits 1 for no-test (unless --override, which the workflow sets for
-        the `no-test-needed` label), does-not-reproduce and incomplete (a case `run` never started, no case failed),
-        else 0. Other errors exit 2. Per case: failed JUnit is
-        failed; passed JUnit with a failed process is failed; no JUnit element with exit 0 is passed (a case with no
-        assertions); skipped is skipped; anything not attributable is missing (see `case_result`).
+        --summary, prints `outcome=<outcome>` and exits 1 for no-test and not-runnable (unless --override, which the
+        workflow sets for the `no-test-needed` label), does-not-reproduce and incomplete (a case `run` never started,
+        no case failed), else 0: a green check always means proven or waived. Other errors exit 2. Per case: failed
+        JUnit is failed; passed JUnit with a failed process is failed; no JUnit element with exit 0 is passed (a case
+        with no assertions); skipped is skipped; anything not attributable is missing (see `case_result`).
     python tools/ci/fix_proof.py specs --cases cases.json
         one line per selected case, `<index>\\t<binary>\\t<catch2 test spec>`, for running cases by hand.
 
@@ -726,11 +727,19 @@ def classify(selection: Selection, base_compiled: bool, results: Sequence[CaseRe
     return "does-not-reproduce"
 
 
+# Outcomes where nothing was proven because there was nothing to run; the owner's `no-test-needed` label waives them.
+WAIVABLE: frozenset[Outcome] = frozenset({"no-test", "not-runnable"})
+
+
 def exit_code(outcome: Outcome, override_label: bool) -> int:
-    """1 for no-test (unless the `no-test-needed` label is set), does-not-reproduce and incomplete, else 0."""
-    if outcome == "no-test":
-        return 0 if override_label else 1
-    return 1 if outcome in ("does-not-reproduce", "incomplete") else 0
+    """0 only when the fix is proven, or when nothing could be run (no-test, not-runnable) and the `no-test-needed`
+    label waives that; 1 otherwise (does-not-reproduce and incomplete are never waived: a test ran and passed, or
+    might have)."""
+    if outcome in ("proven", "proven-base-does-not-compile"):
+        return 0
+    if outcome in WAIVABLE and override_label:
+        return 0
+    return 1
 
 
 def _name(case: Case) -> str:
@@ -772,7 +781,8 @@ _HEADLINES: dict[Outcome, str] = {
     ),
     "not-runnable": (
         "Not runnable: every selected test skipped or left no result on the base (end-to-end cases skip without "
-        "models), so nothing could be proven."
+        "models), so nothing could be proven. Add a test that runs here (not an end-to-end case), or ask the owner "
+        "for the `no-test-needed` label and give the reason in the pull request's description."
     ),
 }
 
