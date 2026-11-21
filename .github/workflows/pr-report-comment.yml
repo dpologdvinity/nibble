@@ -5,8 +5,11 @@
 # triggering run, and `tools/ci/pr_report.py post` validates that untrusted JSON strictly, finds the pull request
 # through the API from the run's head SHA (never from the artifact) and renders Markdown from validated fields only.
 # The run's head SHA reaches the script through `env:` (HEAD_SHA), never inside the script text.
-# A run that produced no artifact (the triggering run was cancelled, or a job failed before `assemble`) ends with a
-# notice, not a red job: the red job is the one in pr-report.
+# The comment's heading names the head commit it describes. A run that produced no artifact (the triggering run was
+# cancelled, or a job failed before `assemble`) posts no report: the red job is the one in pr-report. But the comment
+# from an earlier head would still read as current, so `pr_report.py outdated` puts a visible "Outdated" banner on it
+# naming the new head and linking the run (only when the pull request's head is still that commit; the next report
+# replaces the comment, banner included).
 # By hand: not possible, the run, its artifact and the pull request come from the `workflow_run` event; push to the
 # pull request to run pr-report.yml again. Like every `workflow_run` workflow, this file is read from the default
 # branch, so a change to it only takes effect after it is merged.
@@ -20,9 +23,12 @@ on:
 
 permissions: {}
 
-# Two runs for the same commit would race to create the comment; the second waits and then edits it.
+# One comment job at a time per pull request branch (the repository and branch the run came from), so a post for one
+# head and an `outdated` mark for another can never interleave their read and write of the same comment; `outdated`
+# also checks the head again just before it writes. Never cancelled; GitHub keeps one pending run per group, and a
+# replaced pending run is always older than the one that replaces it.
 concurrency:
-  group: pr-report-comment-${{ github.event.workflow_run.head_sha }}
+  group: pr-report-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
@@ -56,9 +62,16 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=pr-report-comment::the triggering run left no pr-report artifact (cancelled, or a job failed before assemble); nothing to post"
-            echo "No pr-report artifact on run $RUN_ID: nothing posted." >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=pr-report-comment::the triggering run left no pr-report artifact (cancelled, or a job failed before assemble); no report, an earlier one is marked outdated"
+            echo "No pr-report artifact on run $RUN_ID: no report posted; an earlier report on the pull request is marked outdated." >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Mark an earlier report outdated
+        if: steps.artifact.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: python tools/ci/pr_report.py outdated --head-sha "$HEAD_SHA" --run-url "$RUN_URL"
       # Into its own empty directory outside the checkout; the artifact is untrusted data and is only ever read as JSON by pr_report.py.
       - name: Download the report
         if: steps.artifact.outputs.found == 'true'
@@ -73,5 +86,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
           REPORT_DIR: ${{ runner.temp }}/pr-report
-        run: python tools/ci/pr_report.py post "$REPORT_DIR/pr-report.json" --head-sha "$HEAD_SHA"
+        run: python tools/ci/pr_report.py post "$REPORT_DIR/pr-report.json" --head-sha "$HEAD_SHA" --run-url "$RUN_URL"

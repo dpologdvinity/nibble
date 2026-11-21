@@ -22,7 +22,8 @@
 # starts from `workflow_run`, checks out the default branch instead of PR code, and validates the artifact strictly
 # before rendering it (tools/ci/pr_report.py). This workflow's name must stay `pr-report`: the comment workflow
 # triggers on it by name.
-# Cold model cache: perf, size and memory are reported as skipped and the accuracy part says `skipped-cold-cache`;
+# Cold model cache: perf, size and memory are reported as skipped (`perf_status: skipped-cold-cache`; a failed perf job
+# is `failed` and reported as such) and the accuracy part says `skipped-cold-cache`;
 # nothing here rebuilds the models (the nightly accuracy job does, see .github/actions/setup-models).
 # By hand: it cannot be dispatched (`gh workflow run pr-report.yml` is not possible for a pull request, whose head and
 # base come from the event); push to the pull request to run it again.
@@ -93,7 +94,7 @@ jobs:
       - name: Cold model cache, so skip the measurements
         if: steps.models.outputs.warm != 'true'
         run: |
-          jq -n --arg runner "$(cat runner.txt)" '{perf: null, size: null, rss: null}' > part-perf.json
+          jq -n '{perf_status: "skipped-cold-cache", perf: null, size: null, rss: null}' > part-perf.json
           echo "::notice title=pr-report perf::cold model cache; speed, size and memory are reported as skipped"
       - name: Check out the base (merge base) as a worktree
         if: steps.models.outputs.warm == 'true'
@@ -146,11 +147,22 @@ jobs:
           jq -n --slurpfile perf perf.json \
             --argjson bs "$(cat size-base.txt)" --argjson hs "$(cat size-head.txt)" \
             --argjson br "$(cat rss-base.txt)" --argjson hr "$(cat rss-head.txt)" \
-            '{perf: $perf[0], size: {base_bytes: $bs, head_bytes: $hs}, rss: {base_kib: $br, head_kib: $hr}}' \
+            '{perf_status: "measured", perf: $perf[0], size: {base_bytes: $bs, head_bytes: $hs},
+              rss: {base_kib: $br, head_kib: $hr}}' \
             > part-perf.json
-      # Also after a failure: the runner part must reach `assemble`, which reports a missing perf part as skipped.
+      # A failed perf job (a crash or a hang of the head in the speed or memory runs, a failed build) wrote no
+      # part-perf.json: say so explicitly, so the comment reads "the perf job failed", never "skipped" (which means a
+      # cold cache). always(): a timeout-minutes kill reads as cancelled, and is a failure too. Plain shell.
+      - name: Mark a failed perf job
+        if: ${{ always() }}
+        run: |
+          if [ ! -f part-perf.json ]; then
+            echo '{"perf_status": "failed", "perf": null, "size": null, "rss": null}' > part-perf.json
+            echo "::error title=pr-report perf::the perf job failed; the report says speed, size and memory were not measured"
+          fi
+      # Also after a failure: the runner part and the failed marker must reach `assemble`.
       - name: Upload the perf parts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: part-perf
@@ -302,8 +314,8 @@ jobs:
   assemble:
     name: assemble
     needs: [perf, accuracy]
-    # Whatever the other jobs concluded: a perf job that failed still uploaded its runner and the report shows speed,
-    # size and memory as skipped (the red job is the signal); an accuracy job that failed only on a head e2e gate still
+    # Whatever the other jobs concluded: a perf job that failed still uploaded its runner and the failed marker, and the
+    # report says speed, size and memory were not measured because it failed (a missing perf part reads the same); an accuracy job that failed only on a head e2e gate still
     # wrote its part, and one that died earlier uploaded the failed-accuracy marker (or nothing, if it never got to
     # that step), which `assemble` rejects loudly (no report, a red job).
     if: ${{ !cancelled() }}

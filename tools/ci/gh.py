@@ -26,8 +26,13 @@ class GhError(RuntimeError):
 
 
 def subprocess_runner(argv: Sequence[str], stdin: str | None) -> str:
-    """Run `argv` with `stdin` as input and return stdout; raise GhError(stderr) on a non-zero exit."""
-    proc = subprocess.run(list(argv), input=stdin, capture_output=True, text=True, check=False)
+    """Run `argv` with `stdin` as input and return stdout; raise GhError(stderr) on a non-zero exit, and GhError too
+    when the program cannot start (`gh` missing or not executable): to a caller that is a GitHub problem, not an
+    OSError about its own files."""
+    try:
+        proc = subprocess.run(list(argv), input=stdin, capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise GhError(f"cannot run {argv[0]}: {e}") from e
     if proc.returncode != 0:
         raise GhError(proc.stderr.strip() or f"{argv[0]} exited with status {proc.returncode}")
     return proc.stdout
@@ -113,6 +118,10 @@ class GitHub(Protocol):
         With `author` (a login such as "github-actions[bot]") only a comment written by that user counts as a match,
         so an outside commenter who pastes the marker cannot make the caller edit or hide behind their comment.
         """
+        ...
+
+    def find_comment(self, number: int, marker: str, author: str) -> str | None:
+        """Body of the first comment on `number` that contains `marker` and was written by `author`, or None."""
         ...
 
     def pr_for_sha(self, sha: str) -> int | None:
@@ -257,6 +266,16 @@ class GhCli:
                 self._send("PATCH", f"repos/{self.repo}/issues/comments/{existing['id']}", {"body": body})
                 return
         self.comment(number, body)
+
+    def find_comment(self, number: int, marker: str, author: str) -> str | None:
+        listing = _json_list(self._get(f"repos/{self.repo}/issues/{number}/comments?per_page=100", paginate=True))
+        for existing in listing:
+            user = existing.get("user")
+            login = user.get("login") if isinstance(user, dict) else None
+            body = str(existing.get("body", ""))
+            if marker in body and login == author:
+                return body
+        return None
 
     def pr_for_sha(self, sha: str) -> int | None:
         # `commits/{sha}/pulls` also lists merged and closed PRs that once contained the commit, so list the open pulls

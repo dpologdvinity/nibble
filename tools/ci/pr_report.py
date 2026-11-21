@@ -13,18 +13,29 @@ is untrusted input to a privileged job. Three rules keep that safe:
   from that SHA, so an artifact cannot be replayed onto another pull request.
 * `render` builds Markdown only from validated fields, and backslash-escapes every ASCII punctuation character in
   free text (keys, runner), so nothing a report says can start a link, a mention, HTML or a new table column. The
-  comment is edited in place only when the bot wrote it (a planted marker from another user is ignored).
+  comment is edited in place only when the bot wrote it (a planted marker from another user is ignored). The only
+  other values in it, the run link and the SHAs of `outdated`, come from the trusted workflow context and are
+  validated too (`_RUN_URL`, `_SHA`).
 
-Schema 1 (`null` for a section means "skipped"; numbers are JSON numbers, 0.0 means "no usable value"):
+The comment's visible heading names the head commit it describes. When a pr-report run for a newer head leaves no
+report (a job failed, or the run was cancelled), `outdated` puts a visible "Outdated" banner on top of the existing
+comment naming the new head and linking that run, so an older green report never reads as current; the next report
+replaces the whole comment, banner included.
+
+Schema 1 (numbers are JSON numbers, 0.0 means "no usable value"):
 
     {"schema": 1, "base_sha": "<40 hex>", "head_sha": "<40 hex>", "runner": "<1-120 chars of [A-Za-z0-9 ._()/,+-]>",
-     "kernels_changed": bool,
+     "kernels_changed": bool, "perf_status": "measured"|"skipped-cold-cache"|"failed",
      "perf": [{"model": <allowlisted>, "test": "pp512"|"tg128", "threads": int, "base_median": x,
                "head_median": x, "ratios": [x...], "verdict": "faster"|"slower"|"same"|"inconclusive"}] | null,
      "size": {"base_bytes": int, "head_bytes": int} | null,
      "rss": {"base_kib": int, "head_kib": int} | null,
      "accuracy": {"status": "ran"|"skipped-cold-cache", "head_tests": "passed"|"failed"|null,
                   "rows": [{"key": "<model>/<prompt>", "base": x|null, "head": x|null}]}}   # rows only when "ran"
+
+`perf_status` says what happened to the perf job, which writes `perf`, `size` and `rss`: "measured" (a section that
+is null was not measured), "skipped-cold-cache" (no models, nothing measured) or "failed" (the job failed, nothing
+measured; the comment says so instead of "skipped"). Unless it is "measured", the three sections must be null.
 
 `head_tests` is how the head's end-to-end tests (`ctest -L e2e`) ended: given exactly when the status is "ran", null
 otherwise. It is separate from the rows because a test prints its min cosine before its later checks (batch prefill,
@@ -38,7 +49,8 @@ at-sign or hash mark into a mention or an issue link, so those characters are re
 `assemble` takes partial files: a JSON object holding some of the keys above (each key in at most one part), or a
 bare JSON list, which is the `perf` section exactly as `perf_ab.py summarize` writes it. `base_sha`, `head_sha`,
 `runner`, `kernels_changed` and `accuracy` are required (a missing accuracy part is an error, never "cold cache":
-the cold case is the explicit status `skipped-cold-cache`); `perf`, `size` and `rss` default to null (skipped). The
+the cold case is the explicit status `skipped-cold-cache`); `perf`, `size` and `rss` default to null and
+`perf_status` to "failed" (the perf job writes its status in every other case, the cold cache included). The
 runner is made inert first (`@` becomes "at", other unsafe characters "_", cut to 120), because a CPU model name
 such as "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz" is what a runner reports. The `accuracy` subcommand builds
 the accuracy part from two nightly-format cosine snapshots (`e2e-cosines.json`).
@@ -49,7 +61,10 @@ usage:
     python tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
     python tools/ci/pr_report.py accuracy --failed --out part-accuracy.json     # no usable result: assemble refuses it
     python tools/ci/pr_report.py assemble meta.json perf.json part-accuracy.json --out pr-report.json
-    python tools/ci/pr_report.py post pr-report.json --head-sha "$HEAD_SHA"   # GITHUB_REPOSITORY and GH_TOKEN set
+    python tools/ci/pr_report.py post pr-report.json --head-sha "$HEAD_SHA" [--run-url URL]   # GITHUB_REPOSITORY and
+        # GH_TOKEN set; URL is the pr-report run, linked from a failed perf job's line
+    python tools/ci/pr_report.py outdated --head-sha "$HEAD_SHA" --run-url URL   # the run left no report: mark the
+        # existing comment of the open pull request at that head outdated (nothing to do without one)
 """
 
 from __future__ import annotations
@@ -69,6 +84,13 @@ from gh import GhCli, GhError, GitHub
 
 # Hidden first line of the comment; `post` edits the bot's comment that holds it instead of adding a new one.
 MARKER = "<!-- nibble-pr-report -->"
+# Hidden line naming the full head SHA a report describes (the visible heading shows it short); `outdated` reads it.
+HEAD_MARKER = "<!-- nibble-pr-report-head: {sha} -->"
+_HEAD_MARKER = re.compile(r"<!-- nibble-pr-report-head: ([0-9a-f]{40}) -->")
+# The outdated banner sits between these two lines, so a second `outdated` replaces it instead of adding another.
+_BANNER_START = "<!-- nibble-pr-report-outdated -->"
+_BANNER_END = "<!-- /nibble-pr-report-outdated -->"
+_BANNER = re.compile(re.escape(_BANNER_START) + r".*?" + re.escape(_BANNER_END) + r"\n?", re.DOTALL)
 # Login `post` expects the existing report comment to have been written by (the workflow's GITHUB_TOKEN user).
 BOT_LOGIN = "github-actions[bot]"
 # The only models the report may name; they match the files the CI speed job downloads.
@@ -78,6 +100,7 @@ SCHEMA = 1
 TESTS = frozenset({"pp512", "tg128"})
 VERDICTS = ("faster", "slower", "same", "inconclusive")
 STATUSES = ("ran", "skipped-cold-cache")
+PERF_STATUSES = ("measured", "skipped-cold-cache", "failed")
 HEAD_TESTS = ("passed", "failed")
 # `steps.<id>.outcome` of the head's e2e step -> head_tests. Only success is a pass; anything else (failure, and a
 # cancelled or skipped step that should never get here) reads as failed, so the report can never claim a pass.
@@ -97,6 +120,8 @@ MAX_INT = 2**50  # sizes in bytes / KiB: far above any real value, far below flo
 MAX_FLOAT = 1e12  # tokens per second, ratios and cosines
 
 _SHA = re.compile(r"[0-9a-f]{40}")
+# A workflow run's page, as the workflows build it from github.server_url, github.repository and the run id.
+_RUN_URL = re.compile(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]{1,20}")
 # Allowed text. No `@` and no `#` (mentions and issue links), no markup characters, no control characters.
 _KEY_TEXT = re.compile(r"[A-Za-z0-9._/+-]+")  # `<model>/<prompt>`: ids and prompt names, never whitespace
 _RUNNER_TEXT = re.compile(r"[A-Za-z0-9 ._()/,+-]+")  # a CPU model name, once `assemble` has made it inert
@@ -104,9 +129,9 @@ _RUNNER_UNSAFE = re.compile(r"[^A-Za-z0-9 ._()/,+-]")
 _PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
 
 _TOP_KEYS = frozenset(
-    {"schema", "base_sha", "head_sha", "runner", "kernels_changed", "perf", "size", "rss", "accuracy"}
+    {"schema", "base_sha", "head_sha", "runner", "kernels_changed", "perf_status", "perf", "size", "rss", "accuracy"}
 )
-_SECTIONS = ("perf", "size", "rss", "accuracy")
+_SECTIONS = ("perf_status", "perf", "size", "rss", "accuracy")
 _META_KEYS = ("base_sha", "head_sha", "runner", "kernels_changed")
 
 
@@ -163,6 +188,7 @@ class Report(TypedDict):
     head_sha: str
     runner: str
     kernels_changed: bool
+    perf_status: str
     perf: list[PerfEntry] | None
     size: Size | None
     rss: Rss | None
@@ -351,12 +377,16 @@ def _validate(value: object) -> Report:
             "base_kib": _int(m["base_kib"], "rss.base_kib", 0, MAX_INT),
             "head_kib": _int(m["head_kib"], "rss.head_kib", 0, MAX_INT),
         }
+    perf_status = _choice(o["perf_status"], "perf_status", PERF_STATUSES)
+    if perf_status != "measured" and (perf is not None or size is not None or rss is not None):
+        raise ValueError(f"perf_status is {perf_status}, but perf, size or rss holds a measurement")
     return {
         "schema": SCHEMA,
         "base_sha": _sha(o["base_sha"], "base_sha"),
         "head_sha": _sha(o["head_sha"], "head_sha"),
         "runner": _text(o["runner"], "runner", MAX_RUNNER, _RUNNER_TEXT),
         "kernels_changed": o["kernels_changed"],
+        "perf_status": perf_status,
         "perf": perf,
         "size": size,
         "rss": rss,
@@ -392,11 +422,11 @@ def assemble(parts: Sequence[str]) -> str:
     Each part is an object holding some top-level keys of the schema (no key in two parts) or a bare list, taken as
     the `perf` section. `base_sha`, `head_sha`, `runner`, `kernels_changed` and `accuracy` must be provided (a missing
     accuracy part, or the failed-accuracy marker, is an error, not a cold cache); `perf`, `size` and `rss` default to
-    skipped. The runner is made
+    null and `perf_status` to "failed" (no perf part: the perf job died). The runner is made
     inert (`_inert_runner`). The merged result goes through `load`, so `assemble` never writes a report `post` would
     refuse.
     """
-    merged: dict[str, Any] = {"schema": SCHEMA, "perf": None, "size": None, "rss": None}
+    merged: dict[str, Any] = {"schema": SCHEMA, "perf_status": "failed", "perf": None, "size": None, "rss": None}
     seen: set[str] = set()
     for index, text in enumerate(parts):
         part = _parse(text, f"part {index}")
@@ -514,26 +544,54 @@ def _accuracy_lines(r: Report) -> list[str]:
     return lines
 
 
-def render(r: Report) -> str:
-    """The Markdown comment for `r`, starting with MARKER. Every dynamic piece comes from a validated field."""
-    lines = [MARKER, "## nibble PR report", "", "_shared CI runner: trend, not a benchmark_", ""]
+def _run_link(run_url: str | None, text: str) -> str:
+    """`[text](run_url)` for a validated run URL, else `text`."""
+    return f"[{text}]({run_url})" if run_url and _RUN_URL.fullmatch(run_url) else text
+
+
+def _perf_lines(r: Report, run_url: str | None) -> list[str]:
+    """Speed, size and peak memory: the numbers, or why there are none (a cold cache is not a failure)."""
+    if r["perf_status"] == "failed":
+        return [
+            "**Speed, size and peak memory:** not measured: the perf job failed (see its log in the "
+            + _run_link(run_url, "pr-report run")
+            + "). A crash or a hang of the head under `nibble bench` or `nibble run` ends up here.",
+            "",
+        ]
+    missing = "skipped (cold model cache)" if r["perf_status"] == "skipped-cold-cache" else "not measured"
+    lines: list[str] = []
     if r["perf"] is None:
-        lines.append("**Speed:** skipped")
+        lines.append(f"**Speed:** {missing}")
     else:
         lines += ["**Speed**", ""] + (_speed_rows(r["perf"]) if r["perf"] else ["no results"])
     lines.append("")
     if r["size"] is None:
-        lines.append("**Size:** skipped")
+        lines.append(f"**Size:** {missing}")
     else:
         b, h = r["size"]["base_bytes"], r["size"]["head_bytes"]
         lines.append(f"**Size:** {b:,} B → {h:,} B (Δ {h - b:+,} B, {_pct(b, h)})")
     lines.append("")
     if r["rss"] is None:
-        lines.append("**Peak memory:** skipped")
+        lines.append(f"**Peak memory:** {missing}")
     else:
         b, h = r["rss"]["base_kib"], r["rss"]["head_kib"]
         lines.append(f"**Peak memory:** {b:,} KiB → {h:,} KiB (Δ {h - b:+,} KiB, {_pct(b, h)})")
     lines.append("")
+    return lines
+
+
+def render(r: Report, run_url: str | None = None) -> str:
+    """The Markdown comment for `r`, starting with MARKER. Every dynamic piece comes from a validated field;
+    `run_url` (the pr-report run, trusted context) is linked from a failed perf job's line when it is a run URL."""
+    lines = [
+        MARKER,
+        HEAD_MARKER.format(sha=r["head_sha"]),
+        f"## nibble PR report for `{r['head_sha'][:7]}`",
+        "",
+        "_shared CI runner: trend, not a benchmark_",
+        "",
+    ]
+    lines += _perf_lines(r, run_url)
     lines += _accuracy_lines(r)
     lines += [
         "",
@@ -578,20 +636,68 @@ def render(r: Report) -> str:
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def post(gh: GitHub, r: Report, run_head_sha: str) -> int:
+def post(gh: GitHub, r: Report, run_head_sha: str, run_url: str | None = None) -> int:
     """Create or update the report comment on the open pull request whose head is `run_head_sha`.
 
     `run_head_sha` is the head SHA of the workflow run that triggered this job (trusted context). Returns the pull
     request number, or 0 without posting anything when the report's `head_sha` is not `run_head_sha` (the artifact
     belongs to another commit: ruling R18) or when no open pull request has that head (it was closed or updated).
-    The number comes from `gh.pr_for_sha`, never from the artifact, and only the bot's own comment is edited.
+    The number comes from `gh.pr_for_sha`, never from the artifact, and only the bot's own comment is edited (which
+    also drops an outdated banner). `run_url` is passed to `render`.
     """
     if r["head_sha"] != run_head_sha:
         return 0
     number = gh.pr_for_sha(run_head_sha)
     if number is None:
         return 0
-    gh.upsert_comment(number, MARKER, render(r), author=BOT_LOGIN)
+    gh.upsert_comment(number, MARKER, render(r, run_url), author=BOT_LOGIN)
+    return number
+
+
+def outdated_banner(new_head: str, old_head: str | None, run_url: str) -> str:
+    """The visible banner (between its two hidden delimiter lines) for a report about `old_head` (None: unknown)
+    shown on a pull request whose head is now `new_head`, whose pr-report run `run_url` left no report."""
+    old = f"`{old_head[:7]}`" if old_head else "an earlier commit"
+    return "\n".join(
+        [
+            _BANNER_START,
+            f"> ⚠️ **Outdated:** this report is for {old}, not for the current head `{new_head[:7]}`. The "
+            f"{_run_link(run_url, 'pr-report run')} for `{new_head[:7]}` produced no report (a job failed or the run "
+            "was cancelled; see its jobs), so the numbers below may no longer hold.",
+            _BANNER_END,
+            "",
+        ]
+    )
+
+
+def mark_outdated(gh: GitHub, run_head_sha: str, run_url: str) -> int:
+    """Put the outdated banner on the bot's report comment of the open pull request whose head is `run_head_sha`.
+
+    Called when the pr-report run for `run_head_sha` left no report. Returns the pull request number, or 0 when there
+    is nothing to mark: no open pull request has that head (a newer push superseded it, checked again just before
+    writing), the bot has no report comment there, or that comment already describes `run_head_sha`. An earlier banner
+    is replaced, not repeated.
+    """
+    number = gh.pr_for_sha(run_head_sha)
+    if number is None:
+        return 0
+    body = gh.find_comment(number, MARKER, BOT_LOGIN)
+    if body is None:
+        return 0
+    found = _HEAD_MARKER.search(body)
+    old_head = found.group(1) if found else None
+    if old_head == run_head_sha:
+        return 0
+    # The workflow serializes comment jobs per pull request branch; this second look covers a push that landed while
+    # the comment was read, so a newer report is never overwritten with this older body.
+    if gh.pr_for_sha(run_head_sha) != number:
+        return 0
+    rest = _BANNER.sub("", body)
+    if rest.startswith(MARKER):
+        rest = rest[len(MARKER) :].lstrip("\n")
+    gh.upsert_comment(
+        number, MARKER, f"{MARKER}\n{outdated_banner(run_head_sha, old_head, run_url)}{rest}", author=BOT_LOGIN
+    )
     return number
 
 
@@ -636,8 +742,18 @@ def accuracy_part(base: Mapping[str, float], head: Mapping[str, float], head_tes
     return json.dumps({"accuracy": section}, indent=2, allow_nan=False)
 
 
+def _client(gh: GitHub | None) -> GitHub:
+    """`gh`, or GhCli for $GITHUB_REPOSITORY (ValueError when it is not set)."""
+    if gh is not None:
+        return gh
+    if not os.environ.get("GITHUB_REPOSITORY"):
+        raise ValueError("GITHUB_REPOSITORY is not set")
+    return GhCli(os.environ["GITHUB_REPOSITORY"])
+
+
 def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
-    """Command line: `accuracy` and `assemble` build the report, `post` comments it. `gh` is for tests."""
+    """Command line: `accuracy` and `assemble` build the report, `post` comments it, `outdated` marks an older
+    comment when a run left no report. `gh` is for tests."""
     parser = argparse.ArgumentParser(description="Assemble and post the nibble PR report.")
     sub = parser.add_subparsers(dest="command", required=True)
     p_asm = sub.add_parser("assemble", help="merge partial JSON files into pr-report.json")
@@ -661,6 +777,10 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
     p_post = sub.add_parser("post", help="comment the report on the pull request of the triggering run")
     p_post.add_argument("report", help="downloaded pr-report.json (untrusted)")
     p_post.add_argument("--head-sha", required=True, help="head SHA of the workflow run that triggered this job")
+    p_post.add_argument("--run-url", help="URL of that run, linked from a failed perf job's line")
+    p_old = sub.add_parser("outdated", help="mark the report comment outdated: the run for a newer head left none")
+    p_old.add_argument("--head-sha", required=True, help="head SHA of the workflow run that left no report")
+    p_old.add_argument("--run-url", required=True, help="URL of that run")
     args = parser.parse_args(list(argv))
     if args.command == "accuracy" and args.failed:
         if args.base or args.head or args.head_outcome or args.skipped_cold_cache:
@@ -690,14 +810,20 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
             Path(args.out).write_text(text + "\n", encoding="utf-8")
             return 0
         run_sha = _sha(args.head_sha, "--head-sha")
+        run_url: str | None = args.run_url
+        if run_url is not None and not _RUN_URL.fullmatch(run_url):
+            raise ValueError(f"--run-url is not a workflow run URL: {_show(run_url)}")
+        if args.command == "outdated":
+            assert run_url is not None  # required by argparse
+            client = _client(gh)
+            number = mark_outdated(client, run_sha, run_url)
+            print(f"pr_report: {'marked the report on #' + str(number) + ' outdated' if number else 'nothing to mark'}")
+            return 0
         report = load(read_limited(args.report))
         if report["head_sha"] != run_sha:
             print("pr_report: the report's head_sha does not match the triggering run; nothing posted", file=sys.stderr)
             return 0
-        if gh is None and not os.environ.get("GITHUB_REPOSITORY"):
-            raise ValueError("GITHUB_REPOSITORY is not set")
-        client = gh if gh is not None else GhCli(os.environ["GITHUB_REPOSITORY"])
-        number = post(client, report, run_sha)
+        number = post(_client(gh), report, run_sha, run_url)
         print(f"pr_report: {'commented on #' + str(number) if number else 'no open pull request for this commit'}")
         return 0
     except (ValueError, OSError, GhError) as exc:

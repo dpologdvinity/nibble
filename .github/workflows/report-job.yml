@@ -6,6 +6,8 @@
 # never started) or `skipped`, when `warm` is `false` (the job skipped its work on a cold model cache) and on any ref
 # but master (a hand run from another branch opens no issue). A cancelled run never calls it: the callers use
 # `!cancelled()`. `timed-out` (the job hit its own timeout-minutes) is reported as a failure, with a warning saying so.
+# A timed-out job also gets its dashboard row here (job `timeout-row`): its own status step sees `cancelled` and
+# writes nothing, and without this row the dashboard and the nightly badge would keep its last, maybe green, result.
 # By hand: not runnable (workflow_call only); the nightly and portability workflows call it.
 # Logic: .github/actions/report-failure and tools/ci/report_failure.py.
 name: report-job
@@ -40,6 +42,38 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
+  # A failure row (value 0, `timed-out`) for a job that hit its time limit, uploaded as dashboard-rows-<job>-timed-out
+  # in the caller's run, where dashboard.yml collects it with the other rows. Any ref, like the work jobs' own rows:
+  # the dashboard only takes master's runs. No write scope: it only uploads an artifact.
+  timeout-row:
+    name: dashboard row ${{ inputs.job }}
+    if: inputs.status == 'timed-out'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Dashboard row (timed out)
+        env:
+          JOB: ${{ inputs.job }}
+          WORKFLOW: ${{ github.workflow }}  # the caller's name: nightly or portability, also the row's source
+        run: |
+          python tools/ci/dashboard_data.py status --workflow "$WORKFLOW" --job "$JOB" --outcome timed-out \
+            --source "$WORKFLOW" --out rows.jsonl
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard-rows-${{ inputs.job }}-timed-out
+          path: rows.jsonl
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
   report:
     name: report ${{ inputs.job }}
     if: |

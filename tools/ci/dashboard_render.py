@@ -1,6 +1,6 @@
 """Render the CI dashboard: one static page, six SVG charts and a shields.io badge, from the rows of the data branch.
 
-usage: dashboard_render.py ROWS.jsonl --out DIR --repo OWNER/NAME
+usage: dashboard_render.py ROWS.jsonl --out DIR --repo OWNER/NAME [--now YYYY-MM-DDTHH:MM:SSZ]
 
 ROWS.jsonl holds validated rows (see dashboard_data.py; a missing file counts as empty). DIR receives:
 
@@ -13,11 +13,16 @@ ROWS.jsonl holds validated rows (see dashboard_data.py; a missing file counts as
     fuzz.svg      cumulative fuzzing hours per target
     size.svg      stripped release binary size
     coverage.svg  line coverage of src/ and cli/
-    badge.json    shields.io endpoint: nightly "passing" iff every current job's latest `nightly/*` status is 1
+    badge.json    shields.io endpoint: nightly "passing" iff every current job's latest `nightly/*` status is 1 and
+                  the newest of them is at most STALE_HOURS (36) old by the clock; "stale" (orange) when they all
+                  passed but the newest is older, so rows that stopped arriving (schedules disabled, a broken
+                  dashboard run, a skipped artifact) never leave a green badge standing; "failing" wins over "stale"
 
 The charts are drawn by bench/plot.py's `line_chart` and show the last CHART_DAYS (90) days; the status table and
 badge only count jobs that reported within STATUS_DAYS (14) days, so a removed or renamed job ages out. Both spans are
-counted back from the newest row, not from the clock. Every value that reaches HTML is escaped (the SVG builder
+counted back from the newest row, not from the clock. Only staleness is measured against the clock (`--now`, default
+the current time): the badge as above, a notice above the status table, and "stale" on every nightly job's row older
+than STALE_HOURS (weekly portability rows are not marked). Every value that reaches HTML is escaped (the SVG builder
 escapes its own text), and `--repo` is validated before it goes into a URL. A malformed row is skipped and reported
 on stderr as a `::warning` (and in the job summary): merge already validated what it stored, so this only guards
 against a hand-edited data branch.
@@ -58,6 +63,8 @@ MAX_LABEL = 30  # characters that fit the chart legend (190 px at 11 px sans-ser
 DAY = 86400  # seconds
 CHART_DAYS = 90  # charts show this much history, counted back from the newest row (see `recent`)
 STATUS_DAYS = 14  # a job with no result for this long (counted the same way) is gone from the status table and badge
+STALE_HOURS = 36  # a nightly result older than this by the clock is stale (a night missed, with a margin)
+NIGHTLY = "nightly/"  # key prefix of the nightly jobs' statuses, the only ones the badge and the staleness rule read
 WORKFLOW_ORDER = ("nightly", "portability", "ci")  # status table order; other workflows follow alphabetically
 # One colour per series, cycling: the first ten of plot.MODELS' palette (Tableau 10).
 PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
@@ -324,16 +331,37 @@ def charts(rows: Sequence[Row]) -> dict[str, str]:
     }
 
 
-def badge(rows: Sequence[Row]) -> dict[str, object]:
-    """The shields.io endpoint object: "passing" iff every current job's latest `nightly/*` status is 1, "failing" if
-    any is not, and "no data" (grey) while there is none. Current means reported within STATUS_DAYS."""
-    nightly = [r for k, r in current_statuses(rows).items() if k.startswith("nightly/")]
-    if not nightly:
+def parse_now(text: str) -> float:
+    """Unix seconds of a `YYYY-MM-DDTHH:MM:SSZ` time (the `--now` option); ValueError for anything else."""
+    return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp()
+
+
+def _is_stale(r: Row, now: float | None) -> bool:
+    """Whether a row is older than STALE_HOURS at `now` (None: never, for rendering that ignores the clock)."""
+    return now is not None and now - _unix(r["date"]) > STALE_HOURS * 3600
+
+
+def newest_nightly(rows: Sequence[Row]) -> Row | None:
+    """The newest current `nightly/*` status row, or None when there is none."""
+    nightly = [r for k, r in current_statuses(rows).items() if k.startswith(NIGHTLY)]
+    return max(nightly, key=_order) if nightly else None
+
+
+def badge(rows: Sequence[Row], now: float | None = None) -> dict[str, object]:
+    """The shields.io endpoint object: "failing" (red) if any current job's latest `nightly/*` status is not 1;
+    otherwise "stale" (orange) when the newest of them is older than STALE_HOURS at `now` (unix seconds; None never
+    counts as stale), else "passing" (green); "no data" (grey) while there is none. Current means reported within
+    STATUS_DAYS."""
+    nightly = [r for k, r in current_statuses(rows).items() if k.startswith(NIGHTLY)]
+    newest = newest_nightly(rows)
+    if not nightly or newest is None:
         message, colour = "no data", "lightgrey"
-    elif all(_num(r) == 1.0 for r in nightly):
-        message, colour = "passing", "brightgreen"
-    else:
+    elif any(_num(r) != 1.0 for r in nightly):
         message, colour = "failing", "red"
+    elif _is_stale(newest, now):
+        message, colour = "stale", "orange"
+    else:
+        message, colour = "passing", "brightgreen"
     return {"schemaVersion": 1, "label": "nightly", "message": message, "color": colour}
 
 
@@ -342,8 +370,20 @@ def _when(r: Row) -> str:
     return str(r["date"])[:16].replace("T", " ") + " UTC"
 
 
-def _status_table(rows: Sequence[Row], repo: str) -> str:
-    """The HTML status table: the latest `job_status` per `<workflow>/<job>`, grouped by workflow."""
+def _stale_notice(rows: Sequence[Row], now: float | None) -> str:
+    """A paragraph saying the nightly results are stale (the newest is older than STALE_HOURS at `now`), or ""."""
+    newest = newest_nightly(rows)
+    if newest is None or not _is_stale(newest, now):
+        return ""
+    return (
+        f"<p><strong>⚠️ The nightly results are stale:</strong> the newest is from {_when(newest)}, more than "
+        f"{STALE_HOURS} hours ago. The nightly workflow has not reported since; check its runs.</p>"
+    )
+
+
+def _status_table(rows: Sequence[Row], repo: str, now: float | None = None) -> str:
+    """The HTML status table: the latest `job_status` per `<workflow>/<job>`, grouped by workflow. A nightly job's row
+    older than STALE_HOURS at `now` says "stale" after its result."""
     latest = current_statuses(rows)
     if not latest:
         return "<p>No job status recorded yet.</p>"
@@ -359,9 +399,10 @@ def _status_table(rows: Sequence[Row], repo: str) -> str:
         for job, r in sorted(groups[workflow], key=lambda g: g[0]):
             ok = _num(r) == 1.0
             run = f"https://github.com/{repo}/actions/runs/{r['run_id']}"
+            stale = " (⚠️ stale)" if key_is_nightly(workflow) and _is_stale(r, now) else ""
             body.append(
                 f'<tr><th scope="row">{html.escape(job)}</th>'
-                f"<td>{'✅ passing' if ok else '❌ failing'}</td>"
+                f"<td>{'✅ passing' if ok else '❌ failing'}{stale}</td>"
                 f"<td>{_when(r)}</td>"
                 f'<td><a href="{run}">run {r["run_id"]}</a></td></tr>'
             )
@@ -458,8 +499,14 @@ SECTIONS = (
 )
 
 
-def index_html(rows: Sequence[Row], repo: str) -> str:
-    """The dashboard page for `rows`. `repo` must already be validated."""
+def key_is_nightly(workflow: str) -> bool:
+    """Whether a status key's workflow part names the nightly workflow."""
+    return f"{workflow}/" == NIGHTLY
+
+
+def index_html(rows: Sequence[Row], repo: str, now: float | None = None) -> str:
+    """The dashboard page for `rows`. `repo` must already be validated; `now` (unix seconds, None to ignore the clock)
+    decides what is stale."""
     repo_url = f"https://github.com/{repo}"
     if rows:
         newest = max(rows, key=_order)
@@ -489,7 +536,7 @@ def index_html(rows: Sequence[Row], repo: str) -> str:
         "fuzzing and trend runs, the weekly portability builds, and line coverage on every push to master. "
         f'For what nibble is and its benchmark numbers, see the <a href="{repo_url}#readme">README</a>.</p>\n'
         f"{updated}\n"
-        f"<h2>Status</h2>\n{_status_table(rows, repo)}\n"
+        f"<h2>Status</h2>\n{_stale_notice(rows, now)}{_status_table(rows, repo, now)}\n"
         f"{figures}\n"
         f'<footer class="muted">The data is <a href="{repo_url}/blob/dashboard-data/data/rows.jsonl">one JSON Lines '
         "file</a> on the <code>dashboard-data</code> branch. This page is static and needs no JavaScript.</footer>\n"
@@ -497,24 +544,30 @@ def index_html(rows: Sequence[Row], repo: str) -> str:
     )
 
 
-def render_rows(rows: Sequence[Row], out_dir: str, repo: str) -> list[str]:
+def render_rows(rows: Sequence[Row], out_dir: str, repo: str, now: float | None = None) -> list[str]:
     """Write the dashboard for already parsed `rows` into `out_dir` (created if needed) and return the names of the
-    files written (FILES). ValueError if `repo` is not `owner/name`."""
+    files written (FILES). `now` is the clock for the staleness rule (unix seconds; None ignores it, for tests of
+    everything else). ValueError if `repo` is not `owner/name`."""
     if _REPO.fullmatch(repo) is None:
         raise ValueError(f"repo must look like owner/name, got {repo!r:.60}")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    pages = {"index.html": index_html(rows, repo), **charts(rows), "badge.json": json.dumps(badge(rows)) + "\n"}
+    pages = {
+        "index.html": index_html(rows, repo, now),
+        **charts(rows),
+        "badge.json": json.dumps(badge(rows, now)) + "\n",
+    }
     for name in FILES:
         (out / name).write_text(pages[name], encoding="utf-8")
     return list(FILES)
 
 
-def render_site(rows_jsonl: str, out_dir: str, repo: str) -> list[str]:
+def render_site(rows_jsonl: str, out_dir: str, repo: str, now: float | None = None) -> list[str]:
     """Write the dashboard for the rows in `rows_jsonl` (JSONL text) into `out_dir` and return the names of the files
-    written. Malformed rows are skipped silently here; `main` is the caller that reports them (see parse_rows)."""
+    written; `now` as for render_rows. Malformed rows are skipped silently here; `main` is the caller that reports
+    them (see parse_rows)."""
     rows, _problems = parse_rows(rows_jsonl)
-    return render_rows(rows, out_dir, repo)
+    return render_rows(rows, out_dir, repo, now)
 
 
 def _report_problems(problems: Sequence[str], env: Mapping[str, str]) -> None:
@@ -538,11 +591,13 @@ def main(argv: Sequence[str], *, env: Mapping[str, str] | None = None) -> int:
     parser.add_argument("rows", type=Path, help="rows JSONL (a missing file counts as empty)")
     parser.add_argument("--out", type=Path, required=True, help="output directory")
     parser.add_argument("--repo", required=True, help="OWNER/NAME, used for links")
+    parser.add_argument("--now", help="the time staleness counts to, YYYY-MM-DDTHH:MM:SSZ (default: the clock)")
     args = parser.parse_args(argv)
     try:
+        now = parse_now(args.now) if args.now else datetime.now(UTC).timestamp()
         rows, problems = parse_rows(args.rows.read_text(encoding="utf-8") if args.rows.exists() else "")
         _report_problems(problems, os.environ if env is None else env)
-        names = render_rows(rows, str(args.out), args.repo)
+        names = render_rows(rows, str(args.out), args.repo, now)
     except (ValueError, OSError) as e:
         print(f"dashboard_render: {e}", file=sys.stderr)
         return 1

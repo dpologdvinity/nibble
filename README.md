@@ -250,20 +250,20 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 |---|---|---|
 | every PR and push to `master` | [ci](.github/workflows/ci.yml) | The required gate: formatting, clang-tidy, ruff and mypy, the Python tool tests, then the non-e2e suite built with the documented compiler floor (g++ 13, clang 18), as released (runtime kernel dispatch), with scalar kernels only, under ASan+UBSan and under TSan; a minimum line coverage; 60 s of fuzzing each for the GGUF parser and the loader. |
 | every PR and push to `master`, and tags | [package](.github/workflows/package.yml) | The release tarballs and container image still build and run (called by ci and release). |
-| PRs touching the engine, CLI, build or tests | [pr-report](.github/workflows/pr-report.yml) | One comment per PR with the change's effect on decode/prefill speed (interleaved ABBA runs against the merge base), binary size, peak memory and the min cosine of the Qwen2.5-0.5B end-to-end tests against llama.cpp. A second workflow, which never runs PR code, posts it. |
-| `fix:` PRs touching `src/`, `include/` or `cli/` | [fix-proof](.github/workflows/fix-proof.yml) | A bug fix carries a test that fails without it: the PR's tests are run on its merge base, built with ASan+UBSan, and at least one must fail. A base that does not build with the new tests also passes, and a `no-test-needed` label (reason in the PR) waives a PR without a test. Not yet required. |
+| PRs touching the engine, CLI, build or tests | [pr-report](.github/workflows/pr-report.yml) | One comment per PR with the change's effect on decode/prefill speed (interleaved ABBA runs against the merge base), binary size, peak memory and the min cosine of the Qwen2.5-0.5B end-to-end tests against llama.cpp. A second workflow, which never runs PR code, posts it. The comment names the commit it describes, and is marked outdated when a newer commit's run produced no report. |
+| `fix:` PRs touching `src/`, `include/` or `cli/` | [fix-proof](.github/workflows/fix-proof.yml) | A bug fix carries a test that fails without it: the PR's tests are run on its merge base, built with ASan+UBSan, and at least one must fail. A base that does not build with the new tests also passes. A PR whose tests skip or cannot run here is red like one without a test; the owner's `no-test-needed` label (reason in the PR) waives both. Not yet required. |
 | every PR and push to `master`, weekly | [codeql](.github/workflows/codeql.yml) | CodeQL over the C++ (nibble parses untrusted GGUF files) and the workflow files (injection, token permissions). |
 | every PR and push to `master`, weekly | [gitleaks](.github/workflows/gitleaks.yml) | No secret in the commits being added; weekly over the full history, so new rules reach old commits. |
 | PRs touching workflows | [actionlint](.github/workflows/actionlint.yml) | A typo in a workflow (expression, `needs:`, input) cannot silently stop it from running; shellcheck on `run:` blocks. |
 | every PR | [labeler](.github/workflows/labeler.yml) | Area labels (`kernels`, `gguf`, ...) from the changed paths, for the changelog and triage. |
 | every PR | [claude-review](.github/workflows/claude-review.yml) | Inline review comments from Claude on PRs by the owner, Dependabot and the agent; it never approves or blocks. |
-| every PR | [agent-approval](.github/workflows/agent-approval.yml) | A PR opened by Claude stays red until the owner approves its current head commit (not yet a required check). |
+| every PR | [agent-approval](.github/workflows/agent-approval.yml) | A PR opened by Claude stays red until the owner, a member or a collaborator approves its current head commit (not yet a required check). |
 | every PR | [automerge](.github/workflows/automerge.yml) | Auto-merge only for the owner's own PRs and Dependabot's minor and patch updates, never for agent PRs. |
 | nightly | [nightly](.github/workflows/nightly.yml) | Every end-to-end test on the Qwen2.5-0.5B family (F16, Q8_0, Q4_0, Q4_K_M, Q5_K_M, Q6_K) against llama.cpp; ASan+UBSan on a real Q4_K_M model; about 2 h of fuzzing each for the parser and the loader, with a corpus kept between nights; a trend benchmark. |
 | weekly | [portability](.github/workflows/portability.yml) | The suite on 64-bit ARM (scalar kernels), the newest GCC and Clang with warnings as errors, and the build with SIMD off. |
 | weekly, and pushes to `master` | [scorecard](.github/workflows/scorecard.yml) | OpenSSF Scorecard grades the supply chain: pinned actions, token permissions, branch protection, dependency updates. |
 | weekly | [link-check](.github/workflows/link-check.yml) | Links in the README and docs; one open issue lists the broken ones. |
-| after nightly, portability and ci on `master` | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
+| after nightly, portability and ci on `master`, and daily | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
 | a failing scheduled job | [claude-triage](.github/workflows/claude-triage.yml) | Claude diagnoses the `ci-failure` issue and, with a reproducer, opens an `agent/` PR (below). |
 | `@claude` from the owner or a collaborator | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or a PR in this repository (fork PRs are skipped); it answers or opens an `agent` PR. |
 | a `v*` tag pushed by the owner | [release](.github/workflows/release.yml) | Refuses a tag anyone else pushed. The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
@@ -276,7 +276,7 @@ flowchart LR
   B --> C["claude-triage: diagnosis from the issue and the logs"]
   C --> D["agent/ PR: failing test, then the fix"]
   D --> E["fix-proof on the merge base, CI, PR report"]
-  E --> F["agent-approval: red until the owner approves"]
+  E --> F["agent-approval: red until the owner or a collaborator approves"]
   F --> G["owner merges"]
 ```
 
@@ -291,8 +291,10 @@ flowchart LR
   Dependabot or the agent opens.
 
 The [dashboard](https://dpologdvinity.github.io/nibble/) charts the scheduled runs over time: speed, accuracy, fuzzing
-hours, binary size and coverage, and the latest status of every scheduled job. CI-runner speed numbers are trends; the
-benchmark tables below come from an idle dedicated machine.
+hours, binary size and coverage, and the latest status of every scheduled job. A job that hits its time limit counts as
+failing, and the nightly badge reads "stale" (orange) when no nightly result has arrived for 36 hours (a failing
+result stays "failing", red, however old). CI-runner speed numbers are trends; the benchmark tables below come from an
+idle dedicated machine.
 
 **Verifying a release.** From the next release on, the tarballs and the container image carry build-provenance and
 SBOM attestations signed by the release workflow. To check that a download was built from this repository by that

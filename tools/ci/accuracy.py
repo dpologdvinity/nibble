@@ -14,8 +14,9 @@ Two subcommands replace what used to be inline Python in .github/workflows/night
   compare CURRENT.json --summary SUMMARY.md --dest DIR [--workflow-file nightly.yml --branch master
                                                          --job accuracy --artifact e2e-cosines]
       Finds the baseline (find_baseline), diffs it against CURRENT and writes a table to the summary with one
-      `::warning::` per change. It always exits 0: no baseline is a first night, and a GitHub or artifact problem only
-      costs the comparison.
+      `::warning::` per change. It exits 0 whatever the comparison finds: no baseline is a first night, and a GitHub or
+      artifact problem (a missing `gh` included) only costs the comparison. Only a CURRENT snapshot it cannot read
+      exits 1.
 
 The baseline is the newest completed run of the workflow on the branch, whatever started it, whose `accuracy` JOB
 concluded success and which still has the snapshot artifact. Judging by the job and not by the whole run matters: a
@@ -196,7 +197,7 @@ def compare_with_baseline(
             filename=current.name,
             dest=dest,
         )
-    except GhError as e:
+    except (GhError, OSError) as e:  # OSError: writing the downloaded artifact under `dest`
         return _unavailable(
             "Comparison unavailable: could not list or download the previous nightly runs.",
             f"could not look up the previous nightly run: {e}",

@@ -146,7 +146,7 @@ issue from another branch). A new workflow can only be dispatched after it is me
 | `portability.yml` | Sundays 04:23 UTC | `gh workflow run portability.yml` |
 | `scorecard.yml` | pushes to `master`, Mondays 05:37 UTC | `gh workflow run scorecard.yml` |
 | `link-check.yml` | Mondays 06:41 UTC | `gh workflow run link-check.yml`; locally `lychee --config .lychee.toml README.md ARCHITECTURE.md CONTRIBUTING.md SECURITY.md docs` |
-| `dashboard.yml` | after nightly, portability and ci finish on `master` | `gh workflow run dashboard.yml` |
+| `dashboard.yml` | after nightly, portability and ci finish on `master`, and daily at 09:47 and 21:47 UTC | `gh workflow run dashboard.yml` |
 | `claude-triage.yml` | a new `ci-failure` issue | `gh workflow run claude-triage.yml -f issue=<number>` |
 | `claude.yml` | `@claude` from the owner, a member or a collaborator | comment `@claude <request>` |
 | `release.yml` | a `v*` tag | push the tag (see below) |
@@ -166,14 +166,19 @@ Catch2 `TEST_CASE`s the pull request adds or changes in `tests/*.cpp`, builds th
 * **proven** (green): at least one case fails on the merge base. A merge base that does not build with the new tests
   also counts, on the assumption that the tests use something the fix adds; the build failure is not checked further,
   so read the base build log in the job before taking that as proof.
-* **does not reproduce**, **no test**, **incomplete** (red): every case passes on the merge base, the pull request
-  changes no test case, or no case failed before the time budget ran out.
+* **does not reproduce**, **no test**, **not runnable**, **incomplete** (red): every case passes on the merge base,
+  the pull request changes no test case, every selected case skipped or left no result, or no case failed before the
+  time budget ran out. A green check always means proven (or waived, below).
 * Cases it cannot run prove nothing: names built by a macro are reported as unresolved, and end-to-end cases as
-  not-runnable (it has no models).
+  **not runnable** (it has no models; they skip).
+* Only Catch2 `TEST_CASE`s in `tests/*.cpp` are selected. A fix whose reproducer is a CLI test (a `nibble_cli_test` in
+  `CMakeLists.txt`) or an end-to-end case always reads **no test** or **not runnable**: say in the pull request which
+  test reproduces the bug and how you saw it fail, and ask for the label.
 
-If a fix cannot have a reproducing test (a build-only or documentation fix to code, for example), add the
-`no-test-needed` label and say why in the pull request: the label turns **no test** green, and only that result
-(**does not reproduce** and **incomplete** stay red). The check is not required yet. The verdict and the cases are in the job summary.
+If a fix cannot have a reproducing test that runs here (a build-only fix to code, a CLI or end-to-end reproducer, for
+example), say why in the pull request and the owner adds the `no-test-needed` label: it turns **no test** and **not
+runnable** green, and only those (**does not reproduce** and **incomplete** stay red). The check is not required yet.
+The verdict and the cases are in the job summary.
 
 Only a person with write access can waive: fix-proof reads the label's history (`tools/ci/fix_proof_waiver.py`, run
 from the base branch so a pull request cannot change it) and the label counts only when its latest application was by

@@ -19,8 +19,11 @@ Metrics, their keys and units (METRICS below is the single source for the metric
     job_status     "<workflow>/<job>"                ok      1 = success, 0 = failure (see below)
 
 `job_status` is written by the job's "Dashboard rows (job status)" step from `job.status`, which covers the job's
-checks up to that step. The issue open/comment/close happens afterwards in a separate `report-<job>` job, so a report
-job that fails by itself (a GitHub API error) leaves a green row next to a red report job. That is deliberate: the row
+checks up to that step. A job that hits its timeout-minutes cannot write it (its remaining steps see `cancelled`, the
+same as a job superseded in its concurrency group), so report-job.yml writes a `timed-out` row, value 0, for it in a
+run that was not cancelled; a hang turns the badge red instead of leaving the last green row standing. The issue
+open/comment/close happens afterwards in a separate `report-<job>` job, so a report job that fails by itself (a GitHub
+API error) leaves a green row next to a red report job. That is deliberate: the row
 says whether the code and the checks passed, and the red report job is visible in the run.
 
 `validate` is the gate: every row built here, and every new row `merge` accepts, passes through it.
@@ -39,8 +42,9 @@ usage (each appends to --out; --source is nightly|ci|portability, default nightl
         a crash left no `Done` line, so fuzzing time before a crash still counts)
     dashboard_data.py from-gcovr SUMMARY.txt --out rows.jsonl          (gcovr --print-summary output)
     dashboard_data.py from-binary-size build/nibble --out rows.jsonl
-    dashboard_data.py status --workflow nightly --job fuzz_gguf --outcome success|failure|cancelled --out rows.jsonl
-        (cancelled writes nothing)
+    dashboard_data.py status --workflow nightly --job fuzz_gguf --outcome success|failure|timed-out|cancelled \
+        --out rows.jsonl
+        (timed-out is a failure, value 0; cancelled writes nothing)
     dashboard_data.py merge EXISTING.jsonl NEW.jsonl... --out merged.jsonl [--skip-bad]   (EXISTING may be missing)
         (a NEW file with an invalid row fails the command, or with --skip-bad is skipped whole with a `::warning`
         and a job-summary note, and the other files still merge)
@@ -411,7 +415,7 @@ def _parser() -> argparse.ArgumentParser:
     status = command("status")
     status.add_argument("--workflow", required=True)
     status.add_argument("--job", required=True)
-    status.add_argument("--outcome", required=True, choices=["success", "failure", "cancelled"])
+    status.add_argument("--outcome", required=True, choices=["success", "failure", "timed-out", "cancelled"])
     merge_cmd = command("merge", "existing")
     merge_cmd.add_argument("new", type=Path, nargs="+")
     merge_cmd.add_argument(

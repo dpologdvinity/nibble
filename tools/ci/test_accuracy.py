@@ -11,9 +11,11 @@ import io
 import json
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import accuracy
+import gh as gh_module
 from cosine import Cosine
 from fakes import FakeGitHub
 
@@ -228,6 +230,26 @@ class CompareTests(unittest.TestCase):
         got = self.compare()
         self.assertIn("Comparison unavailable", got.markdown)
         self.assertEqual(len(got.warnings), 1)
+
+    def test_a_missing_gh_costs_only_the_comparison(self) -> None:
+        # GhCli with no `gh` on the PATH: the lookup cannot start, which must not read as an unusable current snapshot.
+        missing = gh_module.GhCli("o/r", gh_module.subprocess_runner)
+        with unittest.mock.patch.dict("os.environ", {"PATH": str(self.dir / "empty-path")}):
+            got = accuracy.compare_with_baseline(
+                missing,
+                self.current,
+                workflow_file="nightly.yml",
+                branch="master",
+                job="accuracy",
+                artifact="e2e-cosines",
+                dest=self.dir / "prev",
+            )
+        self.assertIn("Comparison unavailable", got.markdown)
+
+    def test_a_file_error_in_the_lookup_costs_only_the_comparison(self) -> None:
+        with unittest.mock.patch.object(self.gh, "list_completed_runs", side_effect=PermissionError("denied")):
+            got = self.compare()
+        self.assertIn("Comparison unavailable", got.markdown)
 
     def test_unreadable_current_snapshot_raises(self) -> None:
         self.current.write_text("nope")

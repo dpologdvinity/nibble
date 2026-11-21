@@ -367,6 +367,26 @@ class CliTests(unittest.TestCase):
             self.assertEqual(self.run_cli(*base, "--outcome", "cancelled")[0], 0)
             self.assertEqual(out.read_text(), before)
 
+    def test_status_timed_out_writes_a_failure_row(self) -> None:
+        # A job that hit its timeout-minutes records no row itself (its steps see `cancelled`); report-job.yml writes
+        # this one instead, so a hang turns the badge red instead of leaving the last green row standing.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "rows.jsonl"
+            args = [
+                "status",
+                "--workflow",
+                "nightly",
+                "--job",
+                "trend-bench",
+                "--outcome",
+                "timed-out",
+                "--out",
+                str(out),
+            ]
+            self.assertEqual(self.run_cli(*args)[0], 0)
+            (row,) = [json.loads(line) for line in out.read_text().splitlines()]
+            self.assertEqual((row["metric"], row["key"], row["value"]), ("job_status", "nightly/trend-bench", 0.0))
+
     def test_status_cancelled_does_not_create_the_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "rows.jsonl"
