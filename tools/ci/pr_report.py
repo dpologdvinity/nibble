@@ -26,9 +26,10 @@ Schema 1 (`null` for a section means "skipped"; numbers are JSON numbers, 0.0 me
      "accuracy": {"status": "ran"|"skipped-cold-cache",
                   "rows": [{"key": "<model>/<prompt>", "base": x|null, "head": x|null}]}}   # rows only when "ran"
 
-A row's `base` or `head` is null for a case that exists on one side only (rendered "added" / "removed"; never both
-null). `key` is `[A-Za-z0-9._/+-]`, so no `@`, `#`, markup or whitespace reaches the comment: GitHub turns even a
-a backslash-escaped at-sign or hash mark into a mention or an issue link, so those characters are refused, not escaped.
+A row's `base` or `head` is null for a case that has a value on one side only (rendered "no base result" / "no head
+result", because a case that failed to produce a value is not necessarily gone; never both null). `key` is
+`[A-Za-z0-9._/+-]`, so no `@`, `#`, markup or whitespace reaches the comment: GitHub turns even a backslash-escaped
+at-sign or hash mark into a mention or an issue link, so those characters are refused, not escaped.
 
 `assemble` takes partial files: a JSON object holding some of the keys above (each key in at most one part), or a
 bare JSON list, which is the `perf` section exactly as `perf_ab.py summarize` writes it. `base_sha`, `head_sha`,
@@ -443,7 +444,8 @@ def _accuracy_lines(r: Report) -> list[str]:
     rows = acc["rows"]
     if not rows:
         return ["**Accuracy:** ran, no rows"]
-    changed = sum(1 for row in rows if row["base"] != row["head"])  # an added or removed case counts as changed
+    # A case with a value on one side only counts as changed.
+    changed = sum(1 for row in rows if row["base"] != row["head"])
     lines = ["**Accuracy:** min cosine against llama.cpp, per case", ""]
     if r["kernels_changed"]:
         lines.append(
@@ -456,9 +458,9 @@ def _accuracy_lines(r: Report) -> list[str]:
     for row in rows:
         base, head = row["base"], row["head"]
         if base is None:
-            delta = "added"
+            delta = "no base result"
         elif head is None:
-            delta = "removed"
+            delta = "no head result"
         else:
             delta = "—" if base == head else f"{head - base:+.6f}"
         cells = ["—" if v is None else f"{v:.6g}" for v in (base, head)]
@@ -542,7 +544,7 @@ def _snapshot(path: str) -> dict[str, float]:
 
     The file is `{"<model>/<prompt>": {"model", "prompt", "min_cos", "positions", "agree"}, ...}`; a `min_cos` that is
     not finite is written there as a string ("nan", "inf"). Only `min_cos` is used. A non-finite value (the schema
-    cannot carry one) leaves the case out, so it shows as added or removed instead of the report not being written at
+    cannot carry one) leaves the case out, so it shows as "no head result" instead of the report not being written at
     all; the workflow's strict `accuracy.py snapshot` gate on the head is what fails the job for it. Any other
     non-numeric value is a ValueError naming the case.
     """

@@ -393,7 +393,7 @@ class RenderTests(unittest.TestCase):
         )
         self.assertIsNone(re.search(r"[@#]\w", text), text)
 
-    def test_render_added_and_removed_cases(self) -> None:
+    def test_render_one_sided_cases_say_which_result_is_missing(self) -> None:
         d = make_dict()
         d["accuracy"]["rows"] = [
             {"key": "q4_0/new", "base": None, "head": 0.9},
@@ -405,8 +405,8 @@ class RenderTests(unittest.TestCase):
             for line in text.splitlines()
             if line.startswith("| q4")
         }
-        self.assertEqual(rows[r"q4\_0\/new"], ["—", "0.9", "added"])
-        self.assertEqual(rows[r"q4\_0\/gone"], ["0.8", "—", "removed"])
+        self.assertEqual(rows[r"q4\_0\/new"], ["—", "0.9", "no base result"])
+        self.assertEqual(rows[r"q4\_0\/gone"], ["0.8", "—", "no head result"])
         self.assertIn("❗ bit-identity: 2 cases changed", text)  # kernels_changed is true in the fixture
 
     def test_render_of_maximal_report_fits_a_comment(self) -> None:
@@ -600,8 +600,8 @@ class MainTests(unittest.TestCase):
             )
 
     def test_accuracy_subcommand_drops_non_finite_cosines_instead_of_failing(self) -> None:
-        # A head whose kernel produces NaN must still get a report (the case shows as removed); the workflow's own
-        # strict `accuracy.py snapshot` gate is what turns the job red.
+        # A head whose kernel produces NaN must still get a report (the case shows as "no head result"); the
+        # workflow's own strict `accuracy.py snapshot` gate is what turns the job red.
         with tempfile.TemporaryDirectory() as tmp:
             good = self.snapshot(tmp, "good.json", {"q4_0/a": 0.99, "q4_0/b": 0.9})
             out = Path(tmp, "part.json")
