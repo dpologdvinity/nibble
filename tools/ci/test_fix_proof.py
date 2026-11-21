@@ -931,6 +931,26 @@ class RunTests(unittest.TestCase):
         self.run_all()
         self.assertEqual(fix_proof.read_results(str(self.results), selection)[0], ["failed", "failed", "passed"])
 
+    def test_run_clears_earlier_evidence_of_every_selected_case(self) -> None:
+        # A results directory reused from an earlier run: case 1 left a crash behind. This run's budget stops before
+        # case 1, so nothing of the earlier run may stand for it (it would read as a crash and prove the fix).
+        selection = self.write_cases(["hangs", "passes"])
+        self.results.mkdir()
+        stale = {"started": True, "exit_code": None, "signal": 6, "timed_out": False, "unique": True}
+        (self.results / "1.status.json").write_text(json.dumps(stale), encoding="utf-8")
+        (self.results / "1.xml").write_text(
+            _junit(FAILED.replace("fails, with [x] &amp; &lt;b> &quot;q&quot;", "passes"))
+        )
+        (self.results / "1.log").write_text("old crash")
+        (self.results / "7.log").write_text("not a selected index")  # left alone
+        self.run_all("--budget", "3")
+        self.assertFalse((self.results / "1.status.json").exists())
+        self.assertFalse((self.results / "1.xml").exists())
+        self.assertFalse((self.results / "1.log").exists())
+        self.assertTrue((self.results / "7.log").exists())
+        results, _ = fix_proof.read_results(str(self.results), selection)
+        self.assertNotEqual(results[1], "failed")
+
     def test_run_files(self) -> None:
         self.write_cases(["passes", "aborts"])
         self.run_all()
