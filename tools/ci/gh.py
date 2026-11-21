@@ -55,8 +55,12 @@ class GitHub(Protocol):
         """Head commit of the latest successful run of `workflow_file` on `branch`, or None if there is none."""
         ...
 
-    def upsert_comment(self, number: int, marker: str, body: str) -> None:
-        """Edit the comment on `number` whose body contains `marker`; create one if there is none."""
+    def upsert_comment(self, number: int, marker: str, body: str, author: str | None = None) -> None:
+        """Edit the comment on `number` whose body contains `marker`; create one if there is none.
+
+        With `author` (a login such as "github-actions[bot]") only a comment written by that user counts as a match,
+        so an outside commenter who pastes the marker cannot make the caller edit or hide behind their comment.
+        """
         ...
 
     def pr_for_sha(self, sha: str) -> int | None:
@@ -154,10 +158,13 @@ class GhCli:
         runs = json.loads(self._get(path)).get("workflow_runs", [])
         return str(runs[0]["head_sha"]) if runs else None
 
-    def upsert_comment(self, number: int, marker: str, body: str) -> None:
+    def upsert_comment(self, number: int, marker: str, body: str, author: str | None = None) -> None:
         listing = _json_list(self._get(f"repos/{self.repo}/issues/{number}/comments?per_page=100", paginate=True))
         for existing in listing:
-            if marker in str(existing.get("body", "")):
+            # `user` is null for a deleted account; such a comment never matches an author filter.
+            user = existing.get("user")
+            login = user.get("login") if isinstance(user, dict) else None
+            if marker in str(existing.get("body", "")) and (author is None or login == author):
                 self._send("PATCH", f"repos/{self.repo}/issues/comments/{existing['id']}", {"body": body})
                 return
         self.comment(number, body)

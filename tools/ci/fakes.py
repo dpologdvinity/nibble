@@ -23,6 +23,10 @@ class FakeIssue:
     labels: list[str]
     comments: list[str] = field(default_factory=list)
     open: bool = True
+    # Login of each comment's author, parallel to `comments`; a comment without an entry was written by the bot.
+    comment_authors: list[str] = field(default_factory=list)
+    # A pull request shares the issue number space and comment API but is never returned by find_open_issue.
+    is_pull_request: bool = False
 
 
 class FakeGitHub:
@@ -34,6 +38,8 @@ class FakeGitHub:
     `artifacts` ((run id, artifact name) -> {file name: text}) and `branch_tips` (branch -> head sha).
     `fail_listing` and `fail_tip` make list_completed_runs and branch_tip raise GhError.
     """
+
+    BOT = "github-actions[bot]"
 
     def __init__(self) -> None:
         self.issues: dict[int, FakeIssue] = {}
@@ -50,7 +56,7 @@ class FakeGitHub:
 
     def find_open_issue(self, title: str) -> int | None:
         for number, issue in self.issues.items():
-            if issue.open and issue.title == title:
+            if issue.open and not issue.is_pull_request and issue.title == title:
                 return number
         return None
 
@@ -60,8 +66,24 @@ class FakeGitHub:
         self.issues[number] = FakeIssue(title, body, list(labels))
         return number
 
+    def add_pull_request(self, head_sha: str) -> int:
+        """Create an open pull request whose head commit is `head_sha` and return its number."""
+        number = self._next_number
+        self._next_number += 1
+        self.issues[number] = FakeIssue(f"pull request {number}", "", [], is_pull_request=True)
+        self.prs_by_sha[head_sha] = number
+        return number
+
+    def comment_as(self, number: int, author: str, body: str) -> None:
+        """Add a comment written by `author` (a login); `comment` writes as the bot."""
+        issue = self.issues[number]
+        # Pad first so a comment appended directly to `comments` by a test keeps its (bot) author slot.
+        issue.comment_authors.extend([self.BOT] * (len(issue.comments) - len(issue.comment_authors)))
+        issue.comments.append(body)
+        issue.comment_authors.append(author)
+
     def comment(self, number: int, body: str) -> None:
-        self.issues[number].comments.append(body)
+        self.comment_as(number, self.BOT, body)
 
     def close_issue(self, number: int) -> None:
         self.issues[number].open = False
@@ -69,13 +91,14 @@ class FakeGitHub:
     def last_green_sha(self, workflow_file: str, branch: str) -> str | None:
         return self.green_shas.get((workflow_file, branch))
 
-    def upsert_comment(self, number: int, marker: str, body: str) -> None:
-        comments = self.issues[number].comments
-        for i, existing in enumerate(comments):
-            if marker in existing:
-                comments[i] = body
+    def upsert_comment(self, number: int, marker: str, body: str, author: str | None = None) -> None:
+        issue = self.issues[number]
+        issue.comment_authors.extend([self.BOT] * (len(issue.comments) - len(issue.comment_authors)))
+        for i, existing in enumerate(issue.comments):
+            if marker in existing and (author is None or issue.comment_authors[i] == author):
+                issue.comments[i] = body
                 return
-        comments.append(body)
+        self.comment_as(number, author or self.BOT, body)
 
     def pr_for_sha(self, sha: str) -> int | None:
         return self.prs_by_sha.get(sha)
