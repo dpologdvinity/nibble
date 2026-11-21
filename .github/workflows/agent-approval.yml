@@ -1,20 +1,25 @@
-# Reason: branch protection on master asks for no approving review, so nothing stops an agent pull request (opened by
-# the Claude GitHub App, claude[bot], or labelled `agent`) from being merged without the owner. This check
-# (`agent-approval`) fails for such a pull request until an owner, member or collaborator has APPROVED its current head
-# commit, and passes at once for every other pull request. Making it a required check is what enforces the wait; that
-# is the owner's decision (Settings > Branches, or `gh api` on the branch protection), not something this file does.
-# Limit: a pull request can edit this workflow file, so it guards against the agent merging or the owner merging by
-# mistake, not against an agent that rewrites its own gate; the script is always read from the base branch.
+# Reason: branch protection on master asks for no approving review, so nothing stops a pull request opened by the
+# Claude GitHub App (author claude[bot]) from being merged without the owner. This check (`agent-approval`) fails for
+# such a pull request until an owner, member or collaborator has APPROVED its current head commit, and passes at once
+# for every other pull request. An owner's own pull request passes even with the `agent` label or Claude's commits (the
+# owner cannot approve their own pull request); automerge.yml keeps auto-merge off for those instead. Making this a
+# required check is what enforces the wait; that is the owner's decision (Settings > Branches, or `gh api` on the
+# branch protection), not something this file does.
+# Limits: required checks match by name, so a pull request that adds its own workflow with a job named `agent-approval`,
+# or edits this file (the pull_request_review half runs the pull request's copy), could report a pass. What stops the
+# Claude App from doing that is that it has no `workflows` permission (it cannot push .github/workflows/**) and no
+# `checks` or `statuses` write; the owner should confirm the installed App's permissions before relying on the gate.
+# The script itself is always read from the base branch.
 # Triggers: pull_request_target (so the workflow and script come from the base branch and fork pull requests are
-# covered) when a pull request is opened, pushed to, reopened, (un)labelled or made ready, and pull_request_review when
-# a review is submitted or dismissed. It checks out only the base commit and runs no pull request code.
+# covered) when a pull request is opened, pushed to, reopened or made ready, and pull_request_review when a review is
+# submitted or dismissed. It checks out only the base commit and runs no pull request code.
 # By hand: not runnable (it needs a pull request event); re-run the check from the pull request's Checks tab.
 # Logic: tools/ci/agent_gate.py (tests: tools/ci/test_agent_gate.py).
 name: agent-approval
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -45,9 +50,15 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -o pipefail
-          # Only the pull request that adds the script runs without it (its base does not have it yet).
-          if [ ! -f tools/ci/agent_gate.py ]; then
-            echo "::notice title=agent-approval::tools/ci/agent_gate.py is not on the base branch yet; nothing to check"
-            exit 0
+          # Fails closed. The one exception is the pull request that introduces the script: its base does not have it
+          # yet, so there is nothing to run, and it is recognised by adding the file itself.
+          if ! git cat-file -e "HEAD:tools/ci/agent_gate.py" 2>/dev/null; then
+            if gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[] | select(.status == "added") | .filename' \
+                 | grep -x 'tools/ci/agent_gate.py' > /dev/null; then
+              echo "::notice title=agent-approval::this pull request adds tools/ci/agent_gate.py; the base has no gate to run yet"
+              exit 0
+            fi
+            echo "::error title=agent-approval::tools/ci/agent_gate.py is missing on the base branch, so the gate cannot decide; failing"
+            exit 1
           fi
           python3 tools/ci/agent_gate.py --pr "$PR_NUMBER" | tee -a "$GITHUB_STEP_SUMMARY"

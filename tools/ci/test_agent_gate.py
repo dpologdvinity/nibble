@@ -1,8 +1,8 @@
 """Unit tests for tools/ci/agent_gate.py and the review calls of gh.GhCli, against fakes.FakeGitHub (no network).
 
 Run with: python -m unittest discover -s tools/ci -p 'test_*.py'
-They pin the `agent-approval` rules: a pull request by claude[bot] or labelled `agent` fails until a trusted person's
-approval of the current head commit stands; every other pull request passes at once.
+They pin the `agent-approval` rules: a pull request authored by claude[bot] fails until a trusted person's approval of
+the current head commit stands; every other pull request (an owner's, even one labelled `agent`) passes at once.
 """
 
 from __future__ import annotations
@@ -27,6 +27,15 @@ def agent_pr(gh_: FakeGitHub, *, author: str = "claude[bot]", labels: tuple[str,
     return gh_.add_pull_request(HEAD, author=author, labels=list(labels))
 
 
+def answering(text: str) -> gh.Runner:
+    """A gh.Runner that answers every call with `text`."""
+
+    def runner(argv: Sequence[str], stdin: str | None) -> str:
+        return text
+
+    return runner
+
+
 def approval(user: str = "dpologdvinity", *, sha: str = HEAD, assoc: str = "OWNER", state: str = "APPROVED") -> Review:
     """A review by `user` (association `assoc`) of commit `sha`."""
     return Review(user=user, state=state, commit_id=sha, association=assoc)
@@ -38,17 +47,25 @@ class VerdictTests(unittest.TestCase):
         number = agent_pr(fake, author="dpologdvinity", labels=("ci",))
         verdict = agent_gate.evaluate(fake, number)
         self.assertTrue(verdict.ok)
-        self.assertIn("not an agent", verdict.reason)
+        self.assertIn("not a pull request by the Claude app", verdict.reason)
 
-    def test_agent_label_without_review_fails(self) -> None:
+    def test_owner_authored_pull_request_with_the_agent_label_passes(self) -> None:
+        # The owner cannot approve their own pull request, so gating it would make it unmergeable; automerge.yml
+        # handles owner pull requests that Claude pushed to.
         fake = FakeGitHub()
         number = agent_pr(fake, author="dpologdvinity")
-        self.assertFalse(agent_gate.evaluate(fake, number).ok)
+        verdict = agent_gate.evaluate(fake, number)
+        self.assertTrue(verdict.ok)
+        fake.reviews[number] = [approval("dpologdvinity")]
+        self.assertTrue(agent_gate.evaluate(fake, number).ok)
 
-    def test_claude_bot_author_without_label_fails(self) -> None:
-        fake = FakeGitHub()
-        number = agent_pr(fake, labels=())
-        self.assertFalse(agent_gate.evaluate(fake, number).ok)
+    def test_claude_authored_pull_request_stays_red_without_an_approval(self) -> None:
+        for labels in ((), ("agent",)):
+            with self.subTest(labels=labels):
+                fake = FakeGitHub()
+                number = agent_pr(fake, labels=labels)
+                fake.reviews[number] = [approval("someone", assoc="NONE"), approval(state="COMMENTED")]
+                self.assertFalse(agent_gate.evaluate(fake, number).ok)
 
     def test_owner_approval_of_the_head_passes(self) -> None:
         fake = FakeGitHub()
@@ -104,17 +121,16 @@ class VerdictTests(unittest.TestCase):
         fake.reviews[number] = [approval("a"), approval("b", state="CHANGES_REQUESTED")]
         self.assertTrue(agent_gate.evaluate(fake, number).ok)
 
-    def test_the_author_cannot_approve_their_own_pull_request(self) -> None:
-        fake = FakeGitHub()
-        number = agent_pr(fake, author="dpologdvinity")
-        fake.reviews[number] = [approval("dpologdvinity")]
-        self.assertFalse(agent_gate.evaluate(fake, number).ok)
-
     def test_a_bot_reviewer_does_not_count(self) -> None:
         fake = FakeGitHub()
         number = agent_pr(fake)
         fake.reviews[number] = [approval("claude[bot]", assoc="COLLABORATOR")]
         self.assertFalse(agent_gate.evaluate(fake, number).ok)
+
+    def test_the_author_does_not_approve_their_own_pull_request(self) -> None:
+        # An approval by the author's own login never counts (GitHub forbids it; a bot author is the case that matters).
+        reviews = [approval("claude[bot]", assoc="COLLABORATOR"), approval("Claude[BOT]", assoc="COLLABORATOR")]
+        self.assertEqual(agent_gate.standing_approvals(reviews, HEAD, "claude[bot]"), [])
 
     def test_login_comparison_ignores_case(self) -> None:
         fake = FakeGitHub()
@@ -149,6 +165,16 @@ class MainTests(unittest.TestCase):
 
 
 class GhCliReviewTests(unittest.TestCase):
+    def test_pull_request_without_a_head_raises_gherror(self) -> None:
+        bodies: list[dict[str, object]] = [
+            {"user": {"login": "x"}, "labels": [], "head": None},
+            {"user": {"login": "x"}, "labels": []},
+            {"user": {"login": "x"}, "labels": [], "head": {}},
+        ]
+        for body in bodies:
+            with self.subTest(body=body), self.assertRaises(gh.GhError):
+                gh.GhCli("o/r", answering(json.dumps(body))).pull_request(7)
+
     def test_pull_request_reads_author_labels_and_head(self) -> None:
         body = {"user": {"login": "claude[bot]"}, "labels": [{"name": "agent"}], "head": {"sha": HEAD}}
         calls: list[list[str]] = []

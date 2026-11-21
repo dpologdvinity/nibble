@@ -47,7 +47,8 @@ class RunInfo:
 
 @dataclass(frozen=True)
 class PullRequest:
-    """What the agent gate needs to know about a pull request: its author's login, its label names and its head SHA."""
+    """What the agent gate needs to know about a pull request: its author's login, its label names and its head SHA
+    (`pull_request` raises GhError when the response has no head commit)."""
 
     author: str
     labels: list[str]
@@ -294,10 +295,14 @@ class GhCli:
         data = json.loads(self._get(f"repos/{self.repo}/pulls/{number}"))
         user = data.get("user")
         labels = [str(label["name"]) for label in data.get("labels", []) if isinstance(label, dict) and "name" in label]
+        head = data.get("head")
+        sha = head.get("sha") if isinstance(head, dict) else None
+        if not sha:
+            raise GhError(f"pull request {number} has no head commit in the API response")
         return PullRequest(
             author=str(user.get("login", "")) if isinstance(user, dict) else "",
             labels=labels,
-            head_sha=str(data.get("head", {}).get("sha", "")),
+            head_sha=str(sha),
         )
 
     def list_reviews(self, number: int) -> list[Review]:

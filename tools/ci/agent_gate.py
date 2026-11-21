@@ -1,10 +1,12 @@
 """The `agent-approval` check: hold agent pull requests until a trusted person has approved the current commit.
 
-Branch protection on `master` asks for no approving review, so nothing else stops an agent pull request (opened by the
-Claude GitHub App, `claude[bot]`, or carrying the `agent` label) from being merged without the owner. Making the
-`agent-approval` check required fixes that. For such a pull request this script fails until an APPROVED review stands
-from an OWNER, MEMBER or COLLABORATOR on the pull request's current head commit; for every other pull request it passes
-at once.
+Branch protection on `master` asks for no approving review, so nothing else stops a pull request opened by the Claude
+GitHub App (`claude[bot]`) from being merged without the owner. Making the `agent-approval` check required fixes that.
+For a pull request authored by `claude[bot]` this script fails until an APPROVED review stands from an OWNER, MEMBER or
+COLLABORATOR on the pull request's current head commit; for every other pull request it passes at once. That includes
+an owner's pull request that carries the `agent` label or that Claude pushed to: the owner cannot approve their own
+pull request, so gating it would make it unmergeable, and automerge.yml turns auto-merge off for such a pull request
+instead (the owner merges it by hand after reading it).
 
 Which reviews stand: for each reviewer only the latest APPROVED, CHANGES_REQUESTED or DISMISSED review counts (a plain
 comment changes nothing), it must be an approval of the head commit, and the reviewer must not be the pull request's
@@ -28,7 +30,6 @@ from gh import GitHub, Review
 
 # Login of the Claude GitHub App as the REST API reports pull request authors.
 AGENT_BOT = "claude[bot]"
-AGENT_LABEL = "agent"
 # `author_association` values whose approval counts.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 # Review states that change a reviewer's standing; COMMENTED and PENDING do not.
@@ -63,16 +64,15 @@ def standing_approvals(reviews: Sequence[Review], head_sha: str, author: str) ->
 def evaluate(gh: GitHub, number: int) -> Verdict:
     """Decide the `agent-approval` check for pull request `number` (reads the pull request and its reviews)."""
     pr = gh.pull_request(number)
-    is_agent = pr.author.lower() == AGENT_BOT or AGENT_LABEL in pr.labels
-    if not is_agent:
-        return Verdict(True, "not an agent pull request")
+    if pr.author.lower() != AGENT_BOT:
+        return Verdict(True, "not a pull request by the Claude app")
     approvers = standing_approvals(gh.list_reviews(number), pr.head_sha, pr.author)
     if approvers:
         return Verdict(True, f"approved on the current head by {', '.join(sorted(approvers))}")
     return Verdict(
         False,
-        "agent pull request: waiting for an approving review by the owner, a member or a collaborator on the current "
-        "head commit (a new push withdraws earlier approvals)",
+        "pull request by the Claude app: waiting for an approving review by the owner, a member or a collaborator on "
+        "the current head commit (a new push withdraws earlier approvals)",
     )
 
 
