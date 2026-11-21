@@ -120,17 +120,31 @@ class OtherCallTests(unittest.TestCase):
         runner = ScriptedRunner({"runs": json.dumps({"workflow_runs": []})})
         self.assertIsNone(gh.GhCli(REPO, runner).last_green_sha("nightly.yml", "master"))
 
-    def test_pr_for_sha_wants_open_pr_with_that_head(self) -> None:
-        prs = json.dumps(
-            [
-                {"number": 1, "state": "closed", "head": {"sha": "abc"}},
-                {"number": 2, "state": "open", "head": {"sha": "other"}},
-                {"number": 3, "state": "open", "head": {"sha": "abc"}},
-            ]
+    def test_last_green_sha_encodes_branch_and_workflow_path(self) -> None:
+        runner = ScriptedRunner({"runs": json.dumps({"workflow_runs": [{"head_sha": "abc123"}]})})
+        gh.GhCli(REPO, runner).last_green_sha("my flow.yml", "release/v1#hotfix")
+        path = runner.calls[0][0][-1]
+        # The '#' must not start a URL fragment that cuts off the status filter.
+        self.assertEqual(
+            path,
+            f"repos/{REPO}/actions/workflows/my%20flow.yml/runs?branch=release%2Fv1%23hotfix&status=success&per_page=1",
         )
-        client = gh.GhCli(REPO, ScriptedRunner({"commits/abc/pulls": prs}))
+
+    def test_pr_for_sha_lists_open_pulls_and_matches_head(self) -> None:
+        page1 = json.dumps([{"number": 2, "head": {"sha": "other"}}])
+        page2 = json.dumps([{"number": 3, "head": {"sha": "abc"}}])
+        runner = ScriptedRunner({"pulls?state=open&per_page=100": page1 + "\n" + page2})
+        client = gh.GhCli(REPO, runner)
         self.assertEqual(client.pr_for_sha("abc"), 3)
         self.assertIsNone(client.pr_for_sha("zzz"))
+        argv = runner.calls[0][0]
+        self.assertIn("--paginate", argv)
+        self.assertEqual(argv[-1], f"repos/{REPO}/pulls?state=open&per_page=100")
+
+    def test_pr_for_sha_ignores_sha_that_only_heads_a_merged_pr(self) -> None:
+        # The open-pulls listing no longer contains the merged PR, so its old head SHA matches nothing.
+        runner = ScriptedRunner({"pulls?state=open": json.dumps([{"number": 7, "head": {"sha": "live"}}])})
+        self.assertIsNone(gh.GhCli(REPO, runner).pr_for_sha("merged-head"))
 
     def test_dispatch_posts_ref_and_inputs(self) -> None:
         runner = ScriptedRunner()

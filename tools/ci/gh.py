@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
@@ -129,7 +130,9 @@ class GhCli:
         self._send("PATCH", f"repos/{self.repo}/issues/{number}", {"state": "closed", "state_reason": "completed"})
 
     def last_green_sha(self, workflow_file: str, branch: str) -> str | None:
-        path = f"repos/{self.repo}/actions/workflows/{workflow_file}/runs?branch={branch}&status=success&per_page=1"
+        # Percent-encode every dynamic piece: a branch like "release/v1#hotfix" would otherwise end the query at '#'.
+        query = urllib.parse.urlencode({"branch": branch, "status": "success", "per_page": 1})
+        path = f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/runs?{query}"
         runs = json.loads(self._get(path)).get("workflow_runs", [])
         return str(runs[0]["head_sha"]) if runs else None
 
@@ -142,8 +145,10 @@ class GhCli:
         self.comment(number, body)
 
     def pr_for_sha(self, sha: str) -> int | None:
-        for pr in _json_list(self._get(f"repos/{self.repo}/commits/{sha}/pulls")):
-            if pr.get("state") == "open" and pr.get("head", {}).get("sha") == sha:
+        # `commits/{sha}/pulls` also lists merged and closed PRs that once contained the commit, so list the open pulls
+        # and compare head.sha instead.
+        for pr in _json_list(self._get(f"repos/{self.repo}/pulls?state=open&per_page=100", paginate=True)):
+            if pr.get("head", {}).get("sha") == sha:
                 return int(pr["number"])
         return None
 
