@@ -1,6 +1,6 @@
 # Reason: pr-report.yml measures a pull request with the pull request's own code, so it has a read-only token and no
 # secrets and cannot comment. This workflow is the other half of that trust split: it starts from `workflow_run` when
-# `pr-report` completes, holds the only write token (pull-requests: write, actions: read), and never checks out or runs
+# `pr-report` completes, holds the only write token (the job has pull-requests: write and actions: read, plus contents: read), and never checks out or runs
 # pull request code. It checks out the default branch for tools/ci, downloads the `pr-report` artifact of the
 # triggering run, and `tools/ci/pr_report.py post` validates that untrusted JSON strictly, finds the pull request
 # through the API from the run's head SHA (never from the artifact) and renders Markdown from validated fields only.
@@ -18,9 +18,7 @@ on:
     workflows: [pr-report]
     types: [completed]
 
-permissions:
-  pull-requests: write
-  actions: read
+permissions: {}
 
 # Two runs for the same commit would race to create the comment; the second waits and then edits it.
 concurrency:
@@ -33,6 +31,10 @@ jobs:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read  # checkout of the default branch
+      pull-requests: write  # the one comment
+      actions: read  # list and download the triggering run's artifact
     steps:
       # No `ref:`: a workflow_run checks out the default branch, which is what must supply tools/ci here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,13 +59,13 @@ jobs:
             echo "::notice title=pr-report-comment::the triggering run left no pr-report artifact (cancelled, or a job failed before assemble); nothing to post"
             echo "No pr-report artifact on run $RUN_ID: nothing posted." >> "$GITHUB_STEP_SUMMARY"
           fi
-      # Into its own empty directory; the artifact is untrusted data and is only ever read as JSON by pr_report.py.
+      # Into its own empty directory outside the checkout; the artifact is untrusted data and is only ever read as JSON by pr_report.py.
       - name: Download the report
         if: steps.artifact.outputs.found == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pr-report
-          path: report
+          path: ${{ runner.temp }}/pr-report
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
       - name: Post the comment
@@ -71,4 +73,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: python tools/ci/pr_report.py post report/pr-report.json --head-sha "$HEAD_SHA"
+          REPORT_DIR: ${{ runner.temp }}/pr-report
+        run: python tools/ci/pr_report.py post "$REPORT_DIR/pr-report.json" --head-sha "$HEAD_SHA"
