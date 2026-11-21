@@ -559,6 +559,40 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertEqual(stdout.splitlines(), ["fix=false", "code=false"])
 
+    def moved_base(self) -> tuple[str, str, str]:
+        """(merge base, base branch tip, head) where the base branch gained a test case, a deletion and a src change."""
+        src = 'TEST_CASE("keeps") {\n  CHECK(true);\n}\n\nTEST_CASE("master drops") {\n  CHECK(true);\n}\n'
+        merge_base = self.commit({"tests/test_x.cpp": src, "src/a.cpp": "int a;\n"}, "feat: base")
+        git(self.repo, "checkout", "-q", "-b", "pr")
+        head_src = src.replace("CHECK(true);\n}\n\nTEST_CASE", "CHECK(true);\n  CHECK(1);\n}\n\nTEST_CASE", 1)
+        head = self.commit({"tests/test_x.cpp": head_src}, "fix(docs): only a test")
+        git(self.repo, "checkout", "-q", "master")
+        master_src = src.replace('TEST_CASE("master drops") {\n  CHECK(true);\n}\n', 'TEST_CASE("master adds") {\n}\n')
+        tip = self.commit({"tests/test_x.cpp": master_src, "src/a.cpp": "int moved;\n"}, "feat: master moved on")
+        return merge_base, tip, head
+
+    def test_select_diffs_against_the_merge_base_not_the_base_tip(self) -> None:
+        merge_base, tip, head = self.moved_base()
+        outs = []
+        for base in (merge_base, tip):
+            out = Path(self.tmp.name, f"{base[:7]}.json")
+            self.assertEqual(
+                self.run_main("select", "--repo", str(self.repo), "--base", base, "--head", head, "--out", str(out))[0],
+                0,
+            )
+            outs.append(json.loads(out.read_text(encoding="utf-8")))
+        self.assertEqual([c["name"] for c in outs[0]["cases"]], ["keeps"])
+        self.assertEqual(outs[0]["unresolved"], [])
+        self.assertEqual(outs[1], outs[0])  # master's added case and deleted case do not leak into the PR
+
+    def test_gate_diffs_against_the_merge_base_not_the_base_tip(self) -> None:
+        merge_base, tip, head = self.moved_base()
+        for base in (merge_base, tip):
+            _, stdout = self.run_main("gate", "--repo", str(self.repo), "--title", "x", "--base", base, "--head", head)
+            self.assertEqual(
+                stdout.splitlines(), ["fix=true", "code=false"], base
+            )  # master's src change is not the PR's
+
     def test_select_refuses_an_option_looking_revision(self) -> None:
         code, _ = self.run_main("select", "--repo", str(self.repo), "--base=--output=x", "--head", "HEAD", "--out", "o")
         self.assertEqual(code, 2)
