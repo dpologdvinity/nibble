@@ -41,7 +41,9 @@ usage (each appends to --out; --source is nightly|ci|portability, default nightl
     dashboard_data.py from-binary-size build/nibble --out rows.jsonl
     dashboard_data.py status --workflow nightly --job fuzz_gguf --outcome success|failure|cancelled --out rows.jsonl
         (cancelled writes nothing)
-    dashboard_data.py merge EXISTING.jsonl NEW.jsonl... --out merged.jsonl     (EXISTING may be missing)
+    dashboard_data.py merge EXISTING.jsonl NEW.jsonl... --out merged.jsonl [--skip-bad]   (EXISTING may be missing)
+        (a NEW file with an invalid row fails the command, or with --skip-bad is skipped whole with a `::warning`
+        and a job-summary note, and the other files still merge)
 Stdlib only. Exit status is 0 on success and 1 (message on stderr) for input that is not what it should be.
 """
 
@@ -401,25 +403,58 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--outcome", required=True, choices=["success", "failure", "cancelled"])
     merge_cmd = command("merge", "existing")
     merge_cmd.add_argument("new", type=Path, nargs="+")
+    merge_cmd.add_argument(
+        "--skip-bad",
+        action="store_true",
+        help="skip a NEW file that is invalid as a whole (warning) instead of failing",
+    )
     return parser
 
 
-def _merge_files(existing: Path, new: Sequence[Path], out: Path) -> None:
-    """Write the merge of `existing` (a missing file counts as empty) and every row of the `new` files to `out`."""
+def _read_rows(path: Path) -> list[Row]:
+    """The validated rows of the JSONL file `path`; ValueError (naming the file, the line and the field) if any line is
+    not a valid row, OSError if it cannot be read. All or nothing: a bad line fails the whole file."""
+    rows: list[Row] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+            if not isinstance(obj, dict):
+                raise ValueError("not a JSON object")
+            rows.append(validate(obj))
+        except ValueError as e:
+            raise ValueError(f"{path.name} line {number}: {e}") from e
+    return rows
+
+
+def _merge_files(
+    existing: Path, new: Sequence[Path], out: Path, skip_bad: bool = False, env: Mapping[str, str] | None = None
+) -> None:
+    """Write the merge of `existing` (a missing file counts as empty) and every row of the `new` files to `out`.
+
+    A new file with an invalid row (or an unreadable one) raises ValueError/OSError, unless `skip_bad`: then that file
+    is skipped as a whole (none of its rows are merged) and reported as a `::warning` on stderr naming the path and the
+    reason and, when GITHUB_STEP_SUMMARY is set in `env`, in the job summary; the other files are merged. `existing` is
+    never skipped: a broken data file is a real error.
+    """
     old_text = existing.read_text(encoding="utf-8") if existing.exists() else ""
     rows: list[Row] = []
+    skipped: list[str] = []
     for path in new:
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except ValueError as e:
-                raise ValueError(f"{path.name} line {number}: not JSON ({e})") from e
-            if not isinstance(obj, dict):
-                raise ValueError(f"{path.name} line {number}: not a JSON object")
-            rows.append(obj)
+        try:
+            rows.extend(_read_rows(path))
+        except (ValueError, OSError) as e:
+            if not skip_bad:
+                raise
+            skipped.append(f"{path}: {e}")
     out.write_text(merge(old_text, rows), encoding="utf-8")
+    for message in skipped:
+        print(f"::warning::dashboard_data: skipped rows file {message}", file=sys.stderr)
+    summary = (env or {}).get("GITHUB_STEP_SUMMARY")
+    if skipped and summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(f"### Dashboard: {len(skipped)} rows file(s) skipped\n\n" + "".join(f"- `{m}`\n" for m in skipped))
 
 
 def main(
@@ -434,7 +469,7 @@ def main(
     args = _parser().parse_args(argv)
     try:
         if args.command == "merge":
-            _merge_files(args.existing, args.new, args.out)
+            _merge_files(args.existing, args.new, args.out, args.skip_bad, os.environ if env is None else env)
             return 0
         if args.command == "status" and args.outcome == "cancelled":
             return 0  # a cancelled job says nothing about the code; leave the file alone

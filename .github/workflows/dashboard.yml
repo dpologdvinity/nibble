@@ -7,8 +7,10 @@
 # By hand (the workflow file must be on the default branch): `gh workflow run dashboard.yml` sweeps the last week of runs
 # (below) and re-renders the site.
 # Trust: a workflow_run workflow has a write token, so it never checks out or runs code from the run that triggered it.
-# It runs master's tools and treats the downloaded artifacts as data: `dashboard_data.py merge` validates every row, and
-# only runs of this repository started by schedule, push or workflow_dispatch are accepted (not pull requests); the
+# It runs master's tools and treats the downloaded artifacts as data: `dashboard_data.py merge` validates every row (a
+# file with an invalid row is skipped whole and named in the job summary, so one bad artifact cannot stall the
+# dashboard), and only runs of this repository started by schedule, push or workflow_dispatch are accepted (not pull
+# requests); the
 # sweep (tools/ci/dashboard_sweep.py) applies the same filter.
 # Concurrency: runs queue one at a time and are never cancelled, but GitHub keeps only one *pending* run per group, so a
 # third completion arriving while one run is going and another is waiting replaces the waiting one. Nothing is lost
@@ -121,7 +123,7 @@ jobs:
             fi
             mkdir -p data/data
             if [[ ${#new[@]} -gt 0 ]]; then
-              python code/tools/ci/dashboard_data.py merge data/data/rows.jsonl "${new[@]}" --out data/data/rows.jsonl
+              python code/tools/ci/dashboard_data.py merge data/data/rows.jsonl "${new[@]}" --out data/data/rows.jsonl --skip-bad
               git -C data add data/rows.jsonl
               if ! git -C data diff --cached --quiet; then
                 git -C data commit --quiet -m "chore(dashboard): rows from run ${SOURCE_RUN:-$GITHUB_RUN_ID}"

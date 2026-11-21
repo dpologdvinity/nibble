@@ -426,6 +426,60 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("dashboard_data:", err)
 
+    def merge_with_skip_bad(self, d: Path, *names: str, summary: Path | None = None) -> tuple[int, str]:
+        """Run `merge --skip-bad` over files in `d` (an empty existing file first); return (exit code, stderr)."""
+        (d / "existing.jsonl").write_text("")
+        env = dict(self.ENV) | ({"GITHUB_STEP_SUMMARY": str(summary)} if summary else {})
+        err = io.StringIO()
+        argv = [
+            "merge",
+            str(d / "existing.jsonl"),
+            *(str(d / n) for n in names),
+            "--out",
+            str(d / "o.jsonl"),
+            "--skip-bad",
+        ]
+        with contextlib.redirect_stderr(err):
+            code = dashboard_data.main(argv, env=env, cpuinfo=CPUINFO_X86, now=self.NOW)
+        return code, err.getvalue()
+
+    def test_merge_cli_skip_bad_merges_the_good_file_and_warns_about_the_bad_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "good.jsonl").write_text(dashboard_data.merge("", [good_row(key="good")]))
+            # The bad file starts with a valid row: it must not be merged partially.
+            (d / "9-dashboard-rows-bad.jsonl").write_text(json.dumps(good_row(key="half")) + '\n{"schema":1}\n')
+            summary = d / "summary.md"
+            code, err = self.merge_with_skip_bad(d, "good.jsonl", "9-dashboard-rows-bad.jsonl", summary=summary)
+            self.assertEqual(code, 0)
+            self.assertEqual([json.loads(x)["key"] for x in (d / "o.jsonl").read_text().splitlines()], ["good"])
+            self.assertIn("::warning", err)
+            self.assertIn("9-dashboard-rows-bad.jsonl", err)
+            self.assertIn("line 2", err)
+            self.assertIn("9-dashboard-rows-bad.jsonl", summary.read_text())
+
+    def test_merge_cli_skip_bad_with_only_bad_files_merges_nothing_and_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "a.jsonl").write_text("not json\n")
+            (d / "b.jsonl").write_bytes(b"\xff\xfe\n")  # not even UTF-8
+            code, err = self.merge_with_skip_bad(d, "a.jsonl", "b.jsonl", "missing.jsonl")
+            self.assertEqual(code, 0)
+            self.assertEqual((d / "o.jsonl").read_text(), "")
+            self.assertEqual(err.count("::warning"), 3)
+
+    def test_merge_cli_skip_bad_still_fails_on_a_broken_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "new.jsonl").write_text(dashboard_data.merge("", [good_row()]))
+            code, _ = self.merge_with_skip_bad(d, "new.jsonl")  # baseline: fine
+            self.assertEqual(code, 0)
+            (d / "existing.jsonl").write_text("garbage\n")
+            err = io.StringIO()
+            argv = ["merge", str(d / "existing.jsonl"), str(d / "new.jsonl"), "--out", str(d / "o.jsonl"), "--skip-bad"]
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(dashboard_data.main(argv, env=self.ENV, cpuinfo=CPUINFO_X86, now=self.NOW), 1)
+
     def test_bad_input_exits_1_with_a_message(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "fuzz.log"
