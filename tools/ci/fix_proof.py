@@ -1,0 +1,699 @@
+"""Bug-fix proof: pick the Catch2 test cases a pull request added or changed, and judge how they ran on the base.
+
+nibble requires that a bug fix comes with a test that fails without the fix. CI checks that in three steps:
+
+1. `gate` says whether the pull request is a fix (`fix:` title or commit subject) that touches code
+   (`src/`, `include/`, `cli/`). Other pull requests are not checked.
+2. `select` reads `git diff -U0 base head`, maps every added or modified line of `tests/*.cpp` to the TEST_CASE that
+   contains it, and writes `cases.json`. The workflow then builds the merge base with the PR's tests applied, runs
+   each selected case there (`specs` prints one Catch2 test spec per case) and keeps the JUnit XML it writes.
+3. `classify` reads that XML and judges (R9 of the plan): the fix is **proven** when at least one selected case fails
+   on the base. Cases that already pass are only listed. A base that does not compile with the new tests also counts
+   as proven (the tests use something the fix adds).
+
+What can never be proven, by design (the "unresolved" and "not-runnable" paths):
+
+* A TEST_CASE whose name is not one plain string literal (the `E2E_CASE` macro in tests/test_e2e_golden.cpp builds
+  its names with the preprocessor) cannot be named to Catch2, so a change to it is listed as unresolved.
+* A case that deletes a whole TEST_CASE selects nothing and is listed as `deleted: <name>`.
+* A case that SKIPs on the base (the end-to-end cases without models) or leaves no result is not-runnable.
+* Edits to tests/*.cpp files that neither nibble_tests nor nibble_alloc_tests builds (simd_helpers_test.cpp and so on)
+  are listed as unresolved.
+
+Catch2 facts the code relies on (checked against Catch2 v3.16.1, the version CMakeLists.txt pins, by running real
+binaries with `-r junit`):
+
+* A test spec treats `,` `[` `]` `"` `~` `*` and `\\` specially; each needs a backslash (`catch_spec`). A leading or
+  trailing `*` stays a wildcard even when escaped, so such a name also matches other cases; results are therefore
+  looked up by exact name. A name starting with `exclude:` turns the spec into an exclusion that runs everything
+  else, so `test_cases` reports such a name as unresolved.
+* Spec matching ignores case; the JUnit `<testcase name>` is the exact name. A section is its own `<testcase>` named
+  `<case>/<section>`; the case's own element exists only if it made an assertion directly. Only the first failing
+  assertion of a section is written, as `<failure>` (or `<error>` for an exception or a caught signal such as
+  SIGABRT), and a SKIP is `<skipped type="SKIP">`. A `[!mayfail]` case that fails gets both a `<skipped>` and a
+  `<failure>`; it is reported as skipped, never as failed.
+* A process that dies without the XML being written (a sanitizer abort, for example) leaves no usable file, which
+  reads as "missing" and so never as proven.
+
+usage:
+    python tools/ci/fix_proof.py gate --title "$PR_TITLE" --base "$BASE_SHA" --head "$HEAD_SHA"
+        prints `fix=true|false` and `code=true|false` (`>> "$GITHUB_OUTPUT"`).
+    python tools/ci/fix_proof.py select --base "$BASE_SHA" --head "$HEAD_SHA" --out cases.json
+        `--base` is the merge base. Run in a git checkout (or pass `--repo DIR`). Prints `selected=<n>`.
+    python tools/ci/fix_proof.py specs --cases cases.json
+        one line per selected case: `<index>\\t<binary>\\t<catch2 test spec>` (tab separated); run
+        `build/<binary> "<spec>" -r junit -o results/case-<index>.xml` for each.
+    python tools/ci/fix_proof.py classify --cases cases.json --results-dir results --base-compiled true|false \\
+        [--override] --summary "$GITHUB_STEP_SUMMARY"
+        reads every `*.xml` under --results-dir (one file per case or per binary, either works), appends a Markdown
+        summary to --summary, prints `outcome=<outcome>` and exits 1 for no-test (unless --override, which the
+        workflow sets for the `no-test-needed` label) and does-not-reproduce, else 0. Other errors exit 2.
+
+cases.json is `{"cases": [{"file", "name", "start", "end", "binary", "spec"}...], "unresolved": ["..."]}`; only
+`file`, `name`, `start`, `end`, `binary` and `unresolved` are read back (the spec is recomputed).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Literal, NamedTuple
+
+# Conventional Commit `fix` type (with optional scope and `!`), as the commit-lint and the PR title check accept it.
+FIX_RE = r"^fix(\([a-z0-9_.,-]+\))?!?: "
+# A fix that changes none of these directories changes no behaviour of the engine, so it needs no reproducing test.
+CODE_PREFIXES = ("src/", "include/", "cli/")
+
+TESTS_BINARY = "nibble_tests"
+ALLOC_BINARY = "nibble_alloc_tests"
+# `tests/*.cpp` directly under tests/ (the fuzz drivers in tests/fuzz are not Catch2 binaries).
+_TEST_FILE = re.compile(r"^tests/[^/]+\.cpp$")
+MACRO_BUILT = "<macro-built>"
+MAX_XML_BYTES = 20_000_000
+
+
+class Case(NamedTuple):
+    """One Catch2 TEST_CASE: `name` is None when its first argument is not one plain string literal.
+
+    `start` is the line of the TEST_CASE token and `end` the line before the next TEST_CASE (or the last line of the
+    file), both 1-based and inclusive. `binary` is the test executable that registers the case: nibble_tests, or
+    nibble_alloc_tests for tests/alloc_tests.cpp.
+    """
+
+    file: str
+    name: str | None
+    start: int
+    end: int
+    binary: str
+
+
+class Selection(NamedTuple):
+    """The cases a pull request touched (all with a resolved name) and what could not be turned into a case."""
+
+    cases: list[Case]
+    unresolved: list[str]
+
+
+CaseResult = Literal["passed", "failed", "skipped", "missing"]
+Outcome = Literal["proven", "proven-base-does-not-compile", "no-test", "does-not-reproduce", "not-runnable"]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Pull request gate
+
+
+def is_fix(title: str, subjects: Sequence[str]) -> bool:
+    """True when the pull request title or any commit subject is a Conventional Commit `fix`."""
+    return any(re.match(FIX_RE, text) for text in (title, *subjects))
+
+
+def touches_code(paths: Sequence[str]) -> bool:
+    """True when any changed path is under src/, include/ or cli/."""
+    return any(p.startswith(CODE_PREFIXES) for p in paths)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Finding TEST_CASE headers in C++ source
+
+
+def _scan(source: str) -> tuple[str, str]:
+    """Return (no_comments, skeleton): `source` with comments blanked, and with string/char contents blanked too.
+
+    Both keep the length and every newline, so offsets and line numbers carry over. The skeleton keeps the quote
+    characters, which is what lets the header search ignore a `TEST_CASE(` that sits in a comment or in a string.
+    Understands raw strings, char literals and digit separators (`1'000`); it does not run the preprocessor.
+    """
+    n = len(source)
+    plain = list(source)  # comments blanked
+    skel = list(source)  # comments and literal contents blanked
+
+    def blank(buf: list[str], a: int, b: int) -> None:
+        for k in range(a, b):
+            if buf[k] != "\n":
+                buf[k] = " "
+
+    i = 0
+    while i < n:
+        c = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = source.find("\n", i)
+            j = n if j < 0 else j
+            blank(plain, i, j)
+            blank(skel, i, j)
+            i = j
+        elif c == "/" and nxt == "*":
+            j = source.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            blank(plain, i, j)
+            blank(skel, i, j)
+            i = j
+        elif c == '"':
+            j = _string_end(source, i)
+            blank(skel, i + 1, max(i + 1, j - 1))
+            i = j
+        elif c == "'":
+            if _is_digit_separator(source, i):
+                i += 1
+                continue
+            j = i + 1
+            while j < n and source[j] != "'" and source[j] != "\n":
+                j += 2 if source[j] == "\\" else 1
+            j = min(n, j + 1)
+            blank(skel, i + 1, max(i + 1, j - 1))
+            i = j
+        else:
+            i += 1
+    return "".join(plain), "".join(skel)
+
+
+def _is_digit_separator(source: str, i: int) -> bool:
+    """True when the `'` at `i` sits inside a numeric literal such as `20'000'000`."""
+    j = i
+    while j > 0 and (source[j - 1].isalnum() or source[j - 1] in "_.'"):
+        j -= 1
+    return j < i and source[j].isdigit()
+
+
+def _string_end(source: str, i: int) -> int:
+    """Offset just past the string literal whose opening quote is at `i` (the end of the source if unterminated)."""
+    n = len(source)
+    k = i
+    while k > 0 and (source[k - 1].isalnum() or source[k - 1] == "_"):
+        k -= 1
+    if source[k:i] in ("R", "u8R", "uR", "UR", "LR"):  # raw string: R"delim( ... )delim"
+        paren = source.find("(", i)
+        if paren >= 0:
+            end = source.find(")" + source[i + 1 : paren] + '"', paren)
+            return n if end < 0 else end + (paren - i - 1) + 2
+        return n
+    j = i + 1
+    while j < n and source[j] != '"' and source[j] != "\n":
+        j += 2 if source[j] == "\\" else 1
+    return min(n, j + 1)
+
+
+# Every Catch2 (or project) macro whose name contains TEST_CASE or SCENARIO. Only the exact name TEST_CASE has its
+# name read; the others (TEST_CASE_METHOD, TEMPLATE_TEST_CASE, SCENARIO, ...) are cases with an unresolved name.
+_HEADER = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z0-9_]*(?:TEST_CASE|SCENARIO)[A-Za-z0-9_]*)\s*\(")
+_ESCAPES = {'"': '"', "\\": "\\", "'": "'"}
+
+
+def _plain_literal(text: str, pos: int) -> str | None:
+    """The value of the one plain string literal that is the first macro argument starting at `pos`, else None.
+
+    `text` has its comments blanked. None for anything else: a prefixed or raw literal, two adjacent literals
+    (`"a" "b"`), a literal followed by a macro name, any escape other than `\\"`, `\\\\` and `\\'`.
+    """
+    n = len(text)
+    while pos < n and text[pos].isspace():
+        pos += 1
+    if pos >= n or text[pos] != '"':
+        return None
+    pos += 1
+    out: list[str] = []
+    while pos < n and text[pos] != '"':
+        ch = text[pos]
+        if ch == "\\":
+            if pos + 1 >= n or text[pos + 1] not in _ESCAPES:
+                return None
+            out.append(_ESCAPES[text[pos + 1]])
+            pos += 2
+        elif ch == "\n":
+            return None
+        else:
+            out.append(ch)
+            pos += 1
+    if pos >= n:
+        return None
+    pos += 1
+    while pos < n and text[pos].isspace():
+        pos += 1
+    if pos >= n or text[pos] not in ",)":
+        return None
+    return "".join(out)
+
+
+def _usable_name(name: str) -> bool:
+    """True when `name` can be given to Catch2 as a test spec and mean exactly that case.
+
+    Not usable: an empty name (Catch2 invents "Anonymous test case N"), leading or trailing whitespace (a spec
+    skips leading spaces), control characters, and the `exclude:` prefix (it turns the spec into an exclusion).
+    """
+    return (
+        bool(name) and name == name.strip() and all(ch.isprintable() for ch in name) and not name.startswith("exclude:")
+    )
+
+
+def _headers(source: str) -> list[tuple[int, str | None]]:
+    """(line, name) of every TEST_CASE-like header in `source`, in order; name None when it cannot be resolved."""
+    plain, skeleton = _scan(source)
+    found: list[tuple[int, str | None]] = []
+    for m in _HEADER.finditer(skeleton):
+        line = skeleton.count("\n", 0, m.start(1)) + 1
+        name = _plain_literal(plain, m.end()) if m.group(1) == "TEST_CASE" else None
+        found.append((line, name if name is not None and _usable_name(name) else None))
+    return found
+
+
+def test_cases(path: str, source: str) -> list[Case]:
+    """Every TEST_CASE of `source` (the text of `path`) with its line span; see `Case` for the fields."""
+    binary = ALLOC_BINARY if path == "tests/alloc_tests.cpp" else TESTS_BINARY
+    last = len(source.splitlines())
+    headers = _headers(source)
+    cases: list[Case] = []
+    for idx, (line, name) in enumerate(headers):
+        end = headers[idx + 1][0] - 1 if idx + 1 < len(headers) else last
+        cases.append(Case(path, name, line, max(end, line), binary))
+    return cases
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Reading a `git diff -U0` listing
+
+
+class _Hunk(NamedTuple):
+    """One hunk of a -U0 diff: head-side range (`new_start`, `new_count`) and the removed lines' text."""
+
+    path: str
+    new_start: int
+    new_count: int
+    old_count: int
+    removed: list[str]
+
+
+_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _diff_path(line: str) -> str | None:
+    """The path in a `--- a/x` or `+++ b/x` line; None for /dev/null and for a path git quoted (not a test file)."""
+    text = line[4:].split("\t", 1)[0]
+    if text == "/dev/null" or text.startswith('"'):
+        return None
+    return text[2:] if text[:2] in ("a/", "b/") else text
+
+
+def _hunks(diff: str) -> list[_Hunk]:
+    """Parse `git diff -U0 --no-ext-diff --no-color` output into hunks of tests/*.cpp files only.
+
+    The hunk header counts say how many content lines follow, so a removed line that itself starts with `-- ` is not
+    mistaken for a file header.
+    """
+    hunks: list[_Hunk] = []
+    old_path: str | None = None
+    path: str | None = None
+    old_left = new_left = 0
+    current: _Hunk | None = None
+    for line in diff.splitlines():
+        if old_left > 0 or new_left > 0:
+            if line.startswith("-"):
+                old_left -= 1
+                if current is not None:
+                    current.removed.append(line[1:])
+            elif line.startswith("+"):
+                new_left -= 1
+            # `\ No newline at end of file` and anything else carry no count
+            continue
+        if line.startswith("diff "):
+            old_path = path = None
+        elif line.startswith("--- "):
+            old_path = _diff_path(line)
+        elif line.startswith("+++ "):
+            new_path = _diff_path(line)
+            path = new_path if new_path is not None else old_path
+        elif (m := _HUNK.match(line)) and path is not None and _TEST_FILE.match(path):
+            old_count = 1 if m.group(2) is None else int(m.group(2))
+            new_count = 1 if m.group(4) is None else int(m.group(4))
+            current = _Hunk(path, int(m.group(3)), new_count, old_count, [])
+            hunks.append(current)
+            old_left, new_left = old_count, new_count
+        else:
+            current = None
+    return hunks
+
+
+def _deleted_headers(hunk: _Hunk) -> list[str | None]:
+    """Names (None when not one plain literal) of the TEST_CASE headers among the lines a deletion hunk removes."""
+    # The sentinel closes a header whose argument list was cut off by the end of the removed text.
+    return [name for _, name in _headers("\n".join(hunk.removed) + "\n)")]
+
+
+def changed_lines(diff: str) -> dict[str, set[int]]:
+    """Per tests/*.cpp file, the head-side line numbers a diff added or changed.
+
+    A pure-deletion hunk `@@ -a,b +c,0 @@` counts as line `c` (the line before the gap; 0 at the top of the file), so
+    that deleting lines inside a case selects that case. Exception (R19): a deletion that removes a TEST_CASE header
+    contributes nothing, because `c` would be the last line of the previous case, which did not change; see
+    `deleted_case_names`. Files with no counted line are left out.
+    """
+    out: dict[str, set[int]] = {}
+    for h in _hunks(diff):
+        if h.new_count > 0:
+            lines = set(range(h.new_start, h.new_start + h.new_count))
+        elif h.old_count > 0 and not _deleted_headers(h):
+            lines = {h.new_start}
+        else:
+            continue
+        out.setdefault(h.path, set()).update(lines)
+    return out
+
+
+def deleted_case_names(diff: str) -> dict[str, list[str]]:
+    """Per tests/*.cpp file, the names on TEST_CASE headers that pure-deletion hunks removed.
+
+    A header whose name is not one plain string literal is listed as "<macro-built>".
+    """
+    out: dict[str, list[str]] = {}
+    for h in _hunks(diff):
+        if h.new_count == 0 and h.old_count > 0:
+            for name in _deleted_headers(h):
+                out.setdefault(h.path, []).append(MACRO_BUILT if name is None else name)
+    return out
+
+
+def _binary_for(path: str) -> str | None:
+    """The executable that runs the TEST_CASEs of `path`; None for tests/*.cpp files that are not built into one."""
+    if path == "tests/alloc_tests.cpp":
+        return ALLOC_BINARY
+    if re.match(r"^tests/test_[^/]*\.cpp$", path):  # CMakeLists.txt globs tests/test_*.cpp into nibble_tests
+        return TESTS_BINARY
+    return None
+
+
+def select(diff: str, head_sources: Mapping[str, str]) -> Selection:
+    """The cases `diff` adds or changes, found in `head_sources` (path to the file's text at the head).
+
+    A changed line selects the case whose span contains it; lines outside every span (helpers above the first case)
+    select nothing. A selected case with an unresolved name goes to `unresolved`, as does a changed file no test
+    binary builds, and each deleted TEST_CASE header adds `deleted: <name>`.
+    """
+    cases: list[Case] = []
+    unresolved: list[str] = []
+    for path, lines in changed_lines(diff).items():
+        if _binary_for(path) is None:
+            unresolved.append(f"{path}: not built into nibble_tests or nibble_alloc_tests, so not run")
+            continue
+        source = head_sources.get(path)
+        if source is None:
+            continue
+        for case in test_cases(path, source):
+            if not any(case.start <= n <= case.end for n in lines):
+                continue
+            if case.name is None:
+                unresolved.append(f"{path}:{case.start}: test name is not one plain string literal")
+            else:
+                cases.append(case)
+    for names in deleted_case_names(diff).values():
+        unresolved.extend(f"deleted: {name}" for name in names)
+    return Selection(cases, unresolved)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Catch2 side: test spec and JUnit results
+
+
+_SPEC_SPECIAL = frozenset(',[]*"~\\')
+
+
+def catch_spec(name: str) -> str:
+    """Escape `name` for a Catch2 test spec: a backslash before each of `, [ ] * " ~` and backslash itself.
+
+    Escaping `~` and `[` also covers a leading `~` (exclusion) and a leading `[` (tag). Catch2 still treats a leading
+    or trailing `*` as a wildcard after unescaping, so such a spec may match more cases than `name`.
+    """
+    return "".join("\\" + ch if ch in _SPEC_SPECIAL else ch for ch in name)
+
+
+def _element_state(case: ET.Element) -> CaseResult:
+    """One `<testcase>`: skipped when it has a `<skipped>` child, else failed on `<failure>`/`<error>`, else passed."""
+    if case.find("skipped") is not None:
+        return "skipped"  # a SKIP, or `[!mayfail]` (which also carries the failure)
+    if case.find("failure") is not None or case.find("error") is not None:
+        return "failed"
+    return "passed"
+
+
+_RANK: dict[CaseResult, int] = {"missing": 0, "skipped": 1, "passed": 2, "failed": 3}
+
+
+def parse_junit(xml: str, name: str) -> CaseResult:
+    """How the case `name` ended in a Catch2 `-r junit` document.
+
+    The case's own `<testcase name=NAME>` and its sections (`NAME/section`) are combined: failed if any failed, else
+    passed if any passed, else skipped. "missing" when there is no such element, and also when `xml` is not
+    well-formed (a run that died before writing it), so a broken file can never prove anything.
+    """
+    if "<!DOCTYPE" in xml or "<!ENTITY" in xml:  # Catch2 writes neither; refuse entity tricks in stdlib ElementTree
+        return "missing"
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return "missing"
+    best: CaseResult = "missing"
+    for tc in root.iter("testcase"):
+        tc_name = tc.get("name", "")
+        if tc_name == name or tc_name.startswith(name + "/"):
+            state = _element_state(tc)
+            if _RANK[state] > _RANK[best]:
+                best = state
+    return best
+
+
+def classify(selection: Selection, base_compiled: bool, results: Mapping[str, CaseResult]) -> Outcome:
+    """Judge the run of the selected cases on the base (rules in order, R9 of the plan)."""
+    if not selection.cases:
+        return "no-test"
+    if not base_compiled:
+        return "proven-base-does-not-compile"
+    states = [results.get(_name(c), "missing") for c in selection.cases]
+    if "failed" in states:
+        return "proven"
+    if all(s in ("skipped", "missing") for s in states):
+        return "not-runnable"
+    return "does-not-reproduce"
+
+
+def exit_code(outcome: Outcome, override_label: bool) -> int:
+    """1 for no-test (unless the `no-test-needed` label is set) and for does-not-reproduce, else 0."""
+    if outcome == "no-test":
+        return 0 if override_label else 1
+    return 1 if outcome == "does-not-reproduce" else 0
+
+
+def _name(case: Case) -> str:
+    """The name of a selected case (select only keeps resolved ones)."""
+    if case.name is None:
+        raise ValueError(f"{case.file}:{case.start}: case without a name")
+    return case.name
+
+
+# Characters that start emphasis, code, links, HTML, tables, mentions or entities in GitHub Markdown.
+_MARKDOWN_ACTIVE = re.compile(r"([\\`*_{}\[\]()<>#+!|~&@])")
+
+
+def _md(text: str) -> str:
+    """`text` safe inside a Markdown list item: non-printable characters become `?`, Markdown syntax is backslashed.
+
+    Test names come from the pull request's own source, so they are untrusted text in a job summary.
+    """
+    return _MARKDOWN_ACTIVE.sub(r"\\\1", "".join(ch if ch.isprintable() else "?" for ch in text))
+
+
+_HEADLINES: dict[Outcome, str] = {
+    "proven": "Proven: at least one test of this fix fails without the fix.",
+    "proven-base-does-not-compile": (
+        "Proven: the base does not compile with this pull request's tests, so they use something the fix adds."
+    ),
+    "no-test": (
+        "No reproducing test: no TEST_CASE added or changed by this pull request could be selected. Add a test that "
+        "fails without the fix, or put the `no-test-needed` label on the pull request and give the reason in its "
+        "description."
+    ),
+    "does-not-reproduce": (
+        "Does not reproduce: every selected test passes on the base, so none of them shows the bug. (A fix for a "
+        "data race that only ThreadSanitizer sees ends up here; the base is built with ASan and UBSan.)"
+    ),
+    "not-runnable": (
+        "Not runnable: every selected test skipped or left no result on the base (end-to-end cases skip without "
+        "models), so nothing could be proven."
+    ),
+}
+
+
+def summary(outcome: Outcome, selection: Selection, results: Mapping[str, CaseResult]) -> str:
+    """The Markdown job summary: the verdict, one line per selected case and every unresolved item."""
+    lines = [f"### Bug-fix proof: {outcome}", "", _HEADLINES[outcome], ""]
+    if selection.cases:
+        lines.append("Selected test cases and how they ran on the base:")
+        lines.append("")
+        for case in selection.cases:
+            state = results.get(_name(case), "missing")
+            note = " (already passing)" if state == "passed" else ""
+            lines.append(f"- {state}{note}: {_md(_name(case))} ({_md(case.file)}:{case.start})")
+        lines.append("")
+    if selection.unresolved:
+        lines.append("Not checked:")
+        lines.append("")
+        lines += [f"- {_md(item)}" for item in selection.unresolved]
+        lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Command line
+
+
+_REF = re.compile(r"[0-9A-Za-z][0-9A-Za-z._/~^-]*")
+
+
+def _git(repo: str, *args: str) -> str:
+    """Run `git <args>` in `repo` (argv list, no shell) and return stdout; a failure raises ValueError with stderr."""
+    proc = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise ValueError(f"git {args[0]} failed: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+def _check_ref(ref: str) -> str:
+    """Refuse a revision that could be read as a git option or that contains anything but ref characters."""
+    if not _REF.fullmatch(ref):
+        raise ValueError(f"not a plain git revision: {ref!r}")
+    return ref
+
+
+def _case_to_json(case: Case) -> dict[str, object]:
+    return {
+        "file": case.file,
+        "name": case.name,
+        "start": case.start,
+        "end": case.end,
+        "binary": case.binary,
+        "spec": catch_spec(_name(case)),
+    }
+
+
+def _read_selection(path: str) -> Selection:
+    """Load cases.json, strictly: wrong types raise ValueError."""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or set(raw) != {"cases", "unresolved"}:
+        raise ValueError(f"{path}: expected an object with exactly the keys cases and unresolved")
+    cases: list[Case] = []
+    for item in raw["cases"]:
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: a case must be an object")
+        file, name, start, end, binary = (item.get(k) for k in ("file", "name", "start", "end", "binary"))
+        ints_ok = all(isinstance(v, int) and not isinstance(v, bool) for v in (start, end))
+        if not (isinstance(file, str) and isinstance(name, str) and isinstance(binary, str) and ints_ok):
+            raise ValueError(f"{path}: bad case {item!r}")
+        assert isinstance(start, int) and isinstance(end, int)
+        cases.append(Case(file, name, start, end, binary))
+    unresolved = raw["unresolved"]
+    if not isinstance(unresolved, list) or not all(isinstance(u, str) for u in unresolved):
+        raise ValueError(f"{path}: unresolved must be a list of strings")
+    return Selection(cases, unresolved)
+
+
+def read_results(results_dir: str, selection: Selection) -> dict[str, CaseResult]:
+    """The best result per selected case over every `*.xml` in `results_dir` (failed beats passed beats skipped)."""
+    results: dict[str, CaseResult] = {}
+    for xml_path in sorted(Path(results_dir).glob("*.xml")):
+        if xml_path.stat().st_size > MAX_XML_BYTES:
+            continue  # too large to be a Catch2 report of a handful of cases; counts as missing
+        text = xml_path.read_text(encoding="utf-8", errors="replace")
+        for case in selection.cases:
+            name = _name(case)
+            state = parse_junit(text, name)
+            if _RANK[state] > _RANK[results.get(name, "missing")]:
+                results[name] = state
+    return results
+
+
+def _cmd_gate(args: argparse.Namespace) -> int:
+    base, head = _check_ref(args.base), _check_ref(args.head)
+    subjects = _git(args.repo, "log", "--format=%s", f"{base}..{head}").splitlines()
+    names = [p for p in _git(args.repo, "diff", "--name-only", "-z", base, head).split("\0") if p]
+    print(f"fix={str(is_fix(args.title, subjects)).lower()}")
+    print(f"code={str(touches_code(names)).lower()}")
+    return 0
+
+
+def _cmd_select(args: argparse.Namespace) -> int:
+    base, head = _check_ref(args.base), _check_ref(args.head)
+    diff = _git(args.repo, "diff", "-U0", "--no-ext-diff", "--no-color", "-M", base, head, "--", "tests/*.cpp")
+    sources: dict[str, str] = {}
+    for path in changed_lines(diff):
+        try:
+            sources[path] = _git(args.repo, "show", f"{head}:{path}")
+        except ValueError:
+            continue  # the file does not exist at the head (deleted): nothing to select in it
+    selection = select(diff, sources)
+    payload = {"cases": [_case_to_json(c) for c in selection.cases], "unresolved": selection.unresolved}
+    Path(args.out).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"selected={len(selection.cases)}")
+    return 0
+
+
+def _cmd_specs(args: argparse.Namespace) -> int:
+    for i, case in enumerate(_read_selection(args.cases).cases):
+        print(f"{i}\t{case.binary}\t{catch_spec(_name(case))}")
+    return 0
+
+
+def _cmd_classify(args: argparse.Namespace) -> int:
+    selection = _read_selection(args.cases)
+    results = read_results(args.results_dir, selection)
+    outcome = classify(selection, args.base_compiled == "true", results)
+    with open(args.summary, "a", encoding="utf-8") as handle:
+        handle.write(summary(outcome, selection, results) + "\n")
+    print(f"outcome={outcome}")
+    return exit_code(outcome, args.override)
+
+
+def main(argv: Sequence[str]) -> int:
+    """Command line entry point; see the module docstring. Returns the process exit code."""
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0] if __doc__ else None)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    gate = sub.add_parser("gate", help="is this a fix pull request that touches code")
+    gate.add_argument("--title", required=True)
+    gate.add_argument("--base", required=True)
+    gate.add_argument("--head", required=True)
+    gate.add_argument("--repo", default=".")
+    gate.set_defaults(func=_cmd_gate)
+
+    sel = sub.add_parser("select", help="write cases.json from the diff between two revisions")
+    sel.add_argument("--base", required=True)
+    sel.add_argument("--head", required=True)
+    sel.add_argument("--out", required=True)
+    sel.add_argument("--repo", default=".")
+    sel.set_defaults(func=_cmd_select)
+
+    specs = sub.add_parser("specs", help="print `index<TAB>binary<TAB>spec` per selected case")
+    specs.add_argument("--cases", required=True)
+    specs.set_defaults(func=_cmd_specs)
+
+    cls = sub.add_parser("classify", help="judge the JUnit results and exit non-zero when the fix is not proven")
+    cls.add_argument("--cases", required=True)
+    cls.add_argument("--results-dir", required=True)
+    cls.add_argument("--base-compiled", required=True, choices=("true", "false"))
+    cls.add_argument("--override", action="store_true", help="the no-test-needed label is set")
+    cls.add_argument("--summary", required=True, help="file the Markdown summary is appended to")
+    cls.set_defaults(func=_cmd_classify)
+
+    args = parser.parse_args(list(argv))
+    try:
+        code: int = args.func(args)
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
+        print(f"fix_proof: {exc}", file=sys.stderr)
+        return 2
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
