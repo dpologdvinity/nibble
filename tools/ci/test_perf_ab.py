@@ -7,10 +7,13 @@ binary or model is needed.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import math
 import tempfile
 import unittest
+import unittest.mock
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -201,6 +204,102 @@ class RunTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             perf_ab.run("base-bin", "head-bin", ["a.gguf"], [1], 1, 1, self.out, runner=boom)
+
+
+def _block(block: int, base: tuple[float, float], head: tuple[float, float], **kw: object) -> list[dict[str, object]]:
+    """The four rows of one ABBA block (A1 B1 B2 A2) with the given base and head medians."""
+    return [
+        {**_row(side, block, med), **kw}
+        for side, med in (("base", base[0]), ("head", head[0]), ("head", head[1]), ("base", base[1]))
+    ]
+
+
+class SummarizeTest(unittest.TestCase):
+    def test_summarize_two_rounds(self) -> None:
+        rows = _block(0, (10.0, 12.0), (11.0, 11.0)) + _block(1, (10.0, 10.0), (10.0, 10.0))
+        rows += [{**r, "model": "a.gguf", "test": "pp512"} for r in _block(0, (4.0, 4.0), (6.0, 6.0))]
+        self.assertEqual(
+            perf_ab.summarize(rows),
+            [
+                {
+                    "model": "a.gguf",
+                    "test": "pp512",
+                    "threads": 1,
+                    "base_median": 4.0,
+                    "head_median": 6.0,
+                    "ratios": [1.5],
+                    "verdict": "inconclusive",  # one block is not enough
+                },
+                {
+                    "model": "m.gguf",
+                    "test": "tg128",
+                    "threads": 1,
+                    "base_median": 10.0,
+                    "head_median": 10.5,
+                    "ratios": [1.0, 1.0],
+                    "verdict": "same",
+                },
+            ],
+        )
+
+    def test_summarize_bad_medians_stay_json_safe_and_inconclusive(self) -> None:
+        rows = _block(0, (10.0, 10.0), (0.0, math.nan)) + _block(1, (10.0, 10.0), (10.0, 10.0))
+        (entry,) = perf_ab.summarize(rows)
+        self.assertEqual(entry["ratios"], [0.0, 1.0])  # the broken block reads 0.0, as the report schema has it
+        self.assertEqual(entry["head_median"], 10.0)  # only usable runs count
+        self.assertEqual(entry["verdict"], "inconclusive")
+        json.dumps(entry, allow_nan=False)  # must not raise
+
+    def test_summarize_empty(self) -> None:
+        self.assertEqual(perf_ab.summarize([]), [])
+
+
+class MainTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def test_summarize_round_trip(self) -> None:
+        rows = _block(0, (10.0, 10.0), (12.0, 12.0)) + _block(1, (10.0, 10.0), (12.0, 12.0))
+        (self.dir / "rows.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "\n")
+        out = self.dir / "perf.json"
+        self.assertEqual(perf_ab.main(["summarize", str(self.dir / "rows.jsonl"), "--out", str(out)]), 0)
+        (entry,) = json.loads(out.read_text())
+        self.assertEqual(entry["verdict"], "faster")
+        self.assertEqual(entry["ratios"], [1.2, 1.2])
+
+    def test_run_parses_arguments(self) -> None:
+        seen: list[tuple[object, ...]] = []
+
+        def fake_run(*args: object, **kw: object) -> None:
+            seen.append(args)
+
+        with unittest.mock.patch.object(perf_ab, "run", fake_run):
+            code = perf_ab.main(
+                ["run", "--base", "b/nibble", "--head", "h/nibble", "--model", "x.gguf", "--model", "y.gguf"]
+                + ["--threads", "1,4", "--rounds", "2", "--reps", "5", "--out", "rows.jsonl"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [("b/nibble", "h/nibble", ["x.gguf", "y.gguf"], [1, 4], 2, 5, "rows.jsonl")])
+
+    def test_run_with_a_fake_bench_script(self) -> None:
+        bench = self.dir / "fakebin"
+        bench.write_text(
+            "#!/usr/bin/env python3\nimport sys, json\na = sys.argv\n"
+            "open(a[a.index('--out') + 1], 'a').write(json.dumps({'model': 'm.gguf', 'test': 'tg128', "
+            "'threads': int(a[a.index('-t') + 1]), 'median': 5.0}) + '\\n')\n"
+        )
+        bench.chmod(0o755)
+        out = self.dir / "rows.jsonl"
+        args = ["run", "--base", str(bench), "--head", str(bench), "--model", "m.gguf", "--threads", "2"]
+        self.assertEqual(perf_ab.main(args + ["--rounds", "1", "--reps", "1", "--out", str(out)]), 0)
+        rows = [json.loads(line) for line in out.read_text().splitlines()]
+        self.assertEqual([(r["side"], r["position"]) for r in rows], [(s, p) for p, s in perf_ab._POSITIONS])
+
+    def test_bad_threads_is_an_argument_error(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            perf_ab.main(["run", "--base", "a", "--head", "b", "--model", "m", "--threads", "0,x", "--out", "o"])
 
 
 if __name__ == "__main__":
