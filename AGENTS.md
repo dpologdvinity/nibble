@@ -87,18 +87,21 @@ Larger changes follow spec -> plan -> execution -> review, and the design record
 
 ### Claude on GitHub
 
-Workflows in `.github/workflows/` run Claude Code on the repository (they need the `CLAUDE_CODE_OAUTH_TOKEN` secret and
-skip with a notice without it):
+Workflows in `.github/workflows/` run Claude Code on the repository. They need the `CLAUDE_CODE_OAUTH_TOKEN` secret and
+skip with a notice without it. Their tool allow-lists and deny-lists narrow what a session does; they are guard rails,
+not a sandbox, so read what Claude pushes.
 
 - `claude.yml`: a comment, review or new issue that contains `@claude`, written by an owner, member or collaborator,
   starts a session with the build and lint tools installed. It works on an `agent/<topic>` branch (or on the pull
-  request's own branch), runs the lint block and `ctest -LE e2e`, and opens a pull request labelled `agent`. It cannot
-  merge, approve or close anything.
-- `claude-triage.yml`: a failing scheduled job's `ci-failure` issue gets a diagnosis comment, and, with a reproducer and
+  request's own branch), runs the lint block and `ctest -LE e2e`, and opens a pull request labelled `agent`. Its tool
+  lists leave out merging, approving and closing.
+- `claude-triage.yml`: a failing scheduled job's `ci-failure` issue gets a diagnosis comment and, with a reproducer and
   high confidence, an `agent/fix-issue-<n>` pull request whose first commit is the failing test.
 - `claude-review.yml`: owner, Dependabot and `agent` pull requests get inline review comments only (no approval, no
   change requests).
-- Agent pull requests carry the `agent` label and are never auto-merged. The `agent-approval` check
-  (`agent-approval.yml`, logic in `tools/ci/agent_gate.py`) fails for them until the owner, a member or a collaborator
-  approves the current head commit; it is only a gate once the owner makes it a required check. `automerge.yml` only enables auto-merge for the
-  owner's own pull requests and Dependabot's minor and patch updates, and switches it off when `agent` is added.
+- `automerge.yml` enables auto-merge only for the owner's own pull requests that carry no `agent` label and no commit by
+  Claude, and for Dependabot's minor and patch updates. It switches auto-merge off when `agent` is added or Claude
+  pushes to a pull request that is not Claude's own. Pull requests that Claude opens are not auto-merged.
+- `agent-approval.yml` (logic in `tools/ci/agent_gate.py`) fails for a pull request authored by `claude[bot]` until the
+  owner, a member or a collaborator approves its current head commit. It only blocks a merge once the owner makes it a
+  required check.
