@@ -57,6 +57,7 @@ AREA_PATHS: Mapping[str, tuple[str, ...]] = {
     "tokenizer": (
         "src/tokenizer/**",
         "src/chat.*",
+        "tests/tokenizer/**",
         "tests/test_tokenizer*.cpp",
         "tests/test_pretokenize.cpp",
         "tests/test_chat.cpp",
