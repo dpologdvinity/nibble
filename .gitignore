@@ -15,3 +15,6 @@ CLAUDE.local.md
 .env.*
 !.env.example
 /compile_commands.json
+
+# Python bytecode
+__pycache__/

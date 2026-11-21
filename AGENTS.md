@@ -36,6 +36,7 @@ ctest --test-dir build -LE e2e --output-on-failure   # everything except the end
 git ls-files '*.cpp' '*.h' | grep -v '^third_party' | xargs clang-format --dry-run -Werror
 ruff check bench tools && ruff format --check bench tools && mypy
 python -m unittest discover -s bench -p 'test_*.py'
+python -m unittest discover -s tools/ci -p 'test_*.py'
 shellcheck tools/*.sh tests/*.sh
 ```
 
