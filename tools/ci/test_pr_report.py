@@ -77,6 +77,13 @@ def skipped_dict() -> dict[str, Any]:
     return d
 
 
+def speed_cells(text: str) -> list[str]:
+    """The cells of the one data row of the speed table: model, test, threads, base, head, delta, verdict."""
+    rows = [line for line in text.splitlines() if line.startswith("| ") and "| tg128 |" in line]
+    assert len(rows) == 1, rows
+    return [cell.strip() for cell in rows[0].strip().strip("|").split("|")]
+
+
 class LoadTests(unittest.TestCase):
     def reject(self, d: dict[str, Any]) -> None:
         with self.assertRaises(ValueError):
@@ -268,18 +275,26 @@ class RenderTests(unittest.TestCase):
     def test_render_zero_medians_do_not_divide_by_zero(self) -> None:
         d = make_dict()
         d["perf"][0].update({"base_median": 0.0, "head_median": 0.0, "ratios": [0.0], "verdict": "inconclusive"})
-        text = pr_report.render(pr_report.load(json.dumps(d)))
-        self.assertIn("❔ inconclusive", text)
-        self.assertIn("—", text)
+        cells = speed_cells(pr_report.render(pr_report.load(json.dumps(d))))
+        # tok/s columns and the delta are all dashes; the verdict is kept as given.
+        self.assertEqual(cells[3:], ["—", "—", "—", "❔ inconclusive"])
         d["perf"][0].update({"base_median": 0.0, "head_median": 12.0, "ratios": [1.2], "verdict": "faster"})
-        row = next(line for line in pr_report.render(pr_report.load(json.dumps(d))).splitlines() if MODEL in line)
-        self.assertNotIn("+20.0%", row)  # no base to compare with, so no delta whatever the ratios say
+        cells = speed_cells(pr_report.render(pr_report.load(json.dumps(d))))
+        # No base median, so no delta whatever the ratios say.
+        self.assertEqual(cells[3:], ["—", "12.0", "—", "✅ faster"])
 
     def test_render_empty_ratios_show_a_dash(self) -> None:
         d = make_dict()
         d["perf"][0]["ratios"] = []
         d["perf"][0]["verdict"] = "inconclusive"
-        self.assertIn("—", pr_report.render(pr_report.load(json.dumps(d))))
+        cells = speed_cells(pr_report.render(pr_report.load(json.dumps(d))))
+        self.assertEqual(cells[3:], ["40.0", "44.0", "—", "❔ inconclusive"])
+
+    def test_render_delta_ignores_zero_ratios(self) -> None:
+        d = make_dict()
+        d["perf"][0]["ratios"] = [0.0, 1.2, 1.4]  # 0.0 marks an unusable block (P16)
+        cells = speed_cells(pr_report.render(pr_report.load(json.dumps(d))))
+        self.assertEqual(cells[5], "+30.0%")
 
     def test_render_size_and_memory_deltas(self) -> None:
         text = pr_report.render(make_report())
