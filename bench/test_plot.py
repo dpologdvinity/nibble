@@ -229,6 +229,26 @@ class LineChartTest(unittest.TestCase):
         self.assertEqual(labels[-1], 100.0)
         self.assertEqual(len({round(b - a, 9) for a, b in zip(labels, labels[1:], strict=False)}), 1)  # even
 
+    def test_line_chart_capped_negative_axis_labels_sit_on_their_values(self) -> None:
+        # Regression: the grid origin came from the pre-cap step, so ticks -0.4, 4.6, 9.6 were labelled 0, 5, 10.
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, -0.3), (T0 + DAY, 0.5)])], y_max=10)
+        cy = [float(c) for c in re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)]
+        slope = (cy[1] - cy[0]) / 0.8  # pixels per unit, from the two plotted points
+        ticks = [
+            (float(v), float(y))
+            for y, v in re.findall(r'<text x="[\d.]+" y="([\d.]+)"[^>]*text-anchor="end"[^>]*>([^<]*)</text>', svg)
+        ]
+        self.assertGreaterEqual(len(ticks), 3)
+        values = [v for v, _ in ticks]
+        step = values[1] - values[0]
+        for v, text_y in ticks:
+            self.assertAlmostEqual(text_y - 4, cy[1] + slope * (v - 0.5), delta=0.2, msg=f"label {v}")
+            self.assertAlmostEqual(v / step, round(v / step), msg=f"{v} is not a multiple of {step}")  # on the grid
+        self.assertLessEqual(values[-1], 10.0)
+        self.assertGreater(values[-1] + step, 10.0)  # the top tick is the last one on the grid within y_max
+        self.assertLessEqual(values[0], -0.3)  # the axis still reaches the lowest point
+        self.assertIn(0.0, values)
+
     def test_line_chart_y_max_is_the_top_with_y_min_and_negative_data(self) -> None:
         svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.991), (T0 + DAY, 0.992)])], y_min=0.99, y_max=1.0)
         self.assertEqual(self.y_labels(svg)[-1], "1.000")

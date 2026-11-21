@@ -458,7 +458,11 @@ def line_chart(
         if y_max <= lo:
             raise ValueError(f"y_max ({y_max:g}) must be above the axis bottom ({lo:g})")
         hi = y_max  # a fixed top: re-pick a nice step for the span; the top tick may then sit below the edge
-        step = nice_step(hi - lo)
+        if y_min is None and min(ys) < 0:  # negative data: re-align the floor to a multiple of the final step
+            step = nice_step(hi - min(ys))
+            lo = first_tick = math.floor(min(ys) / step + 1e-9) * step
+        else:
+            step = nice_step(hi - lo)
     ph = h - top - bottom
     y_of: Callable[[float], float] = lambda v: top + ph * (1 - (v - lo) / (hi - lo))
     ticks = [first_tick + step * i for i in range(math.floor((hi - first_tick) / step + 1e-9) + 1)]
