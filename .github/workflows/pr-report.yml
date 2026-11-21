@@ -146,6 +146,7 @@ jobs:
             part-runner.json
             part-perf.json
           retention-days: 7
+          overwrite: true  # a re-run attempt replaces this run's earlier artifact instead of failing on the name
           if-no-files-found: warn
 
   accuracy:
@@ -252,6 +253,7 @@ jobs:
             part-accuracy.json
             part-meta.json
           retention-days: 7
+          overwrite: true  # a re-run attempt replaces this run's earlier artifact instead of failing on the name
           if-no-files-found: error
       # A head that fails an end-to-end test, loses min-cosine lines or has a non-finite cosine is the finding the comment
       # exists to show, so the report is built first; these gates then make the job red. (A failing base is not this
@@ -296,4 +298,5 @@ jobs:
           name: pr-report
           path: pr-report.json
           retention-days: 7
+          overwrite: true  # a re-run attempt replaces this run's earlier artifact instead of failing on the name
           if-no-files-found: error

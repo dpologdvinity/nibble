@@ -148,4 +148,5 @@ jobs:
             cases.json
             fix-proof-results/
           retention-days: 7
+          overwrite: true  # a re-run attempt replaces this run's earlier artifact instead of failing on the name
           if-no-files-found: ignore
