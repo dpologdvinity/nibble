@@ -257,7 +257,7 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 | PRs touching workflows | [actionlint](.github/workflows/actionlint.yml) | A typo in a workflow (expression, `needs:`, input) cannot silently stop it from running; shellcheck on `run:` blocks. |
 | every PR | [labeler](.github/workflows/labeler.yml) | Area labels (`kernels`, `gguf`, ...) from the changed paths, for the changelog and triage. |
 | every PR | [claude-review](.github/workflows/claude-review.yml) | Inline review comments from Claude on PRs by the owner, Dependabot and the agent; it never approves or blocks. |
-| every PR | [agent-approval](.github/workflows/agent-approval.yml) | A PR opened by Claude stays red until the owner approves its current head commit (not yet a required check). |
+| every PR | [agent-approval](.github/workflows/agent-approval.yml) | A PR opened by Claude stays red until the owner, a member or a collaborator approves its current head commit (not yet a required check). |
 | every PR | [automerge](.github/workflows/automerge.yml) | Auto-merge only for the owner's own PRs and Dependabot's minor and patch updates, never for agent PRs. |
 | nightly | [nightly](.github/workflows/nightly.yml) | Every end-to-end test on the Qwen2.5-0.5B family (F16, Q8_0, Q4_0, Q4_K_M, Q5_K_M, Q6_K) against llama.cpp; ASan+UBSan on a real Q4_K_M model; about 2 h of fuzzing each for the parser and the loader, with a corpus kept between nights; a trend benchmark. |
 | weekly | [portability](.github/workflows/portability.yml) | The suite on 64-bit ARM (scalar kernels), the newest GCC and Clang with warnings as errors, and the build with SIMD off. |
@@ -276,7 +276,7 @@ flowchart LR
   B --> C["claude-triage: diagnosis from the issue and the logs"]
   C --> D["agent/ PR: failing test, then the fix"]
   D --> E["fix-proof on the merge base, CI, PR report"]
-  E --> F["agent-approval: red until the owner approves"]
+  E --> F["agent-approval: red until the owner or a collaborator approves"]
   F --> G["owner merges"]
 ```
 
