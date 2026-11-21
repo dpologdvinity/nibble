@@ -180,12 +180,19 @@ example), say why in the pull request and the owner adds the `no-test-needed` la
 runnable** green, and only those (**does not reproduce** and **incomplete** stay red). The check is not required yet.
 The verdict and the cases are in the job summary.
 
+Only a person with write access can waive: fix-proof reads the label's history (`tools/ci/fix_proof_waiver.py`, run
+from the base branch so a pull request cannot change it) and the label counts only when its latest application was by
+such a person, never by a bot. The Claude sessions can open
+a pull request with any label, so a label they add is ignored. If the check ran before the label's event was recorded,
+re-run it.
+
 ### Releases
 
 1. In a release-prep pull request, regenerate the changelog with [git-cliff](https://git-cliff.org) (`cliff.toml`):
    `git cliff --tag vX.Y.Z -o CHANGELOG.md`. It turns the "Unreleased" section into the dated `vX.Y.Z` section; read
    the diff, then merge.
-2. Tag that merge commit and push the tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+2. Tag that merge commit and push the tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`. Only the owner
+   can: `release.yml` stops at its first job when anyone else (the Claude app included) pushed the tag or re-ran it.
 3. `release.yml` runs the whole `ci.yml` suite on the tag, fails if CHANGELOG.md has no `## [vX.Y.Z]` section, and
    otherwise creates a draft release with the tarballs, their SPDX SBOMs and attestations, and pushes the image to
    ghcr.io. The owner publishes the draft. The README shows how to verify a download with `gh attestation verify`.

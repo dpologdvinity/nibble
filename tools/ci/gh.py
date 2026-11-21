@@ -72,11 +72,28 @@ class Review:
     association: str
 
 
+@dataclass(frozen=True)
+class LabelEvent:
+    """One `labeled` or `unlabeled` event of an issue or pull request: which label, who did it (their login, "" for a
+    deleted account) and the actor's account type (`User`, `Bot`, ...; "" when unknown)."""
+
+    event: str
+    label: str
+    actor: str
+    actor_type: str
+
+
+# Login of the GITHUB_TOKEN identity as the REST API reports issue and comment authors.
+BOT_LOGIN = "github-actions[bot]"
+
+
 class GitHub(Protocol):
     """What the CI scripts need from GitHub. Implemented by GhCli and by fakes.FakeGitHub."""
 
-    def find_open_issue(self, title: str) -> int | None:
-        """Number of the open issue whose title equals `title` exactly (search is fuzzy, so never use it), or None."""
+    def find_open_issue(self, title: str, label: str) -> int | None:
+        """Number of the open issue that github-actions[bot] opened with the label `label` and whose title equals
+        `title` exactly (search is fuzzy, so never use it), or None. Anyone can open an issue with that title; only the
+        workflows' own issue counts, so a stranger's copy never receives the reports nor is closed by a recovery."""
         ...
 
     def create_issue(self, title: str, body: str, labels: Sequence[str]) -> int:
@@ -149,6 +166,15 @@ class GitHub(Protocol):
         """Every review of pull request `number`, oldest first."""
         ...
 
+    def label_events(self, number: int) -> list[LabelEvent]:
+        """Every `labeled` and `unlabeled` event of issue or pull request `number`, oldest first."""
+        ...
+
+    def permission(self, login: str) -> str:
+        """`login`'s permission on the repository: `admin`, `write` (maintainers too), `read` (triage too) or `none`.
+        Raises GhError when the account does not exist."""
+        ...
+
 
 def _json_values(text: str) -> list[Any]:
     """Every JSON value in `text`, which may hold several back to back (`gh api --paginate` prints one per page)."""
@@ -194,11 +220,22 @@ class GhCli:
         argv = ["gh", "api", "-X", method, path, "--input", "-"]
         return self._run(argv, json.dumps(payload))
 
-    def find_open_issue(self, title: str) -> int | None:
-        listing = _json_list(self._get(f"repos/{self.repo}/issues?state=open&per_page=100", paginate=True))
+    def find_open_issue(self, title: str, label: str) -> int | None:
+        query = urllib.parse.urlencode({"state": "open", "creator": BOT_LOGIN, "labels": label, "per_page": 100})
+        listing = _json_list(self._get(f"repos/{self.repo}/issues?{query}", paginate=True))
         for issue in listing:
-            # The issues endpoint also returns pull requests; they carry a "pull_request" key.
-            if "pull_request" not in issue and issue.get("title") == title:
+            # The query already filters on creator and label; both are checked again so that a filter the API ignored
+            # cannot match someone else's issue. The endpoint also returns pull requests ("pull_request" key).
+            user = issue.get("user")
+            labels = issue.get("labels")
+            if (
+                "pull_request" not in issue
+                and issue.get("title") == title
+                and isinstance(user, dict)
+                and user.get("login") == BOT_LOGIN
+                and isinstance(labels, list)
+                and any(isinstance(item, dict) and item.get("name") == label for item in labels)
+            ):
                 return int(issue["number"])
         return None
 
@@ -337,3 +374,24 @@ class GhCli:
                 )
             )
         return reviews
+
+    def label_events(self, number: int) -> list[LabelEvent]:
+        events: list[LabelEvent] = []
+        for item in _json_list(self._get(f"repos/{self.repo}/issues/{number}/events?per_page=100", paginate=True)):
+            if item.get("event") not in ("labeled", "unlabeled"):
+                continue
+            actor = item.get("actor")
+            label = item.get("label")
+            events.append(
+                LabelEvent(
+                    event=str(item["event"]),
+                    label=str(label.get("name", "")) if isinstance(label, dict) else "",
+                    actor=str(actor.get("login", "")) if isinstance(actor, dict) else "",
+                    actor_type=str(actor.get("type", "")) if isinstance(actor, dict) else "",
+                )
+            )
+        return events
+
+    def permission(self, login: str) -> str:
+        data = json.loads(self._get(f"repos/{self.repo}/collaborators/{urllib.parse.quote(login, safe='')}/permission"))
+        return str(data.get("permission") or "none") if isinstance(data, dict) else "none"

@@ -6,6 +6,12 @@
 # (`git cliff --tag vX.Y.Z -o CHANGELOG.md`, see cliff.toml). The workflow fails when that section is missing.
 # Verify a download with: gh attestation verify nibble-<tag>-linux-x86_64.tar.gz -R dpologdvinity/nibble
 #
+# Only the repository owner releases: the first job fails unless both the tag's pusher (github.actor) and whoever started
+# this attempt (github.triggering_actor, which differs on a re-run) are the owner, and the publishing jobs (package,
+# attest, release) skip unless the same holds, since a re-run of failed jobs does not run the first job again. A push by the Claude GitHub App, a
+# collaborator or a token that leaked from an agent session therefore builds, pushes and signs nothing. A tag ruleset
+# that lets only the owner create `v*` tags is the first line; this check is the second.
+#
 # The workflow only needs the built-in GITHUB_TOKEN; the one-time repository settings (workflow permissions,
 # package visibility) are listed in the owner checklist kept outside the repository history.
 name: release
@@ -19,13 +25,26 @@ permissions:
 
 jobs:
   changelog:
-    # Fails fast, before anything is built or pushed, when the release-prep pull request was skipped.
+    # Fails fast, before anything is built or pushed, when someone other than the owner pushed the tag or the
+    # release-prep pull request was skipped.
     name: changelog section
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
+      # Every other job needs this one, so nothing is built, pushed or signed for a tag someone else pushed.
+      - name: Check that the owner pushed the tag
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ "$ACTOR" != "$OWNER" ] || [ "$TRIGGERING_ACTOR" != "$OWNER" ]; then
+            echo "::error title=release refused::only the repository owner ($OWNER) can release; $GITHUB_REF_NAME was pushed by $ACTOR and this attempt started by $TRIGGERING_ACTOR. Delete the tag, or have the owner push it."
+            exit 1
+          fi
+          echo "release started by the owner ($OWNER)"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Extract this tag's section of CHANGELOG.md
         run: |
@@ -57,8 +76,12 @@ jobs:
     permissions:
       contents: read
 
+  # Every job that publishes (pushes the image, signs, drafts the release) checks the actors again itself: a re-run of
+  # failed jobs keeps the changelog job's earlier success without running its check, and runs as whoever re-ran it.
+  # success() keeps the default "only after the needed jobs passed", which a custom `if:` would otherwise replace.
   package:
     needs: verify
+    if: success() && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     uses: ./.github/workflows/package.yml
     permissions:
       contents: read
@@ -72,6 +95,7 @@ jobs:
     # package.yml with read-only permissions and a called workflow cannot ask for more than its caller grants.
     name: attest artifacts
     needs: package
+    if: success() && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -156,6 +180,7 @@ jobs:
   release:
     name: draft release
     needs: [attest, changelog]
+    if: success() && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

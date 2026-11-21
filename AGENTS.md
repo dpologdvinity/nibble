@@ -109,3 +109,6 @@ not a sandbox, so read what Claude pushes.
 - `agent-approval.yml` (logic in `tools/ci/agent_gate.py`) fails for a pull request authored by `claude[bot]` until the
   owner, a member or a collaborator approves its current head commit. It only blocks a merge once the owner makes it a
   required check.
+- Agents never apply the `no-test-needed` label, to their own pull requests or anyone else's. It is the owner's
+  decision, and `fix-proof.yml` ignores the label when a bot added it last. A fix without a reproducing test says why
+  in the pull request body and leaves the label to the owner.

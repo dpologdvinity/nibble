@@ -1,0 +1,40 @@
+# Reason: the Claude jobs set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which strips credentials from the environment of every
+# command a session runs and, on Linux, runs those commands in a PID namespace of their own, so they cannot read the
+# Claude process's environment (which keeps the OAuth token) through /proc. The namespace needs bubblewrap, and Ubuntu
+# 24.04 must allow unprivileged user namespaces. The pinned claude-code-action installs both only for its
+# `allowed_non_write_users` mode, which nibble does not use, so this action does it: the same packages and sysctl,
+# three apt attempts like the action's, and then a smoke check that creates a PID namespace, so a job whose isolation
+# would not work fails here, before the session starts, instead of running without it.
+# Use: a step before claude-code-action, after the caller's checkout (and before any other apt-get install, which then
+# finds fresh package lists):
+#   - uses: ./.github/actions/subprocess-isolation
+# By hand: not runnable on its own; it is part of claude.yml, claude-triage.yml and claude-review.yml.
+name: subprocess-isolation
+description: Install bubblewrap, allow user namespaces, and check that a PID namespace can be created.
+runs:
+  using: composite
+  steps:
+    - name: Install bubblewrap and check the PID namespace
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          if sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap socat; then
+            break
+          fi
+          if [ "$attempt" = 3 ]; then
+            echo "::error title=subprocess isolation::could not install bubblewrap after 3 attempts"
+            exit 1
+          fi
+          echo "::warning title=subprocess isolation::apt-get attempt $attempt failed, retrying"
+          sleep 5
+        done
+        # The sysctl does not exist on kernels without the AppArmor restriction; that is fine.
+        if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        # Fail closed: if the namespace cannot be created here, the session's commands would not get one either.
+        if ! bwrap --unshare-pid --dev-bind / / --proc /proc true; then
+          echo "::error title=subprocess isolation::bubblewrap cannot create a PID namespace on this runner; not starting the session"
+          exit 1
+        fi
+        echo "bubblewrap $(bwrap --version | cut -d' ' -f2) creates a PID namespace"

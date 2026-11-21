@@ -266,7 +266,7 @@ workflow file opens with its reason and how to run it by hand ([CONTRIBUTING.md]
 | after nightly, portability and ci on `master`, and daily | [dashboard](.github/workflows/dashboard.yml) | Keeps the history of those runs and publishes the [dashboard](https://dpologdvinity.github.io/nibble/) and the nightly badge. |
 | a failing scheduled job | [claude-triage](.github/workflows/claude-triage.yml) | Claude diagnoses the `ci-failure` issue and, with a reproducer, opens an `agent/` PR (below). |
 | `@claude` from the owner or a collaborator | [claude](.github/workflows/claude.yml) | Hands Claude a task from an issue or a PR in this repository (fork PRs are skipped); it answers or opens an `agent` PR. |
-| a `v*` tag | [release](.github/workflows/release.yml) | The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
+| a `v*` tag pushed by the owner | [release](.github/workflows/release.yml) | Refuses a tag anyone else pushed. The whole ci suite on the tagged commit, then a draft release with the tarballs, the ghcr.io image, build-provenance attestations and SPDX SBOMs, and the CHANGELOG.md section as its notes. |
 
 When a scheduled job fails, the fix comes back as a pull request that has to prove itself:
 

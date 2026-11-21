@@ -13,9 +13,11 @@ this script with the job's outcome:
     about a failure a newer commit introduced: it comments that and leaves the issue open;
   - success and no open issue: do nothing.
 
-The issue is found by exact title (gh.GitHub.find_open_issue), so `fuzz_gguf` and `fuzz_load` never share an issue and
-a recovery closes only its own job's issue. The failure text links the run, the commit, a compare view from the last
-green run of the same workflow on master (or says none is on record) and, when given, the uploaded artifact.
+The issue is found by exact title among the open issues github-actions[bot] opened with the `ci-failure` label
+(gh.GitHub.find_open_issue), so `fuzz_gguf` and `fuzz_load` never share an issue, a recovery closes only its own job's
+issue, and a same-titled issue someone else opened is ignored. The failure text links the run, the commit, a compare
+view from the last green run of the same workflow on master (or says none is on record) and, when given, the uploaded
+artifact.
 
 usage: GH_TOKEN=... GITHUB_REPOSITORY=owner/name python tools/ci/report_failure.py --job fuzz_gguf \
            --workflow-file nightly.yml --outcome failure --run-url URL --sha SHA --area ci \
@@ -41,6 +43,8 @@ Action = Literal["open", "comment", "close", "stale", "none"]
 # Branch whose last green run anchors the compare link, and the ref the triage workflow is dispatched on.
 DEFAULT_BRANCH = "master"
 TRIAGE_WORKFLOW = "claude-triage.yml"
+# Every issue this script opens carries it, and only an open issue with it (opened by the bot) is ever reused.
+FAILURE_LABEL = "ci-failure"
 
 
 @dataclass(frozen=True)
@@ -119,11 +123,11 @@ def report(gh: GitHub, ctx: RunContext, outcome: Outcome, triage: bool) -> Actio
     commit, or no tip on record) comments and returns "stale" instead of closing; the tip is looked up only then.
     """
     title = issue_title(ctx.workflow_file, ctx.job)
-    existing = gh.find_open_issue(title)
+    existing = gh.find_open_issue(title, FAILURE_LABEL)
     action = decide(existing, outcome)
     if action == "open":
         body = failure_body(ctx, gh.last_green_sha(ctx.workflow_file, DEFAULT_BRANCH))
-        number = gh.create_issue(title, body, ["ci-failure", ctx.area])
+        number = gh.create_issue(title, body, [FAILURE_LABEL, ctx.area])
         if triage:
             gh.dispatch(TRIAGE_WORKFLOW, DEFAULT_BRANCH, {"issue": str(number)})
     elif action == "comment" and existing is not None:
