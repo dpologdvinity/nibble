@@ -18,6 +18,7 @@ from fakes import FakeGitHub
 from gh import GhError, RunInfo
 
 REPO = "owner/nibble"
+TODAY = datetime.date(2026, 11, 21)  # the fake runs are dated just before it; no test may depend on the real clock
 
 
 def run(run_id: int, event: str = "schedule", repo: str = REPO, created: str = "2026-11-20T03:00:00Z") -> RunInfo:
@@ -133,9 +134,7 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                code = dashboard_sweep.main(
-                    ["--repo", REPO, "--dest", tmp, "--days", "7"], gh=fake, today=datetime.date(2026, 11, 21)
-                )
+                code = dashboard_sweep.main(["--repo", REPO, "--dest", tmp, "--days", "7"], gh=fake, today=TODAY)
             self.assertEqual(code, 0)
             self.assertEqual(sorted(p.parent.name for p in Path(tmp).rglob("rows.jsonl")), ["2-dashboard-rows-a"])
         self.assertIn("1 artifact", out.getvalue())
@@ -147,12 +146,12 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             err = io.StringIO()
             with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(dashboard_sweep.main(["--repo", REPO, "--dest", tmp], gh=fake), 0)
+                self.assertEqual(dashboard_sweep.main(["--repo", REPO, "--dest", tmp], gh=fake, today=TODAY), 0)
             self.assertIn("::warning", err.getvalue())
             fake.fail_listing = True
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                self.assertEqual(dashboard_sweep.main(["--repo", REPO, "--dest", tmp], gh=fake), 1)
+                self.assertEqual(dashboard_sweep.main(["--repo", REPO, "--dest", tmp], gh=fake, today=TODAY), 1)
             self.assertIn("simulated listing failure", err.getvalue())
 
 
