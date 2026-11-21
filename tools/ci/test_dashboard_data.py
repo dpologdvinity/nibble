@@ -265,6 +265,36 @@ class MergeTests(unittest.TestCase):
         merged = dashboard_data.merge(merged, [dashboard_data.status_row("nightly", "a", True, other_run)])
         self.assertEqual(len(merged.splitlines()), 2)
 
+    def test_merge_later_status_of_the_same_run_replaces_the_failed_attempt(self) -> None:
+        # "Re-run failed jobs" keeps GITHUB_RUN_ID and uploads again: the new attempt's row has the same identity.
+        failed = dashboard_data.status_row("nightly", "a", False, META)
+        rerun_meta = Meta("2026-11-21T09:00:00Z", SHA, "nightly", META.runner, META.run_id)
+        passed = dashboard_data.status_row("nightly", "a", True, rerun_meta)
+        merged = dashboard_data.merge(dashboard_data.merge("", [failed]), [passed])
+        self.assertEqual(
+            [(r["value"], r["date"]) for r in map(json.loads, merged.splitlines())], [(1.0, rerun_meta.date)]
+        )
+        # Idempotent: merging the same re-run row again changes nothing.
+        self.assertEqual(dashboard_data.merge(merged, [passed]), merged)
+        # And an older row (a stale artifact seen late) never replaces a newer one, whatever the order of arrival.
+        self.assertEqual(dashboard_data.merge(merged, [failed]), merged)
+        self.assertEqual(dashboard_data.merge("", [passed, failed]), merged)
+
+    def test_merge_replacing_a_status_keeps_its_place_in_the_file(self) -> None:
+        a, b = self.rows()
+        rerun_meta = Meta("2026-11-21T09:00:00Z", SHA, "nightly", META.runner, META.run_id)
+        merged = dashboard_data.merge(
+            dashboard_data.merge("", [a, b]), [dashboard_data.status_row("nightly", "a", False, rerun_meta)]
+        )
+        got = [(r["key"], r["value"]) for r in map(json.loads, merged.splitlines())]
+        self.assertEqual(got, [("nightly/a", 0.0), ("nightly/b", 0.0)])
+
+    def test_merge_other_metrics_stay_first_wins_even_with_a_later_date(self) -> None:
+        first = good_row(value=1.0)
+        later = good_row(value=2.0, date="2026-11-22T00:00:00Z")
+        merged = dashboard_data.merge(dashboard_data.merge("", [first]), [later])
+        self.assertEqual([json.loads(line)["value"] for line in merged.splitlines()], [1.0])
+
     def test_merge_rejects_an_invalid_new_row_and_bad_existing_json(self) -> None:
         with self.assertRaisesRegex(ValueError, "value"):
             dashboard_data.merge("", [good_row(value=math.nan)])

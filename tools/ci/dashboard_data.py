@@ -25,7 +25,8 @@ code and the checks passed, and the red Report step is visible in the run.
 
 `validate` is the gate: every row built here, and every new row `merge` accepts, passes through it.
 `merge` appends rows to existing JSONL text and drops repeats of the same (run_id, metric, key), so re-running a job
-or a merge is harmless; existing lines are kept byte for byte.
+or a merge is harmless; existing lines are kept byte for byte. The one exception is `job_status`: a re-run of a job
+keeps the run id, so its later row replaces the failed attempt's (see `merge`).
 
 Run metadata (`Meta`) comes from the environment in `meta_from_env`: GITHUB_SHA, GITHUB_RUN_ID, the CPU model from
 /proc/cpuinfo and the current UTC time. The pure functions never read the environment.
@@ -273,11 +274,16 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str:
 
     Existing lines are kept as they are (not validated, not rewritten) except that a later repeat of an earlier
     line's (run_id, metric, key) is dropped; of two rows with the same identity the first wins, so merging the same
-    rows twice changes nothing. Every new row is validated first (ValueError names the field). A line of `existing`
-    that is not a JSON object raises ValueError with its line number. The result ends with a newline unless empty.
+    rows twice changes nothing. One exception: a `job_status` row replaces an earlier row of the same identity when its
+    `date` is later (a re-run keeps the run id, so its status must supersede the failed attempt's). The replacement
+    takes the earlier row's place in the file, and a row that is not later never replaces one, so the outcome does not
+    depend on the order rows arrive in. Every new row is validated first (ValueError names the field). A line of
+    `existing` that is not a JSON object raises ValueError with its line number. The result ends with a newline unless
+    empty.
     """
-    seen: set[tuple[object, object, object]] = set()
+    seen: dict[tuple[object, object, object], int] = {}  # identity -> index into `lines`
     lines: list[str] = []
+    objects: list[Mapping[str, object]] = []
     for number, line in enumerate(existing.splitlines(), start=1):
         if not line.strip():
             continue
@@ -291,16 +297,22 @@ def merge(existing: str, new_rows: Iterable[Row]) -> str:
         if ident is not None:
             if ident in seen:
                 continue
-            seen.add(ident)
+            seen[ident] = len(lines)
         lines.append(line)
+        objects.append(obj)
     for new in new_rows:
         row = validate(new)
         ident = _identity(row)
         if ident is not None and ident in seen:
+            at = seen[ident]
+            if row["metric"] == "job_status" and str(row["date"]) > str(objects[at].get("date", "")):
+                lines[at] = _dump(row)
+                objects[at] = row
             continue
         if ident is not None:
-            seen.add(ident)
+            seen[ident] = len(lines)
         lines.append(_dump(row))
+        objects.append(row)
     return "".join(f"{line}\n" for line in lines)
 
 
