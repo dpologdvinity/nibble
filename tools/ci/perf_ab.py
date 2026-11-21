@@ -7,10 +7,12 @@ gets its first block before any gets its second). Drift that is linear in time c
 
     ratio = (B1 + B2) / (A1 + A2)        of the medians in tok/s, i.e. head speed / base speed
 
-`run` drives `<bin> bench -m M -t T -p 512 -n 128 -r <reps> --out <tmp>` for each position and appends the rows to a
-JSONL file, adding "side" (base|head), "block" (the round, from 0) and "position" (A1|B1|B2|A2). `nibble bench`
-itself writes "model" (the file's base name), "test" (pp512, tg128), "threads" and "median". `block_ratios` turns
-such rows into one ratio per block for every (model, test, threads), and `verdict` classifies the list of ratios.
+`run` drives `<bin> bench -m M -t T -p 512 -n 128 -r <reps> --out <tmp>` for each position and writes the rows to a
+fresh JSONL file (one session per file: block ids start at 0 every time, so a second session appended to the first
+would double its blocks), adding "side" (base|head), "block" (the round, from 0) and "position" (A1|B1|B2|A2).
+`nibble bench` itself writes "model" (the file's base name), "test" (pp512, tg128), "threads" and "median".
+`block_ratios` turns such rows into one ratio per block for every (model, test, threads), and `verdict` classifies
+the list of ratios.
 
 The verdict is deliberately conservative, because a runner's +-10% jitter must never read as a regression:
 fewer than two usable blocks, a block with a missing, zero, negative or non-finite median, or ratios that disagree
@@ -137,18 +139,19 @@ def run(
     *,
     runner: Callable[[Sequence[str]], None] = _run_subprocess,
 ) -> None:
-    """Benchmark `base` and `head` binaries in interleaved ABBA blocks and append the tagged rows to `out`.
+    """Benchmark `base` and `head` binaries in interleaved ABBA blocks and write the tagged rows to `out`.
 
     For each round (block id), each model and each thread count, the four runs of `abba_order` call
     `<bin> bench -m <model> -t <threads> -p 512 -n 128 -r <reps> --out <tmp>`; each row the run wrote gets
-    "side", "block" and "position" added and is appended to the JSONL file `out` (created if absent). `runner`
+    "side", "block" and "position" added and goes to the JSONL file `out`, which is truncated first (rows of an
+    earlier session would share this session's block ids). `runner`
     executes a command (tests inject a fake `nibble bench`); a failing run raises, so no half-measured block is
     reported as a result. No load gate: unlike a dedicated box, a CI runner is never idle, which is why `verdict`
     tolerates noise.
     """
     binaries: dict[Side, str] = {"base": base, "head": head}
     order = abba_order(rounds)
-    with tempfile.TemporaryDirectory() as tmpdir, open(out, "a", encoding="utf-8") as sink:
+    with tempfile.TemporaryDirectory() as tmpdir, open(out, "w", encoding="utf-8") as sink:
         tmp = Path(tmpdir) / "bench.jsonl"
         for block in range(rounds):
             for model in models:
@@ -232,7 +235,7 @@ def main(argv: Sequence[str]) -> int:
     p_run.add_argument("--threads", type=_thread_list, default=[1], help="comma-separated thread counts")
     p_run.add_argument("--rounds", type=int, default=3, help="ABBA blocks per (model, threads)")
     p_run.add_argument("--reps", type=int, default=3, help="repetitions per `nibble bench` run")
-    p_run.add_argument("--out", required=True, help="JSONL file the tagged rows are appended to")
+    p_run.add_argument("--out", required=True, help="JSONL file the tagged rows are written to (replaced)")
     p_sum = sub.add_parser("summarize", help="fold the rows into the report's perf section")
     p_sum.add_argument("rows", help="JSONL file written by `run`")
     p_sum.add_argument("--out", required=True, help="JSON file to write")

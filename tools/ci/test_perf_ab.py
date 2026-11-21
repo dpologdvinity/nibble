@@ -196,12 +196,16 @@ class RunTest(unittest.TestCase):
         self.assertTrue(all(v == [1.2, 1.2] for v in ratios.values()))
         self.assertEqual(perf_ab.verdict(ratios[("a.gguf", "tg128", 4)]), "faster")
 
-    def test_run_appends_to_an_existing_file(self) -> None:
+    def test_run_starts_a_fresh_file(self) -> None:
+        # A second session into the same file (a local re-run, a retry after a partial run) must not add its blocks
+        # to the first one's: block ids restart at 0, and doubled blocks would read as inconclusive.
         Path(self.out).write_text('{"old": 1}\n')
-        perf_ab.run("base-bin", "head-bin", ["a.gguf"], [1], 1, 1, self.out, runner=self.fake_bench)
-        lines = Path(self.out).read_text().splitlines()
-        self.assertEqual(lines[0], '{"old": 1}')
-        self.assertEqual(len(lines), 1 + 8)
+        perf_ab.run("base-bin", "head-bin", ["a.gguf"], [1], 2, 1, self.out, runner=self.fake_bench)
+        perf_ab.run("base-bin", "head-bin", ["a.gguf"], [1], 2, 1, self.out, runner=self.fake_bench)
+        rows = [json.loads(line) for line in Path(self.out).read_text().splitlines()]
+        self.assertEqual(len(rows), 16)  # 2 rounds x 4 runs x pp512/tg128, from the second session only
+        self.assertNotIn({"old": 1}, rows)
+        self.assertTrue(all(e["verdict"] == "faster" for e in perf_ab.summarize(rows)))
 
     def test_run_propagates_a_failing_binary(self) -> None:
         def boom(argv: Sequence[str]) -> None:
