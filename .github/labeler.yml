@@ -1,0 +1,54 @@
+# Generated from AREA_PATHS in tools/ci/labels.py (test_labels.py keeps the two in step). Read by
+# .github/workflows/labeler.yml (actions/labeler v5+ format).
+kernels:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/backend/**'
+          - 'src/quant.*'
+          - 'src/fp16.h'
+          - 'src/tensor.*'
+          - 'src/thread_pool.*'
+gguf:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/gguf/**'
+tokenizer:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/tokenizer/**'
+          - 'src/chat.*'
+          - 'tests/test_tokenizer*.cpp'
+          - 'tests/test_pretokenize.cpp'
+          - 'tests/test_chat.cpp'
+model:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/model/**'
+          - 'include/**'
+          - 'src/nibble.cpp'
+          - 'src/sampler.*'
+cli:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'cli/**'
+build:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'CMakeLists.txt'
+          - 'Dockerfile'
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - 'tools/ci/**'
+bench:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'bench/**'
+          - 'src/bench/**'
+          - 'tools/bench_*.sh'
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - 'docs/**'
