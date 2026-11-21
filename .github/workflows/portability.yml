@@ -37,7 +37,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: write
     env:
       CCACHE_MAXSIZE: 300M
     steps:
@@ -102,7 +101,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -171,7 +169,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: write
     env:
       # llvm.sh runs as root, so it is pinned. The hash below is the script whose CURRENT_LLVM_STABLE is 22 (the newest
       # stable release it knew when it was pinned); the version is passed explicitly so a new default cannot slip in.
@@ -236,7 +233,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
