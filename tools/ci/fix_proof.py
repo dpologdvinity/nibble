@@ -5,7 +5,8 @@ nibble requires that a bug fix comes with a test that fails without the fix. CI 
 1. `gate` says whether the pull request is a fix (`fix:` title or commit subject) that touches code
    (`src/`, `include/`, `cli/`). Other pull requests are not checked.
 2. `select` reads `git diff -U0 base...head` (changes since the merge base), maps every added or modified line of
-   `tests/*.cpp` to the TEST_CASE that contains it, and writes `cases.json`.
+   `tests/*.cpp` to the TEST_CASE whose header or body contains it (a span ends at the body's closing brace), and
+   writes `cases.json`.
 3. The workflow builds the merge base with the PR's tests applied (ASan and UBSan), and `run` executes each selected
    case there in a process of its own, recording the JUnit XML and how the process ended.
 4. `classify` judges (R9 of the plan): the fix is **proven** when at least one selected case fails on the base. Cases
@@ -23,6 +24,9 @@ What can never be proven, by design (the "unresolved" and "not-runnable" paths):
 * A TEST_CASE whose name is not one plain string literal (the `E2E_CASE` macro in tests/test_e2e_golden.cpp builds
   its names with the preprocessor) cannot be named to Catch2, so a change to it is listed as unresolved.
 * A change that deletes a whole TEST_CASE selects nothing and is listed as `deleted: <name>`.
+* A change outside every TEST_CASE body (a helper, the `E2E_MODEL` invocations, code between or after cases) selects
+  nothing and is listed by line, even when a case uses the helper: the check cannot tell which cases a helper
+  affects, and running the neighbouring case would prove nothing about it.
 * A case that SKIPs on the base (the end-to-end cases without models), or whose run left no result, is not-runnable.
 * Edits to tests/*.cpp files that neither nibble_tests nor nibble_alloc_tests builds (simd_helpers_test.cpp and so on)
   are listed as unresolved.
@@ -103,9 +107,11 @@ LIST_TIMEOUT = 60.0  # seconds for one `--list-tests` probe
 class Case(NamedTuple):
     """One Catch2 TEST_CASE: `name` is None when its first argument is not one plain string literal.
 
-    `start` is the line of the TEST_CASE token and `end` the line before the next TEST_CASE (or the last line of the
-    file), both 1-based and inclusive. `binary` is the test executable that registers the case: nibble_tests, or
-    nibble_alloc_tests for tests/alloc_tests.cpp.
+    `start` is the line of the TEST_CASE token and `end` the line of the closing brace of its body, both 1-based and
+    inclusive, so helpers, macro invocations and comments between two cases belong to neither. When the body cannot
+    be delimited (see `_body_end`), `end` is the line before the next TEST_CASE (or the last line of the file).
+    `binary` is the test executable that registers the case: nibble_tests, or nibble_alloc_tests for
+    tests/alloc_tests.cpp.
     """
 
     file: str
@@ -273,15 +279,70 @@ def _usable_name(name: str) -> bool:
     )
 
 
-def _headers(source: str) -> list[tuple[int, str | None]]:
-    """(line, name) of every TEST_CASE-like header in `source`, in order; name None when it cannot be resolved."""
+def _matching(skeleton: str, pos: int, open_ch: str, close_ch: str) -> int | None:
+    """Offset of the `close_ch` that closes the `open_ch` at `pos` in `skeleton`, or None if it is never closed."""
+    depth = 0
+    for k in range(pos, len(skeleton)):
+        ch = skeleton[k]
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return k
+    return None
+
+
+def _body_end(skeleton: str, open_paren: int) -> int | None:
+    """Offset of the `}` that closes the body of the header whose argument list opens at `open_paren`, else None.
+
+    The skeleton has comments and the contents of string and char literals blanked, so the braces counted are the
+    code's own. None (the caller falls back to a longer span) when the argument list or the body is never closed, or
+    when what follows the argument list is not a `{` (a macro that expands to a header, say). It does not run the
+    preprocessor: braces in both arms of an `#if` can still unbalance a body, which the caller catches by checking
+    that the body ends before the next header.
+    """
+    close_paren = _matching(skeleton, open_paren, "(", ")")
+    if close_paren is None:
+        return None
+    k = close_paren + 1
+    while k < len(skeleton) and skeleton[k].isspace():
+        k += 1
+    if k >= len(skeleton) or skeleton[k] != "{":
+        return None
+    return _matching(skeleton, k, "{", "}")
+
+
+class _Header(NamedTuple):
+    """A TEST_CASE-like header: its line, its name (None if unresolved) and the line its body ends on (None if the
+    body could not be delimited)."""
+
+    line: int
+    name: str | None
+    body_end: int | None
+
+
+def _find_headers(source: str) -> list[_Header]:
+    """Every TEST_CASE-like header in `source`, in order."""
     plain, skeleton = _scan(source)
-    found: list[tuple[int, str | None]] = []
+    found: list[_Header] = []
     for m in _HEADER.finditer(skeleton):
         line = skeleton.count("\n", 0, m.start(1)) + 1
         name = _plain_literal(plain, m.end()) if m.group(1) == "TEST_CASE" else None
-        found.append((line, name if name is not None and _usable_name(name) else None))
+        end = _body_end(skeleton, m.end() - 1)
+        found.append(
+            _Header(
+                line,
+                name if name is not None and _usable_name(name) else None,
+                None if end is None else skeleton.count("\n", 0, end) + 1,
+            )
+        )
     return found
+
+
+def _headers(source: str) -> list[tuple[int, str | None]]:
+    """(line, name) of every TEST_CASE-like header in `source`, in order; name None when it cannot be resolved."""
+    return [(h.line, h.name) for h in _find_headers(source)]
 
 
 def test_cases(path: str, source: str) -> list[Case]:
@@ -289,11 +350,17 @@ def test_cases(path: str, source: str) -> list[Case]:
     # `select` never passes a file that no binary builds; any other path (a fixture in a test) gets nibble_tests.
     binary = _binary_for(path) or TESTS_BINARY
     last = source.count("\n") + (0 if source.endswith("\n") or not source else 1)
-    headers = _headers(source)
+    headers = _find_headers(source)
     cases: list[Case] = []
-    for idx, (line, name) in enumerate(headers):
-        end = headers[idx + 1][0] - 1 if idx + 1 < len(headers) else last
-        cases.append(Case(path, name, line, max(end, line), binary))
+    for idx, header in enumerate(headers):
+        limit = headers[idx + 1].line if idx + 1 < len(headers) else last
+        # A body that ends past the next header (or not at all) was not delimited correctly: keep every line up to
+        # the next header rather than guess, so an edit of this case is never lost.
+        if header.body_end is not None and header.body_end <= limit:
+            end = header.body_end
+        else:
+            end = limit - 1 if idx + 1 < len(headers) else last
+        cases.append(Case(path, header.name, header.line, max(end, header.line), binary))
     return cases
 
 
@@ -371,24 +438,37 @@ def _deleted_headers(hunk: _Hunk) -> list[str | None]:
     return [name for _, name in _headers("\n".join(hunk.removed) + "\n)")]
 
 
+class _Touched(NamedTuple):
+    """What a diff did to one file, head-side: lines it added or changed, and the gaps pure deletions left.
+
+    `gaps` maps `c` of a pure-deletion hunk `@@ -a,b +c,0 @@` (the removed text sat after head line `c`; 0 is the top
+    of the file) to the removed lines.
+    """
+
+    lines: set[int]
+    gaps: dict[int, list[str]]
+
+
+def _touched(diff: str) -> dict[str, _Touched]:
+    """Per tests/*.cpp file, the lines and deletion gaps of `diff` (see `changed_lines` for which hunks count)."""
+    out: dict[str, _Touched] = {}
+    for h in _hunks(diff):
+        if h.new_count > 0:
+            out.setdefault(h.path, _Touched(set(), {})).lines.update(range(h.new_start, h.new_start + h.new_count))
+        elif h.old_count > 0 and not _deleted_headers(h):
+            out.setdefault(h.path, _Touched(set(), {})).gaps.setdefault(h.new_start, []).extend(h.removed)
+    return out
+
+
 def changed_lines(diff: str) -> dict[str, set[int]]:
     """Per tests/*.cpp file, the head-side line numbers a diff added or changed.
 
-    A pure-deletion hunk `@@ -a,b +c,0 @@` counts as line `c` (the line before the gap; 0 at the top of the file), so
-    that deleting lines inside a case selects that case. Exception (R19): a deletion that removes a TEST_CASE header
-    contributes nothing, because `c` would be the last line of the previous case, which did not change; see
-    `deleted_case_names`. Files with no counted line are left out.
+    A pure-deletion hunk `@@ -a,b +c,0 @@` counts as line `c` (the line before the gap; 0 at the top of the file).
+    Exception (R19): a deletion that removes a TEST_CASE header contributes nothing, because `c` would be the last
+    line of the previous case, which did not change; see `deleted_case_names`. Files with no counted line are left
+    out. (`select` tells the gap of a deletion from a changed line: a gap selects a case only from inside its body.)
     """
-    out: dict[str, set[int]] = {}
-    for h in _hunks(diff):
-        if h.new_count > 0:
-            lines = set(range(h.new_start, h.new_start + h.new_count))
-        elif h.old_count > 0 and not _deleted_headers(h):
-            lines = {h.new_start}
-        else:
-            continue
-        out.setdefault(h.path, set()).update(lines)
-    return out
+    return {path: t.lines | set(t.gaps) for path, t in _touched(diff).items()}
 
 
 def deleted_case_names(diff: str) -> dict[str, list[str]]:
@@ -413,29 +493,64 @@ def _binary_for(path: str) -> str | None:
     return None
 
 
+def _line_list(numbers: set[int]) -> str:
+    """ "line 4" or "lines 1, 4-6" for a non-empty set of line numbers."""
+    ordered = sorted(numbers)
+    runs: list[list[int]] = []
+    for n in ordered:
+        if runs and n == runs[-1][1] + 1:
+            runs[-1][1] = n
+        else:
+            runs.append([n, n])
+    text = ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
+    return f"line {text}" if len(ordered) == 1 else f"lines {text}"
+
+
 def select(diff: str, head_sources: Mapping[str, str]) -> Selection:
     """The cases `diff` adds or changes, found in `head_sources` (path to the file's text at the head).
 
-    A changed line selects the case whose span contains it; lines outside every span (helpers above the first case)
-    select nothing. A selected case with an unresolved name goes to `unresolved`, as does a changed file no test
-    binary builds, and each deleted TEST_CASE header adds `deleted: <name>`.
+    A changed line selects the case whose span (header to closing brace) contains it, and a deletion selects the case
+    whose body it removed lines from (its gap lies after a line of the span other than the closing brace). Changes
+    outside every span (helpers, macro invocations such as E2E_MODEL, code between or after cases) select nothing and
+    are listed in `unresolved`, except blank lines. A selected case with an unresolved name goes to `unresolved`, as
+    does a changed file no test binary builds, and each deleted TEST_CASE header adds `deleted: <name>`.
     """
     cases: list[Case] = []
     unresolved: list[str] = []
-    for path, lines in changed_lines(diff).items():
+    for path, touched in _touched(diff).items():
         if _binary_for(path) is None:
             unresolved.append(f"{path}: not built into nibble_tests or nibble_alloc_tests, so not run")
             continue
         source = head_sources.get(path)
         if source is None:
             continue
-        for case in test_cases(path, source):
-            if not any(case.start <= n <= case.end for n in lines):
+        spans = test_cases(path, source)
+        for case in spans:
+            hit = any(case.start <= n <= case.end for n in touched.lines) or any(
+                case.start <= c < case.end for c in touched.gaps
+            )
+            if not hit:
                 continue
             if case.name is None:
                 unresolved.append(f"{path}:{case.start}: test name is not one plain string literal")
             else:
                 cases.append(case)
+        text = source.split("\n")
+        outside = {
+            n
+            for n in touched.lines
+            if not any(c.start <= n <= c.end for c in spans) and 0 < n <= len(text) and text[n - 1].strip()
+        }
+        outside |= {
+            max(c, 1)
+            for c, removed in touched.gaps.items()
+            if not any(case.start <= c < case.end for case in spans) and any(r.strip() for r in removed)
+        }
+        if outside:
+            unresolved.append(
+                f"{path}: {_line_list(outside)} changed outside every TEST_CASE body (helpers, macro invocations): "
+                "no case selected for that"
+            )
     for names in deleted_case_names(diff).values():
         unresolved.extend(f"deleted: {name}" for name in names)
     return Selection(cases, unresolved)

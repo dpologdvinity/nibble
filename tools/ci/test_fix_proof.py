@@ -62,6 +62,47 @@ TEST_CASE("gamma") {
 """
 
 
+# Shaped like the real files around a case body: braces inside strings, a char literal, comments and a raw string
+# (none of which may end the body), a lambda and nested SECTION/if blocks, a helper and a struct between and after the
+# cases, and a one-line case.
+BODIES = """\
+// Tests for the thing.
+#include <catch2/catch_test_macros.hpp>
+#include <string>
+
+namespace {
+struct Fixture {
+  int value = 1;
+};
+}  // namespace
+
+TEST_CASE("braces in literals and comments", "[x]") {
+  const std::string open = "{";  // a } in a comment
+  const char close = '}';
+  /* { */
+  const char* raw = R"json({"a": {"b": 1}})json";
+  auto f = [](int v) { return v + 1; };
+  SECTION("nested") {
+    if (f(1) == 2) {
+      CHECK(open.size() == 1);
+    }
+  }
+  CHECK(close == '}');
+}
+
+// A helper the next case uses, added between two cases.
+static int helper_between(int v) {
+  return v * 2;
+}
+
+TEST_CASE("uses the helper") { CHECK(helper_between(2) == 4); }
+
+struct After {
+  int x = 0;
+};
+"""
+
+
 def line_of(text: str, needle: str) -> int:
     """1-based number of the first line of `text` containing `needle` (keeps fixtures free of hand-counted lines)."""
     for number, line in enumerate(text.splitlines(), start=1):
@@ -113,13 +154,14 @@ class TestCasesTests(unittest.TestCase):
             ["alpha, with [tags] and * stars", "beta multi-line header", None, "gamma"],
         )
         alpha, beta, e2e, gamma = cases
+        # A span runs from the TEST_CASE line to the line of the body's closing brace.
         self.assertEqual(alpha.start, line_of(SOURCE, 'TEST_CASE("alpha'))
-        self.assertEqual(alpha.end, beta.start - 1)
+        self.assertEqual(alpha.end, line_of(SOURCE, 'const char* s = "TEST_CASE') + 1)
         self.assertEqual(beta.start, line_of(SOURCE, "beta multi-line") - 1)
-        # The macro case runs to the next TEST_CASE: its invocations count as part of it.
+        self.assertEqual(beta.end, line_of(SOURCE, '"[c]") {') + 2)
+        # The macro's case is its one line; the invocations below it are not inside any body.
         self.assertEqual(e2e.start, line_of(SOURCE, 'TEST_CASE("e2e golden'))
-        self.assertEqual(e2e.end, gamma.start - 1)
-        self.assertGreaterEqual(e2e.end, line_of(SOURCE, 'E2E_CASE("q4_0"'))
+        self.assertEqual(e2e.end, e2e.start)
         self.assertEqual(gamma.end, len(SOURCE.splitlines()))
         self.assertTrue(all(c.binary == "nibble_tests" for c in cases))
 
@@ -159,6 +201,29 @@ class TestCasesTests(unittest.TestCase):
         (c,) = fix_proof.test_cases("tests/test_x.cpp", 'TEST_CASE("a" /* why */, "[t]") {}\n')
         self.assertEqual(c.name, "a")
 
+    def test_span_ends_at_the_closing_brace_of_the_body(self) -> None:
+        first, second = fix_proof.test_cases("tests/test_x.cpp", BODIES)
+        self.assertEqual(
+            (first.start, first.end), (line_of(BODIES, "braces in literals"), line_of(BODIES, "CHECK(close") + 1)
+        )
+        self.assertEqual((second.start, second.end), (line_of(BODIES, "uses the helper"),) * 2)
+
+    def test_span_falls_back_to_the_next_header_when_the_body_cannot_be_delimited(self) -> None:
+        # Unbalanced braces across a preprocessor branch: no closing brace before the next case, so the old span
+        # (up to the line before the next TEST_CASE) is kept rather than a guess.
+        unbalanced = (
+            'TEST_CASE("a") {\n#if X\n  if (x) {\n#else\n  if (y) {\n#endif\n  }\n}\n\nint h;\nTEST_CASE("b") {}\n'
+        )
+        a, b = fix_proof.test_cases("tests/test_x.cpp", unbalanced)
+        self.assertEqual((a.start, a.end), (1, b.start - 1))
+        # A header whose body is not a brace right after it (a macro that expands to the header).
+        no_body = '#define CASE TEST_CASE("m")\nCASE {\n  CHECK(true);\n}\n'
+        (m,) = fix_proof.test_cases("tests/test_x.cpp", no_body)
+        self.assertEqual((m.start, m.end), (1, 4))
+        # An unterminated body at the end of the file runs to the last line.
+        (u,) = fix_proof.test_cases("tests/test_x.cpp", 'TEST_CASE("u") {\n  CHECK(true);\n')
+        self.assertEqual((u.start, u.end), (1, 2))
+
     def test_real_repository_files(self) -> None:
         # Every real test file parses; only the E2E_CASE macro (tests/test_e2e_golden.cpp) has an unnamed case.
         files = sorted((REPO_ROOT / "tests").glob("*.cpp"))
@@ -173,6 +238,16 @@ class TestCasesTests(unittest.TestCase):
                     unnamed.append(rel)
         self.assertGreater(total, 100)
         self.assertEqual(unnamed, ["tests/test_e2e_golden.cpp"])
+        # Every span of the real files ends on its body's closing brace, before the next case (no fallback).
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            lines = text.splitlines()
+            cases = fix_proof.test_cases(f"tests/{path.name}", text)
+            for i, c in enumerate(cases):
+                with self.subTest(file=path.name, line=c.start):
+                    self.assertIn("}", lines[c.end - 1])
+                    if i + 1 < len(cases):
+                        self.assertLess(c.end, cases[i + 1].start)
         real = {c.name for c in fix_proof.test_cases("t.cpp", (REPO_ROOT / "tests/test_quant.cpp").read_text("utf-8"))}
         self.assertIn("golden: dot_q{4,5,6}_K_q8_K bitwise equals ggml generic", real)
 
@@ -269,6 +344,41 @@ class SelectTests(unittest.TestCase):
 
     def test_select_helper_lines_outside_every_case_select_nothing(self) -> None:
         sel = self.select(hunk(3, [], 4, ["int more() { return 2; }"]), hunk(0, [], 1, ["// top"]))
+        self.assertEqual(sel.cases, [])
+        # Listed, so that the summary says why such a change proves nothing.
+        self.assertEqual(len(sel.unresolved), 1)
+        self.assertIn(f"{self.PATH}: lines 1, 4 changed outside every TEST_CASE body", sel.unresolved[0])
+
+    def test_select_a_helper_between_two_cases_selects_neither(self) -> None:
+        # The helper follows a closed case. With the span running on to the next TEST_CASE it selected that case,
+        # and if the unchanged case failed on the base anyway, the check read "proven" for a test the PR never touched.
+        helper = line_of(BODIES, "return v * 2;")
+        sel = self.select(hunk(helper, ["  return v + v;"], helper, ["  return v * 2;"]), source=BODIES)
+        self.assertEqual(sel.cases, [])
+        self.assertEqual(
+            sel.unresolved,
+            [
+                f"{self.PATH}: line {helper} changed outside every TEST_CASE body (helpers, macro invocations): "
+                "no case selected for that"
+            ],
+        )
+        # Added after the last case: the struct is outside too.
+        after = line_of(BODIES, "int x = 0;")
+        self.assertEqual(self.select(hunk(after - 1, [], after, ["  int x = 0;"]), source=BODIES).cases, [])
+
+    def test_select_deletions_inside_and_just_after_a_body(self) -> None:
+        close = line_of(BODIES, "CHECK(close") + 1  # the first case's closing brace
+        # Lines removed just before the closing brace: inside the body.
+        sel = self.select(hunk(close, ["  CHECK(true);"], close - 1, []), source=BODIES)
+        self.assertEqual(self.names(sel), ["braces in literals and comments"])
+        # Lines removed just after it (a helper deleted): outside.
+        sel = self.select(hunk(close + 1, ["static int gone() { return 1; }"], close, []), source=BODIES)
+        self.assertEqual(sel.cases, [])
+        self.assertEqual(len(sel.unresolved), 1)
+
+    def test_select_blank_lines_between_cases_are_not_listed(self) -> None:
+        blank = line_of(BODIES, "// A helper the next case uses") - 1
+        sel = self.select(hunk(blank - 1, [], blank, [""]), hunk(blank + 5, [""], blank + 4, []), source=BODIES)
         self.assertEqual(sel, Selection([], []))
 
     def test_select_multi_line_header_change_selects_the_case(self) -> None:
@@ -312,17 +422,18 @@ class SelectTests(unittest.TestCase):
         self.assertEqual(sel.unresolved, ["deleted: B"])
 
     def test_select_macro_case_is_unresolved(self) -> None:
-        # An edited E2E_CASE invocation, and an edit of the macro itself, both land in the unnamed case.
+        # An edit of the macro's TEST_CASE line lands in the unnamed case; an edited E2E_CASE invocation is outside
+        # every body. Neither is ever a selected case, and both are listed.
         invocation = line_of(SOURCE, 'E2E_CASE("q4_0"')
         sel = self.select(hunk(invocation, ['E2E_CASE("q8_0", "chat")'], invocation, ['E2E_CASE("q4_0", "chat")']))
         self.assertEqual(sel.cases, [])
         self.assertEqual(len(sel.unresolved), 1)
-        macro_line = line_of(SOURCE, 'TEST_CASE("e2e golden')
-        self.assertIn(f"{self.PATH}:{macro_line}", sel.unresolved[0])
-        # Two edits in the same macro case are reported once.
+        self.assertIn(f"{self.PATH}: line {invocation} changed outside every TEST_CASE body", sel.unresolved[0])
         macro = line_of(SOURCE, 'TEST_CASE("e2e golden')
-        sel = self.select(hunk(macro, ["a"], macro, ["b"]), hunk(invocation, ["c"], invocation, ["d"]))
-        self.assertEqual(len(sel.unresolved), 1)
+        sel = self.select(hunk(macro, ["a"], macro, ["b"]), hunk(macro + 1, ["c"], macro + 1, ["d"]))
+        self.assertEqual(sel.cases, [])
+        self.assertEqual(len(sel.unresolved), 2)
+        self.assertIn(f"{self.PATH}:{macro}: test name is not one plain string literal", sel.unresolved)
 
     def test_select_file_no_test_binary_builds_is_unresolved(self) -> None:
         diff = file_diff("tests/simd_helpers_test.cpp", hunk(5, [], 6, ["x"]))
