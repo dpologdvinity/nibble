@@ -133,8 +133,30 @@ class LineChartTest(unittest.TestCase):
     def test_line_chart_y_min(self) -> None:
         pts = [(T0 + i * DAY, 0.9995 + i * 1e-5) for i in range(4)]
         svg = plot.line_chart("min cosine", "cosine", [("q4_0", "#000", pts)], y_min=0.99)
-        self.assertIn(">0.99</text>", svg)  # the lowest tick is y_min
+        self.assertIn(">0.990</text>", svg)  # the lowest tick is y_min
         self.assertNotIn(">0</text>", svg)
+
+    @staticmethod
+    def y_labels(svg: str) -> list[str]:
+        """The y axis tick labels, bottom to top (the text elements right-aligned at the axis)."""
+        return re.findall(r'text-anchor="end"[^>]*>([^<]*)</text>', svg)
+
+    def test_line_chart_y_min_ticks_are_nice_and_evenly_formatted(self) -> None:
+        pts = [(T0, 0.9995), (T0 + DAY, 0.99995)]
+        svg = plot.line_chart("min cosine", "cosine", [("q4_0", "#000", pts)], y_min=0.99)
+        self.assertEqual(self.y_labels(svg), ["0.990", "0.992", "0.994", "0.996", "0.998", "1.000"])
+
+    def test_line_chart_y_min_ticks_other_scales(self) -> None:
+        svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 12.0), (T0 + DAY, 87.0)])], y_min=10.0)
+        labels = [float(v) for v in self.y_labels(svg)]
+        steps = {round(a - b, 9) for a, b in zip(labels, labels[1:], strict=False)}
+        self.assertEqual(len(steps), 1)  # evenly spaced
+        self.assertEqual(labels[0], 10.0)  # starts at y_min
+        self.assertGreaterEqual(labels[-1], 87.0)  # covers the data
+
+    def test_line_chart_default_ticks_unchanged(self) -> None:
+        svg = plot.line_chart("t", "y", self.two_series())
+        self.assertEqual(self.y_labels(svg), ["0", "40", "80", "120", "160", "200"])
 
     def test_line_chart_default_axis_starts_at_zero(self) -> None:
         svg = plot.line_chart("t", "y", self.two_series())

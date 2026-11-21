@@ -373,11 +373,17 @@ def date_ticks(lo: float, hi: float) -> list[float]:
     return [float(d * DAY) for d in range(first, last + 1) if d % step == 0] or [float(first * DAY)]
 
 
-def value_label(v: float, step: float) -> str:
-    """v with just enough decimals to tell neighbouring ticks `step` apart, trailing zeros dropped."""
-    decimals = max(0, 1 - math.floor(math.log10(step))) if step > 0 else 0
-    text = f"{round(v, decimals) + 0.0:.{decimals}f}"
-    return text.rstrip("0").rstrip(".") if "." in text else text
+def nice_step(span: float, max_steps: int = 5) -> float:
+    """The smallest 1, 2 or 5 times a power of ten that covers `span` in at most `max_steps` steps."""
+    p = 10 ** math.floor(math.log10(span / max_steps))
+    return float(next(m * p for m in (1, 2, 5, 10) if span <= m * p * max_steps * (1 + 1e-9)))
+
+
+def tick_label(v: float, step: float) -> str:
+    """v with as many decimals as `step` has (a 1, 2 or 5 times a power of ten), so every tick label of an axis
+    is formatted alike: 0.990, 0.992, ... or 0, 40, 80."""
+    decimals = max(0, -math.floor(math.log10(step) + 1e-9))
+    return f"{v + 0.0:.{decimals}f}"  # + 0.0 turns -0.0 into 0.0
 
 
 def line_chart(title: str, y_label: str, series: Sequence[Series], y_min: float | None = None) -> str:
@@ -409,17 +415,19 @@ def line_chart(title: str, y_label: str, series: Sequence[Series], y_min: float 
             )
         )
         return str(svg)
-    lo = min(0.0, min(ys)) if y_min is None else y_min
     vmax = max(ys)
     if y_min is None:
+        lo = min(0.0, min(ys))
         hi = nice_max(vmax * 1.1) if vmax > 0 else 1.0
-        lo = lo if lo < 0 else 0.0
-    else:
-        hi = max(vmax, lo) + 0.05 * (max(vmax - lo, abs(lo) * 0.01) or 1.0)  # headroom above the highest point
+        step = (hi - lo) / 5
+    else:  # nice ticks from y_min up to the first tick at or above the highest point
+        lo = y_min
+        step = nice_step(max(vmax - lo, abs(lo) * 0.01) or 1.0)
+        hi = lo + step * max(1, math.ceil((vmax - lo) / step - 1e-9))
     ph = h - top - bottom
     y_of: Callable[[float], float] = lambda v: top + ph * (1 - (v - lo) / (hi - lo))
-    step = (hi - lo) / 5
-    y_axis(svg, left, w - right, y_of, [lo + step * i for i in range(6)], lambda v: value_label(v, step))
+    ticks = [lo + step * i for i in range(round((hi - lo) / step) + 1)]
+    y_axis(svg, left, w - right, y_of, ticks, lambda v: tick_label(v, step))
     x_lo, x_hi = min(xs), max(xs)
     if x_lo == x_hi:  # a single instant: centre it in a one-day window
         x_lo, x_hi = x_lo - DAY / 2, x_hi + DAY / 2
