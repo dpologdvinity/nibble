@@ -14,6 +14,7 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import dashboard_render
 from dashboard_data import METRICS, Row, validate
@@ -67,9 +68,9 @@ def status(job: str, ok: bool, date: str = "2026-11-21T03:17:00Z", run_id: int =
     return row("job_status", f"{workflow}/{job}", 1.0 if ok else 0.0, date, run_id, source=workflow)
 
 
-def render(rows: list[Row]) -> tuple[Path, list[str]]:
-    """Render `rows` into a fresh temporary directory; returns it (cleaned up with the test process) and the names."""
-    out = Path(tempfile.mkdtemp(prefix="dash-test-"))
+def render(case: unittest.TestCase, rows: list[Row]) -> tuple[Path, list[str]]:
+    """Render `rows` into a temporary directory that `case` removes when the test ends; returns it and the names."""
+    out = Path(case.enterContext(tempfile.TemporaryDirectory(prefix="dash-test-"))) / "site"
     return out, dashboard_render.render_site(jsonl(rows), str(out), REPO)
 
 
@@ -89,7 +90,7 @@ def sample_rows() -> list[Row]:
 
 class RenderTest(unittest.TestCase):
     def test_render_writes_all_files(self) -> None:
-        out, names = render(sample_rows())
+        out, names = render(self, sample_rows())
         self.assertEqual(sorted(names), sorted(FILES))
         for name in FILES:
             self.assertTrue((out / name).is_file(), name)
@@ -105,7 +106,7 @@ class RenderTest(unittest.TestCase):
             self.assertTrue((out / name).read_text(encoding="utf-8").startswith("<svg"))
 
     def test_render_with_no_rows_still_writes_a_page(self) -> None:
-        out, names = render([])
+        out, names = render(self, [])
         self.assertEqual(sorted(names), sorted(FILES))
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertIn("No results yet", html)
@@ -121,7 +122,7 @@ class RenderTest(unittest.TestCase):
             status("accuracy", True, "2026-11-21T03:17:00Z", run_id=12),
             status("accuracy", False, "2026-11-20T03:17:00Z", run_id=11),
         ]
-        out, _ = render(rows)
+        out, _ = render(self, rows)
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertEqual(html.count('<th scope="row">accuracy</th>'), 1)
         self.assertIn(f"https://github.com/{REPO}/actions/runs/12", html)
@@ -132,7 +133,7 @@ class RenderTest(unittest.TestCase):
         self.assertIn("2026-11-21", html)
 
     def test_status_table_groups_by_workflow_and_marks_failures(self) -> None:
-        out, _ = render(sample_rows())
+        out, _ = render(self, sample_rows())
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertLess(html.index("nightly"), html.index("portability"))
         self.assertIn("❌", html)  # the failing arm64 job
@@ -140,7 +141,7 @@ class RenderTest(unittest.TestCase):
         self.assertIn("<caption>", html)
 
     def test_header_names_the_newest_row_and_its_commit(self) -> None:
-        out, _ = render(sample_rows())
+        out, _ = render(self, sample_rows())
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertIn("2026-11-21 05:00 UTC", html)  # the coverage row is the newest
         self.assertIn(f"https://github.com/{REPO}/commit/{SHA_B}", html)
@@ -149,13 +150,13 @@ class RenderTest(unittest.TestCase):
         self.assertIn("README", html)
 
     def test_page_is_honest_about_runner_speed(self) -> None:
-        out, _ = render(sample_rows())
+        out, _ = render(self, sample_rows())
         html = (out / "index.html").read_text(encoding="utf-8")
         self.assertIn("trend", html)
         self.assertIn("not a benchmark", html)
 
     def test_badge_failing_when_any_latest_nightly_status_zero(self) -> None:
-        out, _ = render([status("accuracy", True, run_id=1), status("fuzz_gguf", False, run_id=1)])
+        out, _ = render(self, [status("accuracy", True, run_id=1), status("fuzz_gguf", False, run_id=1)])
         badge = json.loads((out / "badge.json").read_text(encoding="utf-8"))
         self.assertEqual(badge, {"schemaVersion": 1, "label": "nightly", "message": "failing", "color": "red"})
 
@@ -165,18 +166,18 @@ class RenderTest(unittest.TestCase):
             status("accuracy", True, "2026-11-21T03:17:00Z", run_id=2),
             status("fuzz_gguf", True, run_id=2),
         ]
-        out, _ = render(rows)
+        out, _ = render(self, rows)
         badge = json.loads((out / "badge.json").read_text(encoding="utf-8"))
         self.assertEqual(badge, {"schemaVersion": 1, "label": "nightly", "message": "passing", "color": "brightgreen"})
 
     def test_badge_ignores_other_workflows(self) -> None:
         rows = [status("accuracy", True), status("arm64", False, workflow="portability")]
-        out, _ = render(rows)
+        out, _ = render(self, rows)
         badge = json.loads((out / "badge.json").read_text(encoding="utf-8"))
         self.assertEqual(badge["message"], "passing")
 
     def test_badge_has_no_data_without_nightly_status(self) -> None:
-        out, _ = render([status("arm64", True, workflow="portability")])
+        out, _ = render(self, [status("arm64", True, workflow="portability")])
         badge = json.loads((out / "badge.json").read_text(encoding="utf-8"))
         self.assertEqual(badge["message"], "no data")
         self.assertEqual(badge["color"], "lightgrey")
@@ -205,17 +206,19 @@ class RenderTest(unittest.TestCase):
         evil = "<script>alert(1)</script>"
         rows = [
             status(evil, True),
-            row("bench_tok_s", f'{evil}/tg128/t1"', 5.0),
+            row("bench_tok_s", f"{evil}/tg128/t1", 5.0),
             row("fuzz_seconds", evil, 60.0),
         ]
-        out, _ = render(rows)
+        out, _ = render(self, rows)
         for name in ("index.html", "speed-prefill.svg", "speed-decode.svg", "fuzz.svg"):
             text = (out / name).read_text(encoding="utf-8")
             self.assertNotIn("<script>", text, name)
+            self.assertNotIn("<SCRIPT>", text, name)  # the legend upper-cases the quantization part of the label
+        self.assertIn("&lt;SCRIPT&gt;", (out / "speed-decode.svg").read_text(encoding="utf-8"))
         self.assertIn("&lt;script&gt;", (out / "index.html").read_text(encoding="utf-8"))
 
     def test_prefill_and_decode_are_separate_charts(self) -> None:
-        out, _ = render(sample_rows())  # holds a tg128/t1 and a pp512/t4 series of the same model
+        out, _ = render(self, sample_rows())  # holds a tg128/t1 and a pp512/t4 series of the same model
         prefill = (out / "speed-prefill.svg").read_text(encoding="utf-8")
         decode = (out / "speed-decode.svg").read_text(encoding="utf-8")
         self.assertIn("Prefill speed (512-token prompt)", prefill)
@@ -236,7 +239,7 @@ class RenderTest(unittest.TestCase):
             row("bench_tok_s", "qwen2.5-0.5b-instruct-q4_0.gguf/tg128/t2", 20.0),
             row("bench_tok_s", "qwen2.5-0.5b-instruct-q4_k_m.gguf/tg128/t1", 20.0),
         ]
-        out, _ = render(rows)
+        out, _ = render(self, rows)
         svg = (out / "speed-decode.svg").read_text(encoding="utf-8")
         labels = re.findall(r">(Q[^<]*threads?)<", svg)
         self.assertEqual(labels, ["Q4_0, 2 threads", "Q4_0, 10 threads", "Q4_K_M, 1 thread", "Q8_0, 4 threads"])
@@ -260,15 +263,93 @@ class RenderTest(unittest.TestCase):
         self.assertLessEqual(len(label), dashboard_render.MAX_LABEL)
 
     def test_accuracy_legend_uses_upper_case_quant_names(self) -> None:
-        out, _ = render([row("min_cosine", "q4_k_m/capital", 0.999), row("min_cosine", "f16/capital", 0.9999)])
+        out, _ = render(self, [row("min_cosine", "q4_k_m/capital", 0.999), row("min_cosine", "f16/capital", 0.9999)])
         svg = (out / "accuracy.svg").read_text(encoding="utf-8")
         self.assertIn(">Q4_K_M<", svg)
         self.assertIn(">F16<", svg)
 
+    def test_status_table_and_badge_ignore_jobs_silent_for_over_14_days(self) -> None:
+        # A removed or renamed job must not keep a stale row (or a stale failure) forever. Age counts back from the
+        # newest row, so a quiet repository still shows its last results.
+        rows = [
+            status("accuracy", True, "2026-11-21T03:17:00Z", run_id=9),
+            status("fuzz_old", False, "2026-11-06T03:16:00Z", run_id=3),  # 15 days before the newest row: gone
+            status("fuzz_edge", True, "2026-11-07T03:17:00Z", run_id=4),  # exactly 14 days: still shown
+        ]
+        out, _ = render(self, rows)
+        html = (out / "index.html").read_text(encoding="utf-8")
+        self.assertIn('<th scope="row">fuzz_edge</th>', html)
+        self.assertNotIn("fuzz_old", html)
+        badge = json.loads((out / "badge.json").read_text(encoding="utf-8"))
+        self.assertEqual(badge["message"], "passing")
+
+    def test_charts_show_only_the_last_90_days(self) -> None:
+        rows = [
+            row("bench_tok_s", "m-q4_0.gguf/tg128/t1", 20.0, "2026-11-21T03:17:00Z", run_id=9),
+            row("bench_tok_s", "m-q8_0.gguf/tg128/t1", 15.0, "2026-08-20T03:17:00Z", run_id=1),  # 93 days earlier
+            row("bench_tok_s", "m-q6_k.gguf/tg128/t1", 16.0, "2026-08-23T03:17:00Z", run_id=2),  # 90 days: kept
+        ]
+        out, _ = render(self, rows)
+        svg = (out / "speed-decode.svg").read_text(encoding="utf-8")
+        self.assertIn(">Q4_0, 1 thread<", svg)
+        self.assertIn(">Q6_K, 1 thread<", svg)
+        self.assertNotIn("Q8_0", svg)
+        self.assertEqual(len(dashboard_render.recent([], 90)), 0)
+
+    def test_cumulative_fuzz_hours_keep_their_total_inside_the_window(self) -> None:
+        rows = [
+            row("fuzz_seconds", "fuzz_gguf", 7200.0, "2026-06-01T03:17:00Z", run_id=1),  # far outside the window
+            row("fuzz_seconds", "fuzz_gguf", 7200.0, "2026-11-20T03:17:00Z", run_id=2),
+            row("fuzz_seconds", "fuzz_old", 3600.0, "2026-06-01T03:17:00Z", run_id=1),  # no point in the window
+        ]
+        out, _ = render(self, rows)
+        svg = (out / "fuzz.svg").read_text(encoding="utf-8")
+        self.assertIn(">fuzz_gguf<", svg)
+        self.assertNotIn("fuzz_old", svg)
+        series = dashboard_render.fuzz_series(rows)
+        self.assertEqual([[v for _, v in pts] for _, _, pts in series], [[4.0]])
+
+    def test_keys_that_are_not_bench_keys_belong_to_neither_speed_chart(self) -> None:
+        rows = [row("bench_tok_s", "m-q4_0.gguf/pp512/tx", 5.0), row("bench_tok_s", "m-q4_0.gguf/pp512/t4", 6.0)]
+        out, _ = render(self, rows)
+        svg = (out / "speed-prefill.svg").read_text(encoding="utf-8")
+        self.assertIn(">Q4_0, 4 threads<", svg)
+        self.assertNotIn("tx", svg)
+        self.assertEqual(len(dashboard_render.speed_series(rows, "pp")), 1)
+
+    def test_main_parses_once_and_reports_skipped_rows_in_the_job_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "rows.jsonl"
+            src.write_text(jsonl(sample_rows()) + "garbage\n", encoding="utf-8")
+            summary = Path(tmp) / "summary.md"
+            env = {"GITHUB_STEP_SUMMARY": str(summary)}
+            with (
+                mock.patch.object(dashboard_render, "parse_rows", wraps=dashboard_render.parse_rows) as parse,
+                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                code = dashboard_render.main([str(src), "--out", str(Path(tmp) / "site"), "--repo", REPO], env=env)
+            self.assertEqual((code, parse.call_count), (0, 1))
+            text = summary.read_text(encoding="utf-8")
+            self.assertIn("1 malformed row", text)
+            self.assertIn("line 10", text)
+
+    def test_main_leaves_the_summary_alone_when_every_row_is_good(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "rows.jsonl"
+            src.write_text(jsonl(sample_rows()), encoding="utf-8")
+            summary = Path(tmp) / "summary.md"
+            with contextlib.redirect_stdout(io.StringIO()):
+                dashboard_render.main(
+                    [str(src), "--out", str(Path(tmp) / "site"), "--repo", REPO],
+                    env={"GITHUB_STEP_SUMMARY": str(summary)},
+                )
+            self.assertFalse(summary.exists())
+
     def test_invalid_repo_is_rejected(self) -> None:
         for bad in ("", "nibble", 'a/b"onmouseover="x', "a/b/c", "a b/c"):
-            with self.assertRaisesRegex(ValueError, "repo"):
-                dashboard_render.render_site("", tempfile.mkdtemp(prefix="dash-test-"), bad)
+            with self.assertRaisesRegex(ValueError, "repo"), tempfile.TemporaryDirectory() as tmp:
+                dashboard_render.render_site("", tmp, bad)
 
     def test_malformed_rows_are_skipped_and_reported(self) -> None:
         good = row("line_coverage", "src+cli", 80.0)

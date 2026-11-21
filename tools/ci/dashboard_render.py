@@ -1,4 +1,4 @@
-"""Render the CI dashboard: one static page, five SVG charts and a shields.io badge, from the rows of the data branch.
+"""Render the CI dashboard: one static page, six SVG charts and a shields.io badge, from the rows of the data branch.
 
 usage: dashboard_render.py ROWS.jsonl --out DIR --repo OWNER/NAME
 
@@ -13,11 +13,14 @@ ROWS.jsonl holds validated rows (see dashboard_data.py; a missing file counts as
     fuzz.svg      cumulative fuzzing hours per target
     size.svg      stripped release binary size
     coverage.svg  line coverage of src/ and cli/
-    badge.json    shields.io endpoint: nightly "passing" iff every job's latest `nightly/*` status is 1
+    badge.json    shields.io endpoint: nightly "passing" iff every current job's latest `nightly/*` status is 1
 
-The charts are drawn by bench/plot.py's `line_chart`. Every value that reaches HTML is escaped (the SVG builder escapes
-its own text), and `--repo` is validated before it goes into a URL. A malformed row is skipped and reported on stderr
-as a `::warning`: merge already validated what it stored, so this only guards against a hand-edited data branch.
+The charts are drawn by bench/plot.py's `line_chart` and show the last CHART_DAYS (90) days; the status table and
+badge only count jobs that reported within STATUS_DAYS (14) days, so a removed or renamed job ages out. Both spans are
+counted back from the newest row, not from the clock. Every value that reaches HTML is escaped (the SVG builder
+escapes its own text), and `--repo` is validated before it goes into a URL. A malformed row is skipped and reported
+on stderr as a `::warning` (and in the job summary): merge already validated what it stored, so this only guards
+against a hand-edited data branch.
 Stdlib only. Exit status is 0 on success and 1 (message on stderr) for an unusable `--repo` or an unwritable `--out`.
 """
 
@@ -26,6 +29,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -51,6 +55,9 @@ FILES = (
 )
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 MAX_LABEL = 30  # characters that fit the chart legend (190 px at 11 px sans-serif)
+DAY = 86400  # seconds
+CHART_DAYS = 90  # charts show this much history, counted back from the newest row (see `recent`)
+STATUS_DAYS = 14  # a job with no result for this long (counted the same way) is gone from the status table and badge
 WORKFLOW_ORDER = ("nightly", "portability", "ci")  # status table order; other workflows follow alphabetically
 # One colour per series, cycling: the first ten of plot.MODELS' palette (Tableau 10).
 PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
@@ -89,6 +96,21 @@ def _num(r: Row) -> float:
     """The row's `value` (validate made it a float)."""
     value = r["value"]
     return float(value) if isinstance(value, int | float) else float("nan")
+
+
+def recent(rows: Sequence[Row], days: int) -> list[Row]:
+    """The rows dated within `days` days of the newest row (counting from the data, not the clock, so a quiet
+    repository still shows its last results and the output depends on the rows alone). [] for no rows."""
+    if not rows:
+        return []
+    cutoff = max(_unix(r["date"]) for r in rows) - days * DAY
+    return [r for r in rows if _unix(r["date"]) >= cutoff]
+
+
+def current_statuses(rows: Sequence[Row]) -> dict[str, Row]:
+    """The latest `job_status` row of every `<workflow>/<job>` that reported within STATUS_DAYS, so a job that was
+    renamed or removed ages out instead of keeping its last (maybe failing) row forever."""
+    return latest_by_key(recent(rows, STATUS_DAYS), "job_status")
 
 
 def latest_by_key(rows: Sequence[Row], metric: str) -> dict[str, Row]:
@@ -166,8 +188,8 @@ def speed_series(rows: Sequence[Row], test_prefix: str) -> list[plot.Series]:
         if r["metric"] != "bench_tok_s":
             continue
         key = str(r["key"])
-        segments = key.rsplit("/", 2)
-        if len(segments) == 3 and segments[1].startswith(test_prefix):
+        parts = _bench_parts(key)
+        if parts is not None and parts[1].startswith(test_prefix):
             by_key.setdefault(key, []).append((_unix(r["date"]), _num(r)))
     by_key = dict(sorted(by_key.items(), key=lambda kv: _speed_order(kv[0])))
     return _series(by_key, speed_labels(list(by_key)))
@@ -210,6 +232,18 @@ def cumulative_fuzz_hours(rows: Sequence[Row]) -> dict[str, list[Point]]:
     return out
 
 
+def fuzz_series(rows: Sequence[Row]) -> list[plot.Series]:
+    """Chart series of the cumulative fuzz hours: the running totals are summed over all `rows`, then only the points
+    within CHART_DAYS of the newest row are drawn (a target with none is left out), so the line starts at the total
+    reached by then rather than at zero."""
+    if not rows:
+        return []
+    cutoff = max(_unix(r["date"]) for r in rows) - CHART_DAYS * DAY
+    shown = {t: [p for p in pts if p[0] >= cutoff] for t, pts in cumulative_fuzz_hours(rows).items()}
+    shown = {t: pts for t, pts in shown.items() if pts}
+    return _series(shown, [_clip(t) for t in shown])
+
+
 def _simple_series(rows: Sequence[Row], metric: str, scale: float = 1.0) -> list[plot.Series]:
     """One series per key of `metric`, values divided by `scale`, in key order."""
     by_key: dict[str, list[Point]] = {}
@@ -221,15 +255,15 @@ def _simple_series(rows: Sequence[Row], metric: str, scale: float = 1.0) -> list
 
 
 def charts(rows: Sequence[Row]) -> dict[str, str]:
-    """File name -> SVG text for the five charts."""
-    cosine = min_cosine_by_model(rows)
-    fuzz = cumulative_fuzz_hours(rows)
+    """File name -> SVG text for the six charts, each over the last CHART_DAYS days (the fuzz total counts all runs)."""
+    shown = recent(rows, CHART_DAYS)
+    cosine = min_cosine_by_model(shown)
     return {
         "speed-prefill.svg": plot.line_chart(
-            "Prefill speed (512-token prompt)", "tokens / second", speed_series(rows, "pp")
+            "Prefill speed (512-token prompt)", "tokens / second", speed_series(shown, "pp")
         ),
         "speed-decode.svg": plot.line_chart(
-            "Decode speed (128 generated tokens)", "tokens / second", speed_series(rows, "tg")
+            "Decode speed (128 generated tokens)", "tokens / second", speed_series(shown, "tg")
         ),
         "accuracy.svg": plot.line_chart(
             "Accuracy against llama.cpp: min cosine per model",
@@ -237,20 +271,20 @@ def charts(rows: Sequence[Row]) -> dict[str, str]:
             _series(cosine, [_clip(m.upper()) for m in cosine]),
             y_min=0.99,
         ),
-        "fuzz.svg": plot.line_chart("Cumulative fuzzing time", "hours", _series(fuzz, [_clip(t) for t in fuzz])),
+        "fuzz.svg": plot.line_chart("Cumulative fuzzing time", "hours", fuzz_series(rows)),
         "size.svg": plot.line_chart(
-            "Stripped release binary size", "MiB", _simple_series(rows, "binary_bytes", 1024 * 1024)
+            "Stripped release binary size", "MiB", _simple_series(shown, "binary_bytes", 1024 * 1024)
         ),
         "coverage.svg": plot.line_chart(
-            "Line coverage of src/ and cli/", "% of lines", _simple_series(rows, "line_coverage")
+            "Line coverage of src/ and cli/", "% of lines", _simple_series(shown, "line_coverage")
         ),
     }
 
 
 def badge(rows: Sequence[Row]) -> dict[str, object]:
-    """The shields.io endpoint object: "passing" iff every job's latest `nightly/*` status is 1, "failing" if any is
-    not, and "no data" (grey) while there is none."""
-    nightly = [r for k, r in latest_by_key(rows, "job_status").items() if k.startswith("nightly/")]
+    """The shields.io endpoint object: "passing" iff every current job's latest `nightly/*` status is 1, "failing" if
+    any is not, and "no data" (grey) while there is none. Current means reported within STATUS_DAYS."""
+    nightly = [r for k, r in current_statuses(rows).items() if k.startswith("nightly/")]
     if not nightly:
         message, colour = "no data", "lightgrey"
     elif all(_num(r) == 1.0 for r in nightly):
@@ -267,7 +301,7 @@ def _when(r: Row) -> str:
 
 def _status_table(rows: Sequence[Row], repo: str) -> str:
     """The HTML status table: the latest `job_status` per `<workflow>/<job>`, grouped by workflow."""
-    latest = latest_by_key(rows, "job_status")
+    latest = current_statuses(rows)
     if not latest:
         return "<p>No job status recorded yet.</p>"
     groups: dict[str, list[tuple[str, Row]]] = {}
@@ -419,12 +453,11 @@ def index_html(rows: Sequence[Row], repo: str) -> str:
     )
 
 
-def render_site(rows_jsonl: str, out_dir: str, repo: str) -> list[str]:
-    """Write the dashboard for the rows in `rows_jsonl` (JSONL text) into `out_dir` (created if needed) and return
-    the names of the files written (FILES). Malformed rows are skipped. ValueError if `repo` is not `owner/name`."""
+def render_rows(rows: Sequence[Row], out_dir: str, repo: str) -> list[str]:
+    """Write the dashboard for already parsed `rows` into `out_dir` (created if needed) and return the names of the
+    files written (FILES). ValueError if `repo` is not `owner/name`."""
     if _REPO.fullmatch(repo) is None:
         raise ValueError(f"repo must look like owner/name, got {repo!r:.60}")
-    rows, _problems = parse_rows(rows_jsonl)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     pages = {"index.html": index_html(rows, repo), **charts(rows), "badge.json": json.dumps(badge(rows)) + "\n"}
@@ -433,19 +466,39 @@ def render_site(rows_jsonl: str, out_dir: str, repo: str) -> list[str]:
     return list(FILES)
 
 
-def main(argv: Sequence[str]) -> int:
-    """Command line entry point (see the module docstring). Returns the exit status."""
+def render_site(rows_jsonl: str, out_dir: str, repo: str) -> list[str]:
+    """Write the dashboard for the rows in `rows_jsonl` (JSONL text) into `out_dir` and return the names of the files
+    written. Malformed rows are skipped silently here; `main` is the caller that reports them (see parse_rows)."""
+    rows, _problems = parse_rows(rows_jsonl)
+    return render_rows(rows, out_dir, repo)
+
+
+def _report_problems(problems: Sequence[str], env: Mapping[str, str]) -> None:
+    """Print a `::warning` per skipped row to stderr and, if GITHUB_STEP_SUMMARY is set, list them in the summary."""
+    for problem in problems:
+        print(f"::warning::dashboard_render: skipped row, {problem}", file=sys.stderr)
+    summary = env.get("GITHUB_STEP_SUMMARY")
+    if problems and summary:
+        lines = [f"### Dashboard: {len(problems)} malformed row(s) skipped", ""]
+        lines += [f"- {problem}" for problem in problems[:20]]
+        if len(problems) > 20:
+            lines.append(f"- ... and {len(problems) - 20} more")
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+
+def main(argv: Sequence[str], *, env: Mapping[str, str] | None = None) -> int:
+    """Command line entry point (see the module docstring). `env` defaults to the real environment. Returns the exit
+    status."""
     parser = argparse.ArgumentParser(description="Render the CI dashboard site from dashboard rows.")
     parser.add_argument("rows", type=Path, help="rows JSONL (a missing file counts as empty)")
     parser.add_argument("--out", type=Path, required=True, help="output directory")
     parser.add_argument("--repo", required=True, help="OWNER/NAME, used for links")
     args = parser.parse_args(argv)
     try:
-        text = args.rows.read_text(encoding="utf-8") if args.rows.exists() else ""
-        _rows, problems = parse_rows(text)
-        for problem in problems:
-            print(f"::warning::dashboard_render: skipped row, {problem}", file=sys.stderr)
-        names = render_site(text, str(args.out), args.repo)
+        rows, problems = parse_rows(args.rows.read_text(encoding="utf-8") if args.rows.exists() else "")
+        _report_problems(problems, os.environ if env is None else env)
+        names = render_rows(rows, str(args.out), args.repo)
     except (ValueError, OSError) as e:
         print(f"dashboard_render: {e}", file=sys.stderr)
         return 1
