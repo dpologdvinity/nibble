@@ -222,7 +222,7 @@ class RenderTest(unittest.TestCase):
         prefill = (out / "speed-prefill.svg").read_text(encoding="utf-8")
         decode = (out / "speed-decode.svg").read_text(encoding="utf-8")
         self.assertIn("Prefill speed (512-token prompt)", prefill)
-        self.assertIn("Decode speed (128 generated tokens)", decode)
+        self.assertIn("Decode speed (128 generated tokens)", decode)  # the sizes come from the tests plotted
         self.assertIn(">Q4_0, 4 threads<", prefill)
         self.assertNotIn(">Q4_0, 1 thread<", prefill)
         self.assertIn(">Q4_0, 1 thread<", decode)
@@ -256,6 +256,52 @@ class RenderTest(unittest.TestCase):
     def test_speed_labels_fall_back_to_the_raw_key(self) -> None:
         self.assertEqual(
             dashboard_render.speed_labels(["weird key", "m-q4_0.gguf/tg128/tx"]), ["weird key", "m-q4_0.gguf/tg128/tx"]
+        )
+
+    def test_speed_chart_titles_follow_the_plotted_test_sizes(self) -> None:
+        self.assertEqual(dashboard_render.speed_title("pp", ["pp512"]), "Prefill speed (512-token prompt)")
+        self.assertEqual(dashboard_render.speed_title("tg", ["tg256"]), "Decode speed (256 generated tokens)")
+        self.assertEqual(
+            dashboard_render.speed_title("pp", ["pp512", "pp1024"]), "Prefill speed (several prompt sizes)"
+        )
+        self.assertEqual(dashboard_render.speed_title("tg", []), "Decode speed")
+        rows = [row("bench_tok_s", "m-q4_0.gguf/pp1024/t1", 5.0), row("bench_tok_s", "m-q4_0.gguf/tg256/t1", 5.0)]
+        out, _ = render(self, rows)
+        self.assertIn("Prefill speed (1024-token prompt)", (out / "speed-prefill.svg").read_text(encoding="utf-8"))
+        self.assertIn("Decode speed (256 generated tokens)", (out / "speed-decode.svg").read_text(encoding="utf-8"))
+        self.assertNotIn("512-token", (out / "index.html").read_text(encoding="utf-8"))
+
+    def test_speed_labels_name_the_test_whenever_a_chart_mixes_tests(self) -> None:
+        # No two labels collide here, but without the test a reader could not tell which series is which size.
+        keys = ["m-q4_0.gguf/pp512/t1", "m-q8_0.gguf/pp1024/t4"]
+        self.assertEqual(dashboard_render.speed_labels(keys), ["Q4_0, 1 thread, pp512", "Q8_0, 4 threads, pp1024"])
+
+    def test_clipping_keeps_labels_distinct_and_their_thread_counts(self) -> None:
+        keys = [
+            "tinyllama-1.1b-chat-v1.0-q4_0.gguf/tg128/t1",
+            "tinyllama-1.1b-chat-v1.0-q4_0.gguf/tg128/t4",
+            "qwen2.5-0.5b-instruct-q4_0.gguf/tg128/t1",
+        ]
+        labels = dashboard_render.speed_labels(keys)
+        self.assertEqual(len(set(labels)), 3, labels)
+        self.assertTrue(all(len(label) <= dashboard_render.MAX_LABEL for label in labels), labels)
+        self.assertTrue(labels[0].endswith(", 1 thread") and labels[1].endswith(", 4 threads"), labels)
+        self.assertTrue(labels[0].startswith("tinyllama") and labels[2].startswith("qwen"), labels)
+
+    def test_labels_that_only_collide_after_clipping_are_still_made_distinct(self) -> None:
+        labels = dashboard_render.speed_labels(["x" * 100 + "a", "x" * 100 + "b"])  # raw keys, clipped to one text
+        self.assertEqual(len(set(labels)), 2, labels)
+        self.assertTrue(all(len(label) <= dashboard_render.MAX_LABEL for label in labels), labels)
+
+    def test_parse_rows_skips_calendar_invalid_dates_and_the_rest_still_renders(self) -> None:
+        good = row("line_coverage", "src+cli", 80.0)
+        bad = json.dumps(good).replace("2026-11-21T03:17:00Z", "2026-02-30T03:17:00Z")
+        rows, problems = dashboard_render.parse_rows(bad + "\n" + json.dumps(good) + "\n")
+        self.assertEqual((rows, len(problems)), ([good], 1))
+        self.assertIn("date", problems[0])
+        out = Path(self.enterContext(tempfile.TemporaryDirectory())) / "site"
+        self.assertEqual(
+            dashboard_render.render_site(bad + "\n" + json.dumps(good) + "\n", str(out), REPO), list(FILES)
         )
 
     def test_labels_are_clipped(self) -> None:
@@ -372,7 +418,7 @@ class RenderTest(unittest.TestCase):
             out = Path(tmp) / "site"
             err = io.StringIO()
             with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-                code = dashboard_render.main([str(src), "--out", str(out), "--repo", REPO])
+                code = dashboard_render.main([str(src), "--out", str(out), "--repo", REPO], env={})
             self.assertEqual(code, 0)
             self.assertTrue((out / "index.html").is_file())
             self.assertIn("::warning", err.getvalue())
@@ -381,7 +427,7 @@ class RenderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "site"
             with contextlib.redirect_stdout(io.StringIO()):
-                code = dashboard_render.main([str(Path(tmp) / "nope.jsonl"), "--out", str(out), "--repo", REPO])
+                code = dashboard_render.main([str(Path(tmp) / "nope.jsonl"), "--out", str(out), "--repo", REPO], env={})
             self.assertEqual(code, 0)
             self.assertIn("No results yet", (out / "index.html").read_text(encoding="utf-8"))
 

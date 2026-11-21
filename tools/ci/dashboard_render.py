@@ -151,29 +151,47 @@ def _bench_parts(key: str) -> tuple[str, str, int] | None:
     return m["model"].removesuffix(".gguf"), m["test"], int(m["threads"])
 
 
+def _clip_middle(text: str, width: int) -> str:
+    """`text` cut to `width` characters by replacing its middle with an ellipsis (both ends stay recognisable)."""
+    if len(text) <= width:
+        return text
+    head = width // 2
+    return text[:head] + "…" + text[len(text) - (width - 1 - head) :]
+
+
 def speed_labels(keys: Sequence[str]) -> list[str]:
     """Legend labels for the bench keys of one chart, readable without knowing the key format: `Q4_0, 1 thread` (the
     quantization is the last dash-separated part of the model file name, upper-cased; the count comes from `t<N>`).
-    If two keys would get the same label, more is shown, in order until they differ: the test (`, pp512`), the whole
-    model stem instead of the quantization, then both. A key that does not parse keeps its raw text. Labels are
-    clipped to MAX_LABEL."""
+    The test is named too (`, pp512`) when the chart mixes tests. If two keys would still get the same label, more is
+    shown, in order until they differ: the test, the whole model stem instead of the quantization, then both. A key
+    that does not parse keeps its raw text. Labels are at most MAX_LABEL characters: a long model name is shortened
+    in the middle so the thread count and test always stay, and labels that are still equal after that get ` (2)`,
+    ` (3)` and so on, so no two series ever share a label."""
+    parsed = [_bench_parts(k) for k in keys]
+    mixed = len({p[1] for p in parsed if p is not None}) > 1
 
-    def build(key: str, stage: int) -> str:
-        parts = _bench_parts(key)
+    def build(key: str, parts: tuple[str, str, int] | None, stage: int) -> str:
         if parts is None:
-            return key
+            return _clip(key)
         stem, test, threads = parts
         model = stem.rsplit("-", 1)[-1].upper() if stage < 2 else stem
-        text = f"{model}, {threads} thread{'' if threads == 1 else 's'}"
-        return f"{text}, {test}" if stage % 2 == 1 else text
+        suffix = f", {threads} thread{'' if threads == 1 else 's'}" + (f", {test}" if stage % 2 == 1 else "")
+        room = MAX_LABEL - len(suffix)
+        return _clip(model + suffix) if room < 4 else _clip_middle(model, room) + suffix
 
     # Stage 0: quantization only; 1: plus the test; 2: full stem; 3: full stem plus the test.
-    labels = [build(k, 0) for k in keys]
-    for stage in (1, 2, 3):
+    labels: list[str] = []
+    for stage in range(1 if mixed else 0, 4):
+        labels = [build(k, p, stage) for k, p in zip(keys, parsed, strict=True)]
         if len(set(labels)) == len(labels):
-            break
-        labels = [build(k, stage) for k in keys]
-    return [_clip(label) for label in labels]
+            return labels
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for label in labels:
+        seen[label] = seen.get(label, 0) + 1
+        tag = f" ({seen[label]})" if seen[label] > 1 else ""
+        unique.append(label[: MAX_LABEL - len(tag)] + tag)
+    return unique
 
 
 def _speed_order(key: str) -> tuple[int, str, int]:
@@ -182,9 +200,9 @@ def _speed_order(key: str) -> tuple[int, str, int]:
     return (0, parts[0], parts[2]) if parts else (1, key, 0)
 
 
-def speed_series(rows: Sequence[Row], test_prefix: str) -> list[plot.Series]:
-    """One series per bench key whose test starts with `test_prefix` (`pp` prefill, `tg` decode), ordered by model and
-    thread count. A key without a `<model>/<test>/<threads>` shape belongs to neither chart."""
+def _speed_points(rows: Sequence[Row], test_prefix: str) -> dict[str, list[Point]]:
+    """Points per bench key whose test starts with `test_prefix` (`pp` prefill, `tg` decode), keys ordered by model and
+    thread count. A key without a `<model>/<test>/t<threads>` shape belongs to neither chart."""
     by_key: dict[str, list[Point]] = {}
     for r in rows:
         if r["metric"] != "bench_tok_s":
@@ -193,8 +211,31 @@ def speed_series(rows: Sequence[Row], test_prefix: str) -> list[plot.Series]:
         parts = _bench_parts(key)
         if parts is not None and parts[1].startswith(test_prefix):
             by_key.setdefault(key, []).append((_unix(r["date"]), _num(r)))
-    by_key = dict(sorted(by_key.items(), key=lambda kv: _speed_order(kv[0])))
+    return dict(sorted(by_key.items(), key=lambda kv: _speed_order(kv[0])))
+
+
+def speed_series(rows: Sequence[Row], test_prefix: str) -> list[plot.Series]:
+    """One series per bench key of the `test_prefix` tests, ordered by model and thread count."""
+    by_key = _speed_points(rows, test_prefix)
     return _series(by_key, speed_labels(list(by_key)))
+
+
+def speed_tests(rows: Sequence[Row], test_prefix: str) -> list[str]:
+    """The distinct test names (`pp512`, `tg128`, ...) among the bench keys a `test_prefix` chart plots, sorted."""
+    return sorted({parts[1] for key in _speed_points(rows, test_prefix) if (parts := _bench_parts(key)) is not None})
+
+
+def speed_title(test_prefix: str, tests: Sequence[str]) -> str:
+    """Title of a speed chart that does not claim more than its data: `Prefill speed (512-token prompt)` when every
+    plotted test is the same `pp<N>` (likewise `Decode speed (128 generated tokens)` for `tg<N>`), the bare name when
+    nothing or something other than `<prefix><N>` is plotted, and `(several ...)` when the sizes differ."""
+    prefill = test_prefix == "pp"
+    name = "Prefill speed" if prefill else "Decode speed"
+    if len(tests) > 1:
+        return f"{name} (several {'prompt sizes' if prefill else 'generation lengths'})"
+    if len(tests) == 1 and (m := re.fullmatch(rf"{test_prefix}(\d+)", tests[0])) is not None:
+        return f"{name} ({m[1]}-token prompt)" if prefill else f"{name} ({m[1]} generated tokens)"
+    return name
 
 
 def min_cosine_by_model(rows: Sequence[Row]) -> dict[str, list[Point]]:
@@ -262,10 +303,10 @@ def charts(rows: Sequence[Row]) -> dict[str, str]:
     cosine = min_cosine_by_model(shown)
     return {
         "speed-prefill.svg": plot.line_chart(
-            "Prefill speed (512-token prompt)", "tokens / second", speed_series(shown, "pp")
+            speed_title("pp", speed_tests(shown, "pp")), "tokens / second", speed_series(shown, "pp")
         ),
         "speed-decode.svg": plot.line_chart(
-            "Decode speed (128 generated tokens)", "tokens / second", speed_series(shown, "tg")
+            speed_title("tg", speed_tests(shown, "tg")), "tokens / second", speed_series(shown, "tg")
         ),
         "accuracy.svg": plot.line_chart(
             "Accuracy against llama.cpp: min cosine per model",
@@ -367,16 +408,17 @@ SECTIONS = (
     (
         "Speed (trend only)",
         "Measured on shared GitHub-hosted runners, whose speed varies from run to run: read this as a trend, "
-        "not a benchmark. The README tables come from an idle dedicated machine.",
+        "not a benchmark. The README tables come from an idle dedicated machine. Each chart title gives the prompt or "
+        "generation size measured.",
         (
             (
                 "speed-prefill.svg",
-                "Line chart of prefill speed in tokens per second (512-token prompt) for each model and thread count, "
+                "Line chart of prefill speed in tokens per second for each model and thread count, "
                 "one point per nightly run",
             ),
             (
                 "speed-decode.svg",
-                "Line chart of decode speed in tokens per second (128 generated tokens) for each model and thread "
+                "Line chart of decode speed in tokens per second for each model and thread "
                 "count, one point per nightly run",
             ),
         ),
