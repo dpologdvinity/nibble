@@ -65,8 +65,9 @@ usage:
         (seconds, default 600). Next to the XML it writes `<n>.status.json`
         (`{"started", "exit_code", "signal", "timed_out", "unique"}`; `unique` is the `--list-tests` probe) and
         `<n>.log` (the tail of the output, evidence for a failure); those three files of every selected case are
-        removed first, so a reused directory holds no evidence from an earlier run. With `--budget`, a case starts
-        only while a whole per-case timeout still fits in that many seconds since `run` began, so the job's own time
+        removed first, so a reused directory holds no evidence from an earlier run. With `--budget` (at least one
+        `--timeout`), the first case always starts and each later one only while a whole per-case timeout still fits
+        in that many seconds since `run` began, so the job's own time
         limit is never reached before `classify` writes a verdict, and no case is cut short by the budget (which
         would read as a timeout of its own); the cases left over get no files and are reported as not run. Always
         exits 0 unless the arguments are bad.
@@ -1041,7 +1042,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             (results_dir / f"{index}{suffix}").unlink(missing_ok=True)
     started = time.monotonic()
     for index, case in enumerate(selection.cases):
-        if args.budget is not None and args.budget - (time.monotonic() - started) < args.timeout:
+        # The first case always starts (main checks that the budget holds one whole timeout); every later one only
+        # while a whole timeout still fits in what is left.
+        if index > 0 and args.budget is not None and args.budget - (time.monotonic() - started) < args.timeout:
             left = len(selection.cases) - index
             print(f"time budget of {args.budget:.0f} s used up: {left} case(s) not run", file=sys.stderr)
             break

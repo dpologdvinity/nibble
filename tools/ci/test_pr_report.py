@@ -581,6 +581,8 @@ class AssembleTests(unittest.TestCase):
         # The accuracy job uploads this marker when it could not write a real part, so that it replaces an earlier
         # attempt's part-accuracy artifact: a re-run must never assemble a report from that stale head result.
         failed = pr_report.accuracy_failed_part()
+        # pr-report.yml writes this exact text with plain shell (it must work before Python is set up).
+        self.assertEqual(failed, '{"accuracy_failed": true}')
         with self.assertRaisesRegex(ValueError, "accuracy job failed"):
             pr_report.assemble([json.dumps(self.META), failed])
         with self.assertRaisesRegex(ValueError, "accuracy job failed"):

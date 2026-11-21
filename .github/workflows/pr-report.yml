@@ -245,18 +245,21 @@ jobs:
         run: |
           python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json \
             --head-outcome "$HEAD_OUTCOME" --out part-accuracy.json
-      # Also after a failure, so that this attempt's part always replaces an earlier attempt's (overwrite): when no
-      # real part was written (an unusable head log, a failed build), the marker goes up instead, and `assemble`
-      # refuses it. Otherwise a re-run of failed jobs would assemble a report from the earlier attempt's head result.
+      # always(), so that this attempt's part replaces an earlier attempt's (overwrite) even after a failure or a
+      # `timeout-minutes` kill (reported as cancelled, while `assemble`, whose `!cancelled()` is about the run, still
+      # runs): when no real part was written (an unusable head log, a failed build), the marker goes up instead and
+      # `assemble` refuses it. Otherwise a re-run of failed jobs would assemble a report from the earlier attempt's
+      # head result. Plain shell, so it also works when checkout or Python setup failed; the text is exactly
+      # pr_report.accuracy_failed_part() (pinned in test_pr_report.py).
       - name: Mark a failed accuracy attempt
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         run: |
           if [ ! -f part-accuracy.json ]; then
-            python tools/ci/pr_report.py accuracy --failed --out part-accuracy.json
+            echo '{"accuracy_failed": true}' > part-accuracy.json
             echo "::error title=pr-report accuracy::no usable accuracy result in this attempt, so no report is built"
           fi
       - name: Upload the accuracy part
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: part-accuracy

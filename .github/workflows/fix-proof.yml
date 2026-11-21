@@ -6,7 +6,8 @@
 #      ASan and UBSan, and
 #   3. runs each selected case on that build, one process per case (`fix_proof.py run`).
 # The check is green when at least one case FAILS there ("proven": the test catches the bug), and red when none does
-# ("does not reproduce") or when the PR has no test at all. A base that does not compile with the new tests counts as
+# ("does not reproduce"), when the PR has no test at all ("no test"), or when no case failed but the time budget left
+# a case unrun ("incomplete"). A base that does not compile with the new tests counts as
 # proven (the tests use something the fix adds). The `no-test-needed` label turns a red result green (reason in the PR).
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
 # without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.

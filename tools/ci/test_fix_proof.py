@@ -971,6 +971,14 @@ class RunTests(unittest.TestCase):
         results, _ = fix_proof.read_results(str(self.results), selection)
         self.assertNotEqual(results[1], "failed")
 
+    def test_a_budget_of_exactly_one_timeout_runs_the_first_case(self) -> None:
+        # Validation accepts --budget == --timeout; the first case must then start (time has already passed by the
+        # time the loop begins, so "a whole timeout still fits" would otherwise be false for it).
+        selection = self.write_cases(["passes", "fails"])
+        self.run_all("--budget", "2")
+        results, _ = fix_proof.read_results(str(self.results), selection)
+        self.assertEqual(results[0], "passed")
+
     def test_budget_and_timeout_are_checked(self) -> None:
         self.write_cases(["passes"])
         base = ["run", "--cases", str(self.cases), "--build-dir", str(self.build), "--results-dir", str(self.results)]
