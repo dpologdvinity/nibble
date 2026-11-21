@@ -287,7 +287,8 @@ flowchart LR
   open an `agent/` PR with the failing test as the first commit and the fix as the second; otherwise it stops at a
   diagnosis comment.
 - Agent PRs are never auto-merged: the owner reviews and merges them. The owner can also hand Claude work with
-  `@claude` on an issue or on a PR from this repository, and claude-review comments on every PR the owner, Dependabot or the agent opens.
+  `@claude` on an issue or on a PR from this repository, and claude-review comments on every PR the owner,
+  Dependabot or the agent opens.
 
 The [dashboard](https://dpologdvinity.github.io/nibble/) charts the scheduled runs over time: speed, accuracy, fuzzing
 hours, binary size and coverage, and the latest status of every scheduled job. CI-runner speed numbers are trends; the
