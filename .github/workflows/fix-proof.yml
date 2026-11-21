@@ -22,8 +22,8 @@
 # not compile). The diffs (`gate`, `select`) still compare the merge base with the PR head (`$BASE_SHA...$HEAD_SHA`,
 # three dots), not the merge commit, so they list only what the PR changed.
 # Who can waive: the `no-test-needed` label counts only when its latest `labeled` event was made by a person with write
-# access, never by a bot (tools/ci/fix_proof_waiver.py): an agent session can open a pull request with any label, and
-# must not be able to waive its own proof.
+# access, never by a bot (tools/ci/fix_proof_waiver.py, run from the base branch so the pull request cannot edit it):
+# an agent session can open a pull request with any label, and must not be able to waive its own proof.
 # Trust split: it builds and runs the pull request's own tests and so its code, so the token is read-only and no secret
 # exists; the tools that judge the result come from the merge ref, not from the PR. The PR title and every other
 # `${{ }}` value reach scripts through `env:` only. It never writes to GitHub. The token (issues and pull-requests
@@ -97,13 +97,25 @@ jobs:
           fi
       # Before any pull request code is built, and the only step that gets the token. The label alone is not enough:
       # it counts when a person with write access applied it last (an agent could add it to its own pull request).
+      # The script and the gh.py it imports come from the base branch ($BASE_SHA), not from the merge ref, so a pull
+      # request cannot edit the waiver it is judged by. They go into a new empty directory, and `python -I` with that
+      # directory as the only added path keeps the workspace (and PYTHON* variables) from shadowing any module. A base
+      # without the script (before it was merged) waives nothing.
       - name: Does the no-test-needed label count?
         id: waiver
         if: steps.gate.outputs.apply == 'true' && env.NO_TEST_NEEDED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python tools/ci/fix_proof_waiver.py --pr "$PR_NUMBER" --summary "$GITHUB_STEP_SUMMARY" > waiver.txt
+          trusted=$(mktemp -d)
+          if ! git show "$BASE_SHA:tools/ci/fix_proof_waiver.py" > "$trusted/fix_proof_waiver.py" ||
+             ! git show "$BASE_SHA:tools/ci/gh.py" > "$trusted/gh.py"; then
+            echo "waived=false" >> "$GITHUB_OUTPUT"
+            echo "Waiver label: does not count: the base branch has no tools/ci/fix_proof_waiver.py yet" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import fix_proof_waiver; sys.exit(fix_proof_waiver.main(sys.argv[2:]))' \
+            "$trusted" --pr "$PR_NUMBER" --summary "$GITHUB_STEP_SUMMARY" > waiver.txt
           cat waiver.txt >> "$GITHUB_OUTPUT"
       - name: Select the test cases the pull request adds or changes
         id: select

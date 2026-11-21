@@ -175,8 +175,9 @@ If a fix cannot have a reproducing test (a build-only or documentation fix to co
 `no-test-needed` label and say why in the pull request: the label turns **no test** green, and only that result
 (**does not reproduce** and **incomplete** stay red). The check is not required yet. The verdict and the cases are in the job summary.
 
-Only a person with write access can waive: fix-proof reads the label's history (`tools/ci/fix_proof_waiver.py`) and
-the label counts only when its latest application was by such a person, never by a bot. The Claude sessions can open
+Only a person with write access can waive: fix-proof reads the label's history (`tools/ci/fix_proof_waiver.py`, run
+from the base branch so a pull request cannot change it) and the label counts only when its latest application was by
+such a person, never by a bot. The Claude sessions can open
 a pull request with any label, so a label they add is ignored. If the check ran before the label's event was recorded,
 re-run it.
 
