@@ -1,0 +1,266 @@
+# Reason: a pull request that touches the engine, the CLI, the build or the tests should say what it did to speed,
+# binary size, peak memory and accuracy, without a reviewer running anything. This workflow measures the head against
+# the base on a shared runner and uploads one validated `pr-report.json`; pr-report-comment.yml posts it as a single
+# "nibble PR report" comment, edited in place on every push.
+#   perf      builds the base and the head (Release, portable, CLI only) and compares them with interleaved ABBA runs
+#             of `nibble bench` on Qwen2.5-0.5B Q4_0 and Q8_0 at 1 and all threads (tools/ci/perf_ab.py), then the
+#             stripped binary size and the peak RSS of a 32-token run (`/usr/bin/time -f %M`, ruling R1).
+#   accuracy  builds the base and the head with tests and runs the end-to-end tests on the Qwen2.5-0.5B family against
+#             the llama.cpp goldens for each, so the comment can show every min cosine that moved. It also records
+#             whether the diff touches src/backend/ (kernels_changed).
+#   assemble  merges the three parts (tools/ci/pr_report.py assemble) and uploads the `pr-report` artifact.
+# Base: the merge base of the base branch and the head (`git merge-base`), not the base branch's tip, so that unrelated
+# commits that landed on master after the branch was cut never show up as this PR's speed-up or regression.
+# Trust split: this workflow runs the pull request's own code, so it has a read-only token and no secrets, and its
+# output is untrusted input. It never writes to GitHub. The only job that holds a write token, pr-report-comment.yml,
+# starts from `workflow_run`, checks out the default branch instead of PR code, and validates the artifact strictly
+# before rendering it (tools/ci/pr_report.py). This workflow's name must stay `pr-report`: the comment workflow
+# triggers on it by name.
+# Cold model cache: perf, size and memory are reported as skipped and the accuracy part says `skipped-cold-cache`;
+# nothing here rebuilds the models (the nightly accuracy job does, see .github/actions/setup-models).
+# By hand: it cannot be dispatched (`gh workflow run pr-report.yml` is not possible for a pull request, whose head and
+# base come from the event); push to the pull request to run it again.
+# Actions are pinned by commit SHA (kept current by Dependabot); the tag each SHA corresponds to is in the comment.
+name: pr-report
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "include/**"
+      - "cli/**"
+      - "CMakeLists.txt"
+      - "tests/**"
+
+permissions:
+  contents: read
+
+# One run per pull request; a newer push cancels the older one (its numbers describe a commit nobody will merge).
+concurrency:
+  group: pr-report-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  DEPS_DIR: ${{ github.workspace }}/.deps-cache
+  BASE_SHA: ${{ github.event.pull_request.base.sha }}  # the base branch's tip when the run started (hex)
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}  # the commit under test (hex); checkout is told to use it
+
+jobs:
+  perf:
+    name: perf
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # The head commit itself, not the merge preview GitHub checks out by default: the report names this SHA and the
+      # comment job refuses a report whose head_sha differs from the run's. Full history for `git merge-base`.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Models
+        id: models
+        uses: ./.github/actions/setup-models
+        with:
+          require-warm: "true"  # a cold cache means skipped sections, never a 45-minute rebuild on a pull request
+      - name: Merge base and runner
+        id: base
+        run: |
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
+          cpu=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+          echo "ubuntu-24.04 (${cpu:-unknown CPU})" > runner.txt
+          echo "Base for the comparison: merge base $merge_base of $BASE_SHA and $HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Cold model cache, so skip the measurements
+        if: steps.models.outputs.warm != 'true'
+        run: |
+          jq -n --arg runner "$(cat runner.txt)" '{runner: $runner, perf: null, size: null, rss: null}' > part-perf.json
+          echo "::notice title=pr-report perf::cold model cache; speed, size and memory are reported as skipped"
+      - name: Check out the base (merge base) as a worktree
+        if: steps.models.outputs.warm == 'true'
+        env:
+          MERGE_BASE: ${{ steps.base.outputs.merge_base }}
+        run: git worktree add --detach base-src "$MERGE_BASE"
+      - name: Build the head and the base (Release, portable, CLI only)
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build build -j "$(nproc)" --target nibble_cli
+          cmake -S base-src -B base-build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DNIBBLE_BUILD_TESTS=OFF
+          cmake --build base-build -j "$(nproc)" --target nibble_cli
+      # 3 ABBA rounds of 3 repetitions per (model, threads); the builds are done, so nothing else runs during it.
+      - name: Speed (ABBA, base against head)
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          python tools/ci/perf_ab.py run --base base-build/nibble --head build/nibble \
+            --model models/qwen2.5-0.5b-instruct-q4_0.gguf --model models/qwen2.5-0.5b-instruct-q8_0.gguf \
+            --threads "1,$(nproc)" --rounds 3 --reps 3 --out rows.jsonl
+          python tools/ci/perf_ab.py summarize rows.jsonl --out perf.json
+      # The size that matters is the shipped one, so measure stripped copies.
+      - name: Binary size (stripped)
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          cp base-build/nibble base-stripped
+          cp build/nibble head-stripped
+          strip base-stripped head-stripped
+          stat -c %s base-stripped > size-base.txt
+          stat -c %s head-stripped > size-head.txt
+      # R1: `nibble bench` reports no peak RSS, so measure a short greedy single-thread run; %M is KiB.
+      - name: Peak memory (RSS)
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          [ -x /usr/bin/time ] || sudo apt-get install -y --no-install-recommends time
+          model=models/qwen2.5-0.5b-instruct-q4_0.gguf
+          for side in base head; do
+            bin=build/nibble
+            if [ "$side" = base ]; then bin=base-build/nibble; fi
+            /usr/bin/time -f %M -o "rss-$side-time.txt" "$bin" run -m "$model" -p "The capital of France is" -n 32 --temp 0 -t 1 > /dev/null
+            tail -n 1 "rss-$side-time.txt" > "rss-$side.txt"
+            grep -Eq '^[0-9]+$' "rss-$side.txt"
+          done
+      - name: Write part-perf.json
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          jq -n --arg runner "$(cat runner.txt)" --slurpfile perf perf.json \
+            --argjson bs "$(cat size-base.txt)" --argjson hs "$(cat size-head.txt)" \
+            --argjson br "$(cat rss-base.txt)" --argjson hr "$(cat rss-head.txt)" \
+            '{runner: $runner, perf: $perf[0], size: {base_bytes: $bs, head_bytes: $hs}, rss: {base_kib: $br, head_kib: $hr}}' \
+            > part-perf.json
+      - name: Upload the perf part
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: part-perf
+          path: part-perf.json
+          retention-days: 7
+          if-no-files-found: error
+
+  accuracy:
+    name: accuracy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      MIN_KEYS: "18"  # 6 models x 3 prompts, as in nightly.yml; fewer means models or goldens went missing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Models and goldens
+        id: models
+        uses: ./.github/actions/setup-models
+        with:
+          require-warm: "true"
+      # Needs no models: which commit is the base, and whether the diff touches the kernels (merge base to head).
+      - name: Merge base and changed paths
+        id: base
+        run: |
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
+          kernels=false
+          if [ -n "$(git diff --name-only "$merge_base" "$HEAD_SHA" -- src/backend/)" ]; then kernels=true; fi
+          jq -n --arg base "$merge_base" --arg head "$HEAD_SHA" --argjson kernels "$kernels" \
+            '{base_sha: $base, head_sha: $head, kernels_changed: $kernels}' > part-meta.json
+          echo "Base for the comparison: merge base $merge_base of $BASE_SHA and $HEAD_SHA (kernels changed: $kernels)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Cold model cache, so skip the accuracy comparison
+        if: steps.models.outputs.warm != 'true'
+        run: |
+          python tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
+          echo "::notice title=pr-report accuracy::cold model cache; accuracy is reported as skipped"
+      - name: Restore Catch2
+        if: steps.models.outputs.warm == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DEPS_DIR }}
+          key: deps-${{ hashFiles('CMakeLists.txt') }}
+      # The e2e tests read models/ and the goldens from their source directory, so the base worktree links to ours.
+      - name: Check out the base (merge base) as a worktree
+        if: steps.models.outputs.warm == 'true'
+        env:
+          MERGE_BASE: ${{ steps.base.outputs.merge_base }}
+        run: |
+          git worktree add --detach base-src "$MERGE_BASE"
+          ln -s "$PWD/models" base-src/models
+      - name: Build the head and the base (Release, portable, with tests)
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build build -j "$(nproc)"
+          cmake -S base-src -B base-build -DCMAKE_BUILD_TYPE=Release -DNIBBLE_NATIVE=OFF -DFETCHCONTENT_BASE_DIR="$DEPS_DIR"
+          cmake --build base-build -j "$(nproc)"
+      # -V puts the min-cosine lines of passing tests into the log; the absolute log path is because --test-dir makes
+      # ctest change directory. continue-on-error: a failing case must not hide the comparison; the last step fails the job.
+      - name: End-to-end tests on the base
+        id: e2e-base
+        if: steps.models.outputs.warm == 'true'
+        continue-on-error: true
+        run: ctest --test-dir base-build -L e2e -j2 -V --output-log "$PWD/e2e-base.log" --timeout 7200
+      - name: End-to-end tests on the head
+        id: e2e-head
+        if: steps.models.outputs.warm == 'true'
+        continue-on-error: true
+        run: ctest --test-dir build -L e2e -j2 -V --output-log "$PWD/e2e-head.log" --timeout 7200
+      - name: Parse the min-cosine lines
+        if: steps.models.outputs.warm == 'true'
+        run: |
+          python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
+          python tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
+      - name: Write part-accuracy.json
+        if: steps.models.outputs.warm == 'true'
+        run: python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --out part-accuracy.json
+      - name: Upload the accuracy part
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: part-accuracy
+          path: |
+            part-accuracy.json
+            part-meta.json
+          retention-days: 7
+          if-no-files-found: error
+      # A head that fails an end-to-end test is the finding the comment exists to show, so the report is still built;
+      # the job itself must still be red. (A failing base is not this pull request's fault and is not an error here.)
+      - name: Fail the job if an end-to-end test failed on the head
+        if: ${{ steps.e2e-head.outcome == 'failure' }}
+        run: |
+          echo "::error title=e2e accuracy::ctest reported failing end-to-end tests on the head (see the End-to-end tests step)"
+          exit 1
+
+  assemble:
+    name: assemble
+    needs: [perf, accuracy]
+    # An accuracy job that failed only because of a head e2e test still wrote its part; one that died earlier did not,
+    # and `assemble` then fails loudly on the missing part. A failed perf job has no report to build.
+    if: ${{ !cancelled() && needs.perf.result == 'success' && needs.accuracy.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: part-*
+          path: parts
+          merge-multiple: true
+      # A missing part (an accuracy job that died early) is an error here, never a silent "skipped".
+      - name: Assemble pr-report.json
+        run: python tools/ci/pr_report.py assemble parts/part-*.json --out pr-report.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-report
+          path: pr-report.json
+          retention-days: 7
+          if-no-files-found: error
