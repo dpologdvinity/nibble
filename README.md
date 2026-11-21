@@ -292,8 +292,9 @@ flowchart LR
 
 The [dashboard](https://dpologdvinity.github.io/nibble/) charts the scheduled runs over time: speed, accuracy, fuzzing
 hours, binary size and coverage, and the latest status of every scheduled job. A job that hits its time limit counts as
-failing, and the nightly badge reads "stale" (orange) when no nightly result has arrived for 36 hours. CI-runner speed
-numbers are trends; the benchmark tables below come from an idle dedicated machine.
+failing, and the nightly badge reads "stale" (orange) when no nightly result has arrived for 36 hours (a failing
+result stays "failing", red, however old). CI-runner speed numbers are trends; the benchmark tables below come from an
+idle dedicated machine.
 
 **Verifying a release.** From the next release on, the tarballs and the container image carry build-provenance and
 SBOM attestations signed by the release workflow. To check that a download was built from this repository by that
