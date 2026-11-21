@@ -1,7 +1,7 @@
 """Unit tests for tools/ci/cosine.py: parsing the e2e `min cosine` WARN lines and comparing two runs.
 
 Run with: python -m unittest discover -s tools/ci -p 'test_*.py'
-The log fixture is real Catch2 v3 console output (captured from a WARN built like the one in
+LOG is real Catch2 v3 console output (captured from a WARN built like the one in
 tests/test_e2e_golden.cpp), including its 79-column wrapping, which splits a line mid-token.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from pathlib import Path
 
 import cosine
 from cosine import Cosine, CosineChange
@@ -43,6 +44,11 @@ All tests passed (1 assertion in 1 test case)
 """
 
 
+# Unabridged `ctest --test-dir build -L e2e -R 'q4_0\\]' -V --output-log` text (paths made repo-relative): here the
+# `warning:` marker ends the `<file>:<line>: warning:` line and every line carries the "<test number>: " prefix.
+REAL_VERBOSE_LOG = Path(__file__).parent / "fixtures" / "real-ctest-V-q4_0.log"
+
+
 def cos(key: str, value: float) -> Cosine:
     model, prompt = key.split("/")
     return Cosine(model, prompt, value, 10, 10)
@@ -55,6 +61,22 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(got["q4_0/capital"], Cosine("q4_0", "capital", 0.999123, 12, 12))
         self.assertEqual(got["f16/chat"].min_cos, 0.999877)
         self.assertEqual(got["llama32-q4_k_m/code"], Cosine("llama32-q4_k_m", "code", 0.97, 1234, 1234))
+
+    def test_parses_real_ctest_verbose_log(self) -> None:
+        got = cosine.parse_min_cosine(REAL_VERBOSE_LOG.read_text())
+        self.assertEqual(
+            got,
+            {
+                "q4_0/capital": Cosine("q4_0", "capital", 0.999206, 69, 69),
+                "q4_0/chat": Cosine("q4_0", "chat", 0.997901, 88, 88),
+                "q4_0/code": Cosine("q4_0", "code", 0.998971, 77, 77),
+            },
+        )
+
+    def test_warning_must_end_the_line_to_open_a_block(self) -> None:
+        msg = "  chat [f16]: min cosine over 3 positions = 0.9, top-1 agreement 3/3\n"
+        self.assertEqual(cosine.parse_min_cosine("a.cpp:1: warning: not a header\n" + msg), {})
+        self.assertEqual(len(cosine.parse_min_cosine("a.cpp:1: warning:\n" + msg)), 1)
 
     def test_unwrapped_and_ctest_verbose_prefixed_lines(self) -> None:
         text = "31: warning:\n31:   chat [q8_0]: min cosine over 3 positions = 0.5, top-1 agreement 2/3\n"

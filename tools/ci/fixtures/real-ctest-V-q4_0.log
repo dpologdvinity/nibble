@@ -1,0 +1,153 @@
+[OUTPUT] 
+Internal ctest changing into directory: /work/build
+
+[HANDLER_VERBOSE_OUTPUT] 
+UpdateCTestConfiguration  from :/work/build/DartConfiguration.tcl
+
+UpdateCTestConfiguration  from :/work/build/DartConfiguration.tcl
+[HANDLER_OUTPUT] 
+Test project /work/build
+
+[HANDLER_VERBOSE_OUTPUT] 
+Constructing a list of tests
+
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 251
+[HANDLER_OUTPUT] 
+    Start 251: e2e golden: capital [q4_0] [e2e]
+
+[HANDLER_VERBOSE_OUTPUT] 
+
+251: Test command: /work/build/nibble_tests "e2e golden: capital \[q4_0\]" "--allow-running-no-tests" "--order decl"
+
+251: Working Directory: /work/build
+251: Test timeout computed to be: 7200
+251: Filters: "e2e golden: capital \[q4_0\]"
+251: Randomness seeded to: 4226411353
+251: 
+251: ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+251: nibble_tests is a Catch2 v3.16.1 host application.
+251: Run with -? for options
+251: 
+251: -------------------------------------------------------------------------------
+251: e2e golden: capital [q4_0]
+251: -------------------------------------------------------------------------------
+251: tests/test_e2e_golden.cpp:241
+251: ...............................................................................
+251: 
+251: tests/test_e2e_golden.cpp:194: warning:
+251:   capital [q4_0]: min cosine over 69 positions = 0.999206, top-1 agreement 69/
+251:   69
+251: 
+251: tests/test_e2e_golden.cpp:205: warning:
+251:   capital: prefill last-row cosine = 0.999841
+251: 
+251: tests/test_e2e_golden.cpp:226: warning:
+251:   capital: greedy matched 64/64
+251: 
+251: ===============================================================================
+251: All tests passed (77 assertions in 1 test case)
+251: 
+[HANDLER_OUTPUT] 
+1/3 Test #251: e2e golden: capital [q4_0] [e2e] ...
+   Passed   13.95 sec
+[HANDLER_VERBOSE_OUTPUT] 
+test 265
+
+[HANDLER_OUTPUT] 
+    Start 265: e2e golden: chat [q4_0] [e2e]
+
+[HANDLER_VERBOSE_OUTPUT] 
+
+265: Test command: /work/build/nibble_tests "e2e golden: chat \[q4_0\]" "--allow-running-no-tests" "--order decl"
+
+265: Working Directory: /work/build
+265: Test timeout computed to be: 7200
+265: Filters: "e2e golden: chat \[q4_0\]"
+265: Randomness seeded to: 287504340
+265: 
+265: ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+265: nibble_tests is a Catch2 v3.16.1 host application.
+265: Run with -? for options
+265: 
+265: -------------------------------------------------------------------------------
+265: e2e golden: chat [q4_0]
+265: -------------------------------------------------------------------------------
+265: tests/test_e2e_golden.cpp:241
+265: ...............................................................................
+265: 
+265: tests/test_e2e_golden.cpp:194: warning:
+265:   chat [q4_0]: min cosine over 88 positions = 0.997901, top-1 agreement 88/88
+265: 
+265: tests/test_e2e_golden.cpp:205: warning:
+265:   chat: prefill last-row cosine = 0.999694
+265: 
+265: tests/test_e2e_golden.cpp:226: warning:
+265:   chat: greedy matched 64/64
+265: 
+265: ===============================================================================
+265: All tests passed (96 assertions in 1 test case)
+265: 
+[HANDLER_OUTPUT] 
+2/3 Test #265: e2e golden: chat [q4_0] [e2e] ......
+   Passed   15.45 sec
+[HANDLER_VERBOSE_OUTPUT] 
+test 279
+
+[HANDLER_OUTPUT] 
+    Start 279: e2e golden: code [q4_0] [e2e]
+
+[HANDLER_VERBOSE_OUTPUT] 
+
+279: Test command: /work/build/nibble_tests "e2e golden: code \[q4_0\]" "--allow-running-no-tests" "--order decl"
+
+279: Working Directory: /work/build
+279: Test timeout computed to be: 7200
+279: Filters: "e2e golden: code \[q4_0\]"
+279: Randomness seeded to: 188282982
+279: 
+279: ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+279: nibble_tests is a Catch2 v3.16.1 host application.
+279: Run with -? for options
+279: 
+279: -------------------------------------------------------------------------------
+279: e2e golden: code [q4_0]
+279: -------------------------------------------------------------------------------
+279: tests/test_e2e_golden.cpp:241
+279: ...............................................................................
+279: 
+279: tests/test_e2e_golden.cpp:194: warning:
+279:   code [q4_0]: min cosine over 77 positions = 0.998971, top-1 agreement 77/77
+279: 
+279: tests/test_e2e_golden.cpp:205: warning:
+279:   code: prefill last-row cosine = 0.99944
+279: 
+279: tests/test_e2e_golden.cpp:226: warning:
+279:   code: greedy matched 64/64
+279: 
+279: ===============================================================================
+279: All tests passed (85 assertions in 1 test case)
+279: 
+[HANDLER_OUTPUT] 
+3/3 Test #279: e2e golden: code [q4_0] [e2e] ......
+   Passed   14.52 sec
+[HANDLER_VERBOSE_OUTPUT] 
+
+The following tests passed:
+
+	e2e golden: capital [q4_0] [e2e]
+	e2e golden: chat [q4_0] [e2e]
+	e2e golden: code [q4_0] [e2e]
+[HANDLER_OUTPUT] 
+
+100% tests passed, 0 tests failed out of 3
+
+
+Label Time Summary:
+e2e    =  43.93 sec*proc (3 tests)
+
+Total Test time (real) =  43.99 sec

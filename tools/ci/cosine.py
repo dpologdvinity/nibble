@@ -12,9 +12,10 @@ Precision: `x` is printed with the default stream precision (6 significant digit
 when they are equal at that precision. `diff_cosines` compares the parsed floats exactly, which is the same thing
 for text that came from the same printer.
 
-Catch2's console reporter frames a WARN as a `<file>:<line>:` line, a `warning:` line, then the message indented two
+Catch2's console reporter frames a WARN as a `<file>:<line>: warning:` line (the marker ends the location line; a
+synthetic fixture may put `warning:` alone on its own line, which is accepted too), then the message indented two
 spaces and wrapped at 79 columns. The wrap can fall inside a token (`12/` newline `12`), so the parser joins the
-indented lines of each `warning:` block and ignores whitespace before matching; model ids and prompt names never
+indented lines of each warning block and ignores whitespace before matching; model ids and prompt names never
 contain whitespace, so nothing is lost.
 
 usage (library): import cosine; runs = cosine.parse_min_cosine(Path("ctest.log").read_text())
@@ -32,9 +33,11 @@ from typing import NamedTuple
 _LINE = re.compile(
     r"(\w+)\[([\w.+-]+)\]:mincosineover(\d+)positions=([-+0-9.eE]+|nan|inf|-nan|-inf),top-1agreement(\d+)/(\d+)"
 )
-# ctest -V prefixes every line with the test number ("31: "); `--output-log` does not.
+# ctest -V prefixes every line with the test number ("31: "), and `--output-log` keeps that prefix.
 _CTEST_PREFIX = re.compile(r"^\d+: ?")
-_WARNING_LINE = re.compile(r"^warning:\s*$")
+# Opens a WARN block: `warning:` alone on the line, or at its end after a `<file>:<line>: ` location (what Catch2 v3
+# really prints). A `warning:` followed by more text on the same line is not a header.
+_WARNING_LINE = re.compile(r"^(?:\S.*:\d+: )?warning:\s*$")
 
 
 class Cosine(NamedTuple):
