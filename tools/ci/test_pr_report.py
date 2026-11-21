@@ -51,6 +51,7 @@ def make_dict() -> dict[str, Any]:
         "rss": {"base_kib": 800_000, "head_kib": 790_000},
         "accuracy": {
             "status": "ran",
+            "head_tests": "passed",
             "rows": [
                 {"key": "q4_0/capital", "base": 0.999991, "head": 0.999991},
                 {"key": "q8_0/capital", "base": 0.999999, "head": 0.999998},
@@ -74,7 +75,14 @@ def perf_of(r: Report) -> list[PerfEntry]:
 def skipped_dict() -> dict[str, Any]:
     """A valid report whose every section was skipped."""
     d = make_dict()
-    d.update({"perf": None, "size": None, "rss": None, "accuracy": {"status": "skipped-cold-cache", "rows": []}})
+    d.update(
+        {
+            "perf": None,
+            "size": None,
+            "rss": None,
+            "accuracy": {"status": "skipped-cold-cache", "head_tests": None, "rows": []},
+        }
+    )
     return d
 
 
@@ -211,6 +219,23 @@ class LoadTests(unittest.TestCase):
         d = skipped_dict()
         d["accuracy"]["rows"] = [{"key": "q4_0/capital", "base": 1.0, "head": 1.0}]
         self.reject(d)
+
+    def test_head_tests_is_given_exactly_when_the_tests_ran(self) -> None:
+        d = make_dict()
+        d["accuracy"]["head_tests"] = "failed"
+        self.assertEqual(pr_report.load(json.dumps(d))["accuracy"]["head_tests"], "failed")
+        for bad in (None, "ok", "", True, 0):
+            with self.subTest(head_tests=bad):
+                d["accuracy"]["head_tests"] = bad
+                self.reject(d)
+        d = make_dict()
+        del d["accuracy"]["head_tests"]
+        self.reject(d)
+        for bad in ("passed", "failed", "x"):
+            with self.subTest(cold=bad):
+                d = skipped_dict()
+                d["accuracy"]["head_tests"] = bad
+                self.reject(d)
 
     def test_accuracy_row_may_be_added_or_removed_but_not_both(self) -> None:
         d = make_dict()
@@ -372,6 +397,22 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("❗", text)
         self.assertIn("bit-identity", text)
 
+    def test_render_says_when_the_head_failed_its_end_to_end_tests(self) -> None:
+        # The cosine rows can be identical to the base's while a later check of the same test (batch prefill,
+        # greedy continuation) failed: the comment must say so on its own, not only through the red job.
+        d = make_dict()
+        d["accuracy"]["rows"] = [{"key": "q4_0/capital", "base": 0.99, "head": 0.99}]
+        d["accuracy"]["head_tests"] = "failed"
+        text = pr_report.render(pr_report.load(json.dumps(d)))
+        self.assertIn("❌ end-to-end tests failed on the head", text)
+        self.assertLess(text.index("end-to-end tests failed"), text.index("| case |"))
+        d["accuracy"]["rows"] = []
+        self.assertIn("❌ end-to-end tests failed on the head", pr_report.render(pr_report.load(json.dumps(d))))
+        passed = pr_report.render(make_report())
+        self.assertNotIn("❌", passed)
+        self.assertIn("end-to-end tests passed on the head", passed)
+        self.assertNotIn("end-to-end tests", pr_report.render(pr_report.load(json.dumps(skipped_dict()))))
+
     def test_markdown_escapes_pipe_in_key(self) -> None:
         # `load` refuses such keys; `render` still escapes them (defense in depth for a Report built by hand).
         r = make_report()
@@ -480,8 +521,14 @@ class PostTests(unittest.TestCase):
 class AssembleTests(unittest.TestCase):
     META = {"base_sha": BASE, "head_sha": HEAD, "runner": "runner-1", "kernels_changed": False}
     REAL = {"runner": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"}  # what /proc/cpuinfo says on a runner
-    ACCURACY = {"accuracy": {"status": "ran", "rows": [{"key": "q4_0/capital", "base": 1.0, "head": 1.0}]}}
-    COLD = {"accuracy": {"status": "skipped-cold-cache", "rows": []}}
+    ACCURACY = {
+        "accuracy": {
+            "status": "ran",
+            "head_tests": "passed",
+            "rows": [{"key": "q4_0/capital", "base": 1.0, "head": 1.0}],
+        }
+    }
+    COLD: dict[str, Any] = {"accuracy": {"status": "skipped-cold-cache", "head_tests": None, "rows": []}}
 
     def test_assemble_merges_parts(self) -> None:
         full = make_dict()
@@ -501,7 +548,7 @@ class AssembleTests(unittest.TestCase):
         self.assertIsNone(merged["perf"])
         self.assertIsNone(merged["size"])
         self.assertIsNone(merged["rss"])
-        self.assertEqual(merged["accuracy"], {"status": "skipped-cold-cache", "rows": []})
+        self.assertEqual(merged["accuracy"], {"status": "skipped-cold-cache", "head_tests": None, "rows": []})
 
     def test_assemble_requires_the_accuracy_part(self) -> None:
         # A crashed or cancelled accuracy job must not read as "cold cache": the cold case is an explicit status.
@@ -575,12 +622,14 @@ class MainTests(unittest.TestCase):
             base = self.snapshot(tmp, "base.json", {"q4_0/a": 0.99, "q4_0/gone": 0.5, "q8_0/a": 1.0})
             head = self.snapshot(tmp, "head.json", {"q4_0/a": 0.98, "q4_0/new": 0.7, "q8_0/a": 1.0})
             out = Path(tmp, "part-accuracy.json")
-            self.assertEqual(self.run_main(["accuracy", "--base", base, "--head", head, "--out", str(out)])[0], 0)
+            argv = ["accuracy", "--base", base, "--head", head, "--head-outcome", "success", "--out", str(out)]
+            self.assertEqual(self.run_main(argv)[0], 0)
             self.assertEqual(
                 json.loads(out.read_text(encoding="utf-8")),
                 {
                     "accuracy": {
                         "status": "ran",
+                        "head_tests": "passed",
                         "rows": [
                             {"key": "q4_0/a", "base": 0.99, "head": 0.98},
                             {"key": "q4_0/gone", "base": 0.5, "head": None},
@@ -591,12 +640,31 @@ class MainTests(unittest.TestCase):
                 },
             )
 
+    def test_accuracy_subcommand_records_the_head_test_outcome(self) -> None:
+        # Only the step outcome `success` reads as passed; failure, and anything unexpected, reads as failed.
+        with tempfile.TemporaryDirectory() as tmp:
+            snap = self.snapshot(tmp, "s.json", {"q4_0/a": 0.99})
+            out = Path(tmp, "part.json")
+            for outcome, want in (("success", "passed"), ("failure", "failed"), ("cancelled", "failed")):
+                with self.subTest(outcome=outcome):
+                    argv = ["accuracy", "--base", snap, "--head", snap, "--head-outcome", outcome, "--out", str(out)]
+                    self.assertEqual(self.run_main(argv)[0], 0)
+                    self.assertEqual(json.loads(out.read_text(encoding="utf-8"))["accuracy"]["head_tests"], want)
+            for argv in (
+                ["accuracy", "--base", snap, "--head", snap, "--out", str(out)],  # no outcome
+                ["accuracy", "--skipped-cold-cache", "--head-outcome", "success", "--out", str(out)],
+                ["accuracy", "--base", snap, "--head", snap, "--head-outcome", "maybe", "--out", str(out)],
+            ):
+                with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    pr_report.main(argv)
+
     def test_accuracy_subcommand_skipped_cold_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp, "part-accuracy.json")
             self.assertEqual(self.run_main(["accuracy", "--skipped-cold-cache", "--out", str(out)])[0], 0)
             self.assertEqual(
-                json.loads(out.read_text(encoding="utf-8")), {"accuracy": {"status": "skipped-cold-cache", "rows": []}}
+                json.loads(out.read_text(encoding="utf-8")),
+                {"accuracy": {"status": "skipped-cold-cache", "head_tests": None, "rows": []}},
             )
 
     def test_accuracy_subcommand_drops_non_finite_cosines_instead_of_failing(self) -> None:
@@ -610,13 +678,19 @@ class MainTests(unittest.TestCase):
                 with self.subTest(name=name):
                     bad = self.snapshot(tmp, name, {"q4_0/a": value, "q4_0/b": 0.9})
                     self.assertEqual(
-                        self.run_main(["accuracy", "--base", good, "--head", bad, "--out", str(out)])[0], 0
+                        self.run_main(
+                            ["accuracy", "--base", good, "--head", bad, "--head-outcome", "success", "--out", str(out)]
+                        )[0],
+                        0,
                     )
                     rows = json.loads(out.read_text(encoding="utf-8"))["accuracy"]["rows"]
                     self.assertEqual(rows[0], {"key": "q4_0/a", "base": 0.99, "head": None})
                     self.assertEqual(rows[1], {"key": "q4_0/b", "base": 0.9, "head": 0.9})
                     self.assertEqual(
-                        self.run_main(["accuracy", "--base", bad, "--head", good, "--out", str(out)])[0], 0
+                        self.run_main(
+                            ["accuracy", "--base", bad, "--head", good, "--head-outcome", "failure", "--out", str(out)]
+                        )[0],
+                        0,
                     )
                     rows = json.loads(out.read_text(encoding="utf-8"))["accuracy"]["rows"]
                     self.assertEqual(rows[0], {"key": "q4_0/a", "base": None, "head": 0.99})
@@ -628,7 +702,9 @@ class MainTests(unittest.TestCase):
             for name, cosines in (("junk.json", {"q4_0/a": "junk"}), ("null.json", {"q4_0/a": None})):
                 with self.subTest(name=name):
                     bad = self.snapshot(tmp, name, cosines)
-                    code, err = self.run_main(["accuracy", "--base", good, "--head", bad, "--out", out])
+                    code, err = self.run_main(
+                        ["accuracy", "--base", good, "--head", bad, "--head-outcome", "success", "--out", out]
+                    )
                     self.assertEqual(code, 1)
                     self.assertIn("q4_0/a", err)
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:

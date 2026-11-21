@@ -227,9 +227,16 @@ jobs:
         run: |
           python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected 0 --lenient
           python tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary /dev/null --expected 0 --lenient
+      # The head's test outcome goes into the part too: a test prints its min cosine before its later checks (batch
+      # prefill, greedy continuation), so a failing head can have every row unchanged, and the comment must still say
+      # it failed.
       - name: Write part-accuracy.json
         if: steps.models.outputs.warm == 'true'
-        run: python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --out part-accuracy.json
+        env:
+          HEAD_OUTCOME: ${{ steps.e2e-head.outcome }}  # success or failure (continue-on-error keeps the job going)
+        run: |
+          python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json \
+            --head-outcome "$HEAD_OUTCOME" --out part-accuracy.json
       - name: Upload the accuracy part
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

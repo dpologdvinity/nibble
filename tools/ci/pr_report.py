@@ -23,8 +23,12 @@ Schema 1 (`null` for a section means "skipped"; numbers are JSON numbers, 0.0 me
                "head_median": x, "ratios": [x...], "verdict": "faster"|"slower"|"same"|"inconclusive"}] | null,
      "size": {"base_bytes": int, "head_bytes": int} | null,
      "rss": {"base_kib": int, "head_kib": int} | null,
-     "accuracy": {"status": "ran"|"skipped-cold-cache",
+     "accuracy": {"status": "ran"|"skipped-cold-cache", "head_tests": "passed"|"failed"|null,
                   "rows": [{"key": "<model>/<prompt>", "base": x|null, "head": x|null}]}}   # rows only when "ran"
+
+`head_tests` is how the head's end-to-end tests (`ctest -L e2e`) ended: given exactly when the status is "ran", null
+otherwise. It is separate from the rows because a test prints its min cosine before its later checks (batch prefill,
+greedy continuation), so a head can fail those with every row unchanged; the comment then says the tests failed.
 
 A row's `base` or `head` is null for a case that has a value on one side only (rendered "no base result" / "no head
 result", because a case that failed to produce a value is not necessarily gone; never both null). `key` is
@@ -40,7 +44,8 @@ such as "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz" is what a runner reports
 the accuracy part from two nightly-format cosine snapshots (`e2e-cosines.json`).
 
 usage:
-    python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --out part-accuracy.json
+    python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --head-outcome success \\
+        --out part-accuracy.json
     python tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
     python tools/ci/pr_report.py assemble meta.json perf.json part-accuracy.json --out pr-report.json
     python tools/ci/pr_report.py post pr-report.json --head-sha "$HEAD_SHA"   # GITHUB_REPOSITORY and GH_TOKEN set
@@ -72,6 +77,10 @@ SCHEMA = 1
 TESTS = frozenset({"pp512", "tg128"})
 VERDICTS = ("faster", "slower", "same", "inconclusive")
 STATUSES = ("ran", "skipped-cold-cache")
+HEAD_TESTS = ("passed", "failed")
+# `steps.<id>.outcome` of the head's e2e step -> head_tests. Only success is a pass; anything else (failure, and a
+# cancelled or skipped step that should never get here) reads as failed, so the report can never claim a pass.
+_OUTCOMES = {"success": "passed", "failure": "failed", "cancelled": "failed", "skipped": "failed"}
 VERDICT_SYMBOLS = {"faster": "✅", "slower": "⚠️", "same": "➖", "inconclusive": "❔"}
 
 # Bounds. They also cap the rendered comment: the worst case stays well below GitHub's 65,536 character limit
@@ -138,9 +147,10 @@ class AccuracyRow(TypedDict):
 
 
 class Accuracy(TypedDict):
-    """The accuracy section: `rows` is empty unless `status` is "ran"."""
+    """The accuracy section: `rows` is empty and `head_tests` None unless `status` is "ran"."""
 
     status: str
+    head_tests: str | None
     rows: list[AccuracyRow]
 
 
@@ -292,7 +302,7 @@ def _cosine(value: object, where: str) -> float | None:
 
 
 def _accuracy(value: object) -> Accuracy:
-    o = _object(value, ("status", "rows"), "accuracy")
+    o = _object(value, ("status", "head_tests", "rows"), "accuracy")
     rows: list[AccuracyRow] = []
     for i, raw in enumerate(_list(o["rows"], "accuracy.rows", MAX_ROWS)):
         row = _object(raw, ("key", "base", "head"), f"accuracy.rows[{i}]")
@@ -309,7 +319,12 @@ def _accuracy(value: object) -> Accuracy:
     status = _choice(o["status"], "accuracy.status", STATUSES)
     if rows and status != "ran":
         raise ValueError(f"accuracy: rows given although the status is {status}")
-    return {"status": status, "rows": rows}
+    head_tests: str | None = None
+    if status == "ran":
+        head_tests = _choice(o["head_tests"], "accuracy.head_tests", HEAD_TESTS)
+    elif o["head_tests"] is not None:
+        raise ValueError(f"accuracy: head_tests given although the status is {status}")
+    return {"status": status, "head_tests": head_tests, "rows": rows}
 
 
 def _validate(value: object) -> Report:
@@ -441,12 +456,18 @@ def _accuracy_lines(r: Report) -> list[str]:
     acc = r["accuracy"]
     if acc["status"] != "ran":
         return ["**Accuracy:** not run (the model cache was cold; the nightly run refills it)"]
+    # First, because the rows alone cannot show it: a test can fail after printing an unchanged min cosine.
+    tests = (
+        "❌ end-to-end tests failed on the head (a failed check need not move a min cosine; see the accuracy job)"
+        if acc["head_tests"] == "failed"
+        else "✅ end-to-end tests passed on the head"
+    )
     rows = acc["rows"]
     if not rows:
-        return ["**Accuracy:** ran, no rows"]
+        return ["**Accuracy:** ran, no rows", "", tests]
     # A case with a value on one side only counts as changed.
     changed = sum(1 for row in rows if row["base"] != row["head"])
-    lines = ["**Accuracy:** min cosine against llama.cpp, per case", ""]
+    lines = ["**Accuracy:** min cosine against llama.cpp, per case", "", tests, ""]
     if r["kernels_changed"]:
         lines.append(
             f"❗ bit-identity: {changed} cases changed"
@@ -564,14 +585,15 @@ def _snapshot(path: str) -> dict[str, float]:
     return cosines
 
 
-def accuracy_part(base: Mapping[str, float], head: Mapping[str, float]) -> str:
-    """The text of an `accuracy` part: one row per case in either snapshot, sorted by key (None for a missing side).
+def accuracy_part(base: Mapping[str, float], head: Mapping[str, float], head_tests: str) -> str:
+    """The text of an `accuracy` part: one row per case in either snapshot, sorted by key (None for a missing side),
+    and `head_tests` ("passed" or "failed").
 
     The result is validated like a loaded report's accuracy section, so a key outside the allowed characters, too many
     rows or an out-of-range cosine is a ValueError here, in the job that wrote the data.
     """
     rows = [{"key": k, "base": base.get(k), "head": head.get(k)} for k in sorted(base.keys() | head.keys())]
-    section = {"status": "ran", "rows": rows}
+    section = {"status": "ran", "head_tests": head_tests, "rows": rows}
     _accuracy(section)
     return json.dumps({"accuracy": section}, indent=2, allow_nan=False)
 
@@ -586,6 +608,11 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
     p_acc = sub.add_parser("accuracy", help="write the accuracy part from two cosine snapshots")
     p_acc.add_argument("--base", help="e2e-cosines.json of the base build")
     p_acc.add_argument("--head", help="e2e-cosines.json of the head build")
+    p_acc.add_argument(
+        "--head-outcome",
+        choices=sorted(_OUTCOMES),
+        help="outcome of the head's e2e test step (steps.<id>.outcome); required with --base and --head",
+    )
     p_acc.add_argument("--skipped-cold-cache", action="store_true", help="write the explicit cold-cache status instead")
     p_acc.add_argument("--out", required=True, help="file to write")
     p_post = sub.add_parser("post", help="comment the report on the pull request of the triggering run")
@@ -597,6 +624,8 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
         if has_snapshots == args.skipped_cold_cache or (args.skipped_cold_cache and (args.base or args.head)):
             # Neither given, or both, or only one of --base and --head.
             parser.error("give either --skipped-cold-cache, or both --base and --head")
+        if has_snapshots != (args.head_outcome is not None):
+            parser.error("--head-outcome goes with --base and --head, and only with them")
 
     try:
         if args.command == "assemble":
@@ -605,9 +634,10 @@ def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
             return 0
         if args.command == "accuracy":
             if args.skipped_cold_cache:
-                text = json.dumps({"accuracy": {"status": "skipped-cold-cache", "rows": []}}, indent=2)
+                cold: Accuracy = {"status": "skipped-cold-cache", "head_tests": None, "rows": []}
+                text = json.dumps({"accuracy": cold}, indent=2)
             else:
-                text = accuracy_part(_snapshot(args.base), _snapshot(args.head))
+                text = accuracy_part(_snapshot(args.base), _snapshot(args.head), _OUTCOMES[args.head_outcome])
             Path(args.out).write_text(text + "\n", encoding="utf-8")
             return 0
         run_sha = _sha(args.head_sha, "--head-sha")
