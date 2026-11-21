@@ -56,6 +56,8 @@ _POSITIONS: tuple[tuple[str, Side], ...] = (("A1", "base"), ("B1", "head"), ("B2
 # `nibble bench` arguments fixed by the protocol (the same sizes as tools/bench_final.sh).
 _PROMPT_TOKENS = "512"
 _GEN_TOKENS = "128"
+# The rows every `nibble bench` run must write (its test names are "pp<prompt tokens>" and "tg<generated tokens>").
+_TESTS = frozenset({f"pp{_PROMPT_TOKENS}", f"tg{_GEN_TOKENS}"})
 
 
 def abba_order(rounds: int) -> list[tuple[int, str, Side]]:
@@ -76,8 +78,9 @@ def block_ratios(rows: Sequence[Mapping[str, object]]) -> dict[tuple[str, str, i
 
     A block's ratio is (B1 + B2) / (A1 + A2) over the "median" fields. A block that lacks a side, or has a median
     that is missing, not a number, non-finite or <= 0, contributes NaN (which `verdict` reads as inconclusive)
-    instead of being dropped or raising: a broken run must not vanish into a better-looking result. Rows whose
-    side, block, model, test or threads cannot be read are ignored, since they cannot be attributed to a block.
+    instead of being dropped or raising: a broken run must not vanish into a better-looking result. The blocks are
+    those seen in any row, so a block with no row at all for some (model, test, threads) is NaN for it too. Rows
+    whose side, block, model, test or threads cannot be read are ignored, since they cannot be attributed to a block.
     """
     # (model, test, threads) -> block -> side -> medians (None marks an unusable median)
     groups: dict[tuple[str, str, int], dict[int, dict[Side, list[float | None]]]] = {}
@@ -92,11 +95,13 @@ def block_ratios(rows: Sequence[Mapping[str, object]]) -> dict[tuple[str, str, i
         sides = groups.setdefault((model, test, threads), {}).setdefault(block, {"base": [], "head": []})
         sides[side].append(_positive_finite(row.get("median")))
 
+    all_blocks = sorted({block for blocks in groups.values() for block in blocks})
     result: dict[tuple[str, str, int], list[float]] = {}
     for key, blocks in groups.items():
         ratios: list[float] = []
-        for block in sorted(blocks):
-            base, head = blocks[block]["base"], blocks[block]["head"]
+        for block in all_blocks:
+            sides = blocks.get(block, {"base": [], "head": []})
+            base, head = sides["base"], sides["head"]
             usable = len(base) == 2 and len(head) == 2 and None not in base and None not in head
             if usable:
                 ratios.append(sum(v for v in head if v is not None) / sum(v for v in base if v is not None))
@@ -144,10 +149,11 @@ def run(
     For each round (block id), each model and each thread count, the four runs of `abba_order` call
     `<bin> bench -m <model> -t <threads> -p 512 -n 128 -r <reps> --out <tmp>`; each row the run wrote gets
     "side", "block" and "position" added and goes to the JSONL file `out`, which is truncated first (rows of an
-    earlier session would share this session's block ids). `runner`
-    executes a command (tests inject a fake `nibble bench`); a failing run raises, so no half-measured block is
-    reported as a result. No load gate: unlike a dedicated box, a CI runner is never idle, which is why `verdict`
-    tolerates noise.
+    earlier session would share this session's block ids). `runner` executes a command (tests inject a fake
+    `nibble bench`). A failing run raises, so no half-measured block is reported as a result, and so does a run
+    that exits 0 without writing both a pp512 and a tg128 row (a whole round of a test would otherwise vanish,
+    leaving fewer, better-agreeing ratios). No load gate: unlike a dedicated box, a CI runner is never idle, which
+    is why `verdict` tolerates noise.
     """
     binaries: dict[Side, str] = {"base": base, "head": head}
     order = abba_order(rounds)
@@ -163,7 +169,13 @@ def run(
                             + ["-n", _GEN_TOKENS, "-r", str(reps), "--out", str(tmp)]
                         )
                         lines = tmp.read_text(encoding="utf-8").splitlines() if tmp.exists() else []
-                        for row in (json.loads(line) for line in lines if line.strip()):
+                        rows = [json.loads(line) for line in lines if line.strip()]
+                        missing = sorted(_TESTS - {row.get("test") for row in rows if isinstance(row, dict)})
+                        if missing:
+                            raise RuntimeError(
+                                f"{binaries[side]} bench wrote no {', '.join(missing)} row for {model} at {t} threads"
+                            )
+                        for row in rows:
                             row.update({"side": side, "block": blk, "position": position})
                             sink.write(json.dumps(row) + "\n")
                         sink.flush()

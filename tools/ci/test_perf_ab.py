@@ -100,6 +100,21 @@ class BlockRatiosTest(unittest.TestCase):
         (ratio,) = perf_ab.block_ratios(rows)[("m.gguf", "tg128", 1)]
         self.assertTrue(math.isnan(ratio))
 
+    def test_a_block_missing_for_one_key_is_nan(self) -> None:
+        # Block 1 has rows for pp512 but none for tg128: tg128 must not end up with one fewer, better-looking ratio.
+        rows = [
+            _row(s, b, 10.0, test=t)
+            for t in ("pp512", "tg128")
+            for b in (0, 2)
+            for s in ("base", "head", "head", "base")
+        ]
+        rows += [_row(s, 1, 10.0, test="pp512") for s in ("base", "head", "head", "base")]
+        ratios = perf_ab.block_ratios(rows)
+        self.assertEqual(ratios[("m.gguf", "pp512", 1)], [1.0, 1.0, 1.0])
+        tg = ratios[("m.gguf", "tg128", 1)]
+        self.assertEqual(len(tg), 3)
+        self.assertTrue(math.isnan(tg[1]))
+
     def test_unattributable_rows_are_ignored(self) -> None:
         junk: list[Mapping[str, object]] = [{}, {"side": "other", "block": 0}, {"side": "base", "block": "x"}]
         self.assertEqual(perf_ab.block_ratios(junk), {})
@@ -207,6 +222,16 @@ class RunTest(unittest.TestCase):
         self.assertNotIn({"old": 1}, rows)
         self.assertTrue(all(e["verdict"] == "faster" for e in perf_ab.summarize(rows)))
 
+    def test_run_refuses_an_invocation_that_wrote_no_row_for_a_test(self) -> None:
+        # A binary that exits 0 but writes no tg128 row would let a whole round vanish from the ratios.
+        def pp_only(argv: Sequence[str]) -> None:
+            out = argv[argv.index("--out") + 1]
+            row = {"model": "a.gguf", "test": "pp512", "threads": 1, "median": 10.0}
+            Path(out).write_text(json.dumps(row) + "\n")
+
+        with self.assertRaisesRegex(RuntimeError, "tg128"):
+            perf_ab.run("base-bin", "head-bin", ["a.gguf"], [1], 1, 1, self.out, runner=pp_only)
+
     def test_run_propagates_a_failing_binary(self) -> None:
         def boom(argv: Sequence[str]) -> None:
             raise RuntimeError("bench failed")
@@ -236,8 +261,8 @@ class SummarizeTest(unittest.TestCase):
                     "threads": 1,
                     "base_median": 4.0,
                     "head_median": 6.0,
-                    "ratios": [1.5],
-                    "verdict": "inconclusive",  # one block is not enough
+                    "ratios": [1.5, 0.0],  # block 1 has tg128 rows but no pp512 row: a missing block, not dropped
+                    "verdict": "inconclusive",
                 },
                 {
                     "model": "m.gguf",
@@ -296,7 +321,8 @@ class MainTest(unittest.TestCase):
         bench = self.dir / "fakebin"
         bench.write_text(
             "#!/usr/bin/env python3\nimport sys, json\na = sys.argv\n"
-            "open(a[a.index('--out') + 1], 'a').write(json.dumps({'model': 'm.gguf', 'test': 'tg128', "
+            "for t in ('pp512', 'tg128'):\n"
+            "    open(a[a.index('--out') + 1], 'a').write(json.dumps({'model': 'm.gguf', 'test': t, "
             "'threads': int(a[a.index('-t') + 1]), 'median': 5.0}) + '\\n')\n"
         )
         bench.chmod(0o755)
@@ -304,7 +330,7 @@ class MainTest(unittest.TestCase):
         args = ["run", "--base", str(bench), "--head", str(bench), "--model", "m.gguf", "--threads", "2"]
         self.assertEqual(perf_ab.main(args + ["--rounds", "1", "--reps", "1", "--out", str(out)]), 0)
         rows = [json.loads(line) for line in out.read_text().splitlines()]
-        self.assertEqual([(r["side"], r["position"]) for r in rows], [(s, p) for p, s in perf_ab._POSITIONS])
+        self.assertEqual([(r["side"], r["position"]) for r in rows[::2]], [(s, p) for p, s in perf_ab._POSITIONS])
 
     def test_bad_threads_is_an_argument_error(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
