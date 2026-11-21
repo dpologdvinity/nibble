@@ -9,9 +9,7 @@
 # ("does not reproduce"), when the PR has no test at all ("no test"), or when no case failed but the time budget left
 # a case unrun ("incomplete"). A base that does not compile with the new tests counts as
 # proven (the tests use something the fix adds). The `no-test-needed` label turns a "no test" result green (reason in
-# the PR); the other red results stay red. The label counts only when its latest `labeled` event was made by a person
-# with write access, never by a bot (tools/ci/fix_proof_waiver.py): an agent session can open a pull request with any
-# label, and must not be able to waive its own proof.
+# the PR); the other red results stay red.
 # Cases it cannot run never prove anything: macro-built names are "unresolved" and end-to-end cases, which skip
 # without models, are "not-runnable" (this workflow provisions no models). The verdict is in the job summary.
 # Where things come from: the workspace is the MERGE REF (GitHub's preview of the PR merged into its base, the default
@@ -23,6 +21,9 @@
 # base branch after the merge base can need code the merge base lacks, and would give a false "proven" (the base does
 # not compile). The diffs (`gate`, `select`) still compare the merge base with the PR head (`$BASE_SHA...$HEAD_SHA`,
 # three dots), not the merge commit, so they list only what the PR changed.
+# Who can waive: the `no-test-needed` label counts only when its latest `labeled` event was made by a person with write
+# access, never by a bot (tools/ci/fix_proof_waiver.py): an agent session can open a pull request with any label, and
+# must not be able to waive its own proof.
 # Trust split: it builds and runs the pull request's own tests and so its code, so the token is read-only and no secret
 # exists; the tools that judge the result come from the merge ref, not from the PR. The PR title and every other
 # `${{ }}` value reach scripts through `env:` only. It never writes to GitHub. The token (issues and pull-requests
