@@ -11,6 +11,12 @@
 #   assemble  merges the three parts (tools/ci/pr_report.py assemble) and uploads the `pr-report` artifact.
 # Base: the merge base of the base branch and the head (`git merge-base`), not the base branch's tip, so that unrelated
 # commits that landed on master after the branch was cut never show up as this PR's speed-up or regression.
+# Where things come from: the sources that are built and measured (the base and the head) come from the pull request,
+# but the Python tooling (tools/ci) comes from the MERGE REF (GitHub's preview of the PR merged into its base, the
+# default `actions/checkout` ref for `pull_request`), checked out beside the head as `.ci-tools/` (perf and accuracy)
+# or as the workspace itself (assemble). A PR branch cut before a tools/ci change would otherwise fail on a missing
+# script (fix-proof.yml went red that way on PR #61), an error that says nothing about the PR. The `setup-models`
+# action stays the head's: its cache key hashes head files.
 # Trust split: this workflow runs the pull request's own code, so it has a read-only token and no secrets, and its
 # output is untrusted input. It never writes to GitHub. The only job that holds a write token, pr-report-comment.yml,
 # starts from `workflow_run`, checks out the default branch instead of PR code, and validates the artifact strictly
@@ -62,6 +68,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # The Python tooling from the merge ref (no `ref:`), not from the head: see the opening comment. Only tools/ci.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .ci-tools
+          sparse-checkout: tools/ci
+          persist-credentials: false
       - name: Models
         id: models
         uses: ./.github/actions/setup-models
@@ -99,10 +111,10 @@ jobs:
       - name: Speed (ABBA, base against head)
         if: steps.models.outputs.warm == 'true'
         run: |
-          python tools/ci/perf_ab.py run --base base-build/nibble --head build/nibble \
+          python .ci-tools/tools/ci/perf_ab.py run --base base-build/nibble --head build/nibble \
             --model models/qwen2.5-0.5b-instruct-q4_0.gguf --model models/qwen2.5-0.5b-instruct-q8_0.gguf \
             --threads "1,$(nproc)" --rounds 3 --reps 3 --out rows.jsonl
-          python tools/ci/perf_ab.py summarize rows.jsonl --out perf.json
+          python .ci-tools/tools/ci/perf_ab.py summarize rows.jsonl --out perf.json
       # The size that matters is the shipped one, so measure stripped copies.
       - name: Binary size (stripped)
         if: steps.models.outputs.warm == 'true'
@@ -164,6 +176,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      # The Python tooling from the merge ref (no `ref:`), not from the head: see the opening comment. Only tools/ci.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .ci-tools
+          sparse-checkout: tools/ci
+          persist-credentials: false
       - name: Models and goldens
         id: models
         uses: ./.github/actions/setup-models
@@ -184,7 +202,7 @@ jobs:
       - name: Cold model cache, so skip the accuracy comparison
         if: steps.models.outputs.warm != 'true'
         run: |
-          python tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
+          python .ci-tools/tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
           echo "::notice title=pr-report accuracy::cold model cache; accuracy is reported as skipped"
       - name: Restore Catch2
         if: steps.models.outputs.warm == 'true'
@@ -230,11 +248,11 @@ jobs:
       - name: Parse the min-cosine lines
         if: steps.models.outputs.warm == 'true'
         run: |
-          if ! python tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected 0 --lenient; then
+          if ! python .ci-tools/tools/ci/accuracy.py snapshot e2e-base.log --out base-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected 0 --lenient; then
             echo "::warning title=pr-report accuracy::the base's e2e log could not be parsed; the report shows no base results"
             echo '{}' > base-cosines.json
           fi
-          python tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary /dev/null --expected 0 --lenient
+          python .ci-tools/tools/ci/accuracy.py snapshot e2e-head.log --out head-cosines.json --summary /dev/null --expected 0 --lenient
       # The head's test outcome goes into the part too: a test prints its min cosine before its later checks (batch
       # prefill, greedy continuation), so a failing head can have every row unchanged, and the comment must still say
       # it failed.
@@ -243,7 +261,7 @@ jobs:
         env:
           HEAD_OUTCOME: ${{ steps.e2e-head.outcome }}  # success or failure (continue-on-error keeps the job going)
         run: |
-          python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json \
+          python .ci-tools/tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json \
             --head-outcome "$HEAD_OUTCOME" --out part-accuracy.json
       # always(), so that this attempt's part replaces an earlier attempt's (overwrite) even after a failure or a
       # `timeout-minutes` kill (reported as cancelled, while `assemble`, whose `!cancelled()` is about the run, still
@@ -279,7 +297,7 @@ jobs:
           exit 1
       - name: Fail the job if the head's min-cosine results are incomplete
         if: ${{ !cancelled() && steps.models.outputs.warm == 'true' }}
-        run: python tools/ci/accuracy.py snapshot e2e-head.log --out head-strict.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
+        run: python .ci-tools/tools/ci/accuracy.py snapshot e2e-head.log --out head-strict.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
 
   assemble:
     name: assemble
@@ -292,9 +310,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # The merge ref (no `ref:`): this job only runs tools/ci, and must run the same copy perf and accuracy ran (the
+      # base branch's current tools/ci with the PR's changes merged in), or a PR that changes a part's format breaks.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
