@@ -322,6 +322,24 @@ class MainTest(unittest.TestCase):
         self.assertIn("line 9", err.getvalue())
         self.assertIn("line 3", err.getvalue())
 
+    def test_a_truncated_first_row_of_a_new_block_is_not_a_verdict(self) -> None:
+        # The run died while writing block 2's first row: the cut line names no block, so the complete blocks 0 and 1
+        # alone would read "faster". Any dropped line makes every verdict inconclusive instead.
+        rows = _block(0, (10.0, 10.0), (12.0, 12.0)) + _block(1, (10.0, 10.0), (12.0, 12.0))
+        text = "".join(json.dumps(r) + "\n" for r in rows) + json.dumps(_block(2, (10.0, 10.0), (12.0, 12.0))[0])[:15]
+        (self.dir / "rows.jsonl").write_text(text)
+        out = self.dir / "perf.json"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(perf_ab.main(["summarize", str(self.dir / "rows.jsonl"), "--out", str(out)]), 0)
+        (entry,) = json.loads(out.read_text())
+        self.assertEqual(entry["ratios"], [1.2, 1.2])
+        self.assertEqual(entry["verdict"], "inconclusive")
+
+    def test_a_clean_file_keeps_its_verdict(self) -> None:
+        rows = _block(0, (10.0, 10.0), (12.0, 12.0)) + _block(1, (10.0, 10.0), (12.0, 12.0))
+        self.assertEqual(perf_ab.summarize(rows)[0]["verdict"], "faster")
+        self.assertEqual(perf_ab.summarize(rows, incomplete=True)[0]["verdict"], "inconclusive")
+
     def test_parse_rows_reports_each_bad_line(self) -> None:
         rows, problems = perf_ab.parse_rows('{"a": 1}\n\nnot json\n"text"\n{"b": 2')
         self.assertEqual(rows, [{"a": 1}])

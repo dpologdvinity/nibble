@@ -21,8 +21,9 @@ by more than SPREAD_MAX are all "inconclusive". Only when every block agrees is 
 `summarize` folds the rows into the `perf` section of the PR-report JSON (one entry per (model, test, threads):
 base_median, head_median, ratios, verdict). The report schema has plain numbers only, so a median with no usable run
 and a broken block's ratio are written as 0.0 (the verdict for such a row is "inconclusive"). A line of the rows file
-that is not a JSON object (a run killed mid-write leaves a cut-off line) is dropped with a warning on stderr: its block
-then lacks a position and reads inconclusive, instead of the whole section failing.
+that is not a JSON object (a run killed mid-write leaves a cut-off line) is dropped with a warning on stderr, and then
+every verdict is "inconclusive": the dropped line cannot be attributed to a block (it may have started a block no
+other line mentions), so the complete blocks alone must not decide. The section is still written.
 
 usage (command line):
     python tools/ci/perf_ab.py run --base BIN --head BIN --model M [--model M ...] --threads 1,4 --rounds 3 \\
@@ -207,12 +208,13 @@ def _json_number(x: float) -> float:
     return x if math.isfinite(x) else 0.0
 
 
-def summarize(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+def summarize(rows: Sequence[Mapping[str, object]], *, incomplete: bool = False) -> list[dict[str, object]]:
     """Return one report entry per (model, test, threads), sorted by that key.
 
     Each entry is {"model", "test", "threads", "base_median", "head_median", "ratios", "verdict"}. A side's median
     is the median of its usable per-run medians (finite, > 0); `ratios` and `verdict` come from `block_ratios` and
-    `verdict`. Values that are NaN (no usable run, a broken block) are written as 0.0.
+    `verdict`. Values that are NaN (no usable run, a broken block) are written as 0.0. With `incomplete` (the rows
+    file had lines that could not be read) every verdict is "inconclusive"; the numbers are kept.
     """
     per_side: dict[tuple[str, str, int], dict[str, list[float]]] = {}
     for row in rows:
@@ -240,7 +242,7 @@ def summarize(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
                 "base_median": statistics.median(sides["base"]) if sides["base"] else 0.0,
                 "head_median": statistics.median(sides["head"]) if sides["head"] else 0.0,
                 "ratios": [_json_number(r) for r in ratios[key]],
-                "verdict": verdict(ratios[key]),
+                "verdict": "inconclusive" if incomplete else verdict(ratios[key]),
             }
         )
     return entries
@@ -281,8 +283,8 @@ def main(argv: Sequence[str]) -> int:
         return 0
     rows, problems = parse_rows(Path(args.rows).read_text(encoding="utf-8", errors="replace"))
     for problem in problems:
-        print(f"::warning title=perf_ab summarize::{args.rows} {problem}; skipped (inconclusive)", file=sys.stderr)
-    summary = summarize(rows)
+        print(f"::warning title=perf_ab summarize::{args.rows} {problem}; all verdicts inconclusive", file=sys.stderr)
+    summary = summarize(rows, incomplete=bool(problems))
     Path(args.out).write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     return 0
 
