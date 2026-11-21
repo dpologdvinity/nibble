@@ -382,7 +382,7 @@ Outcome = Literal["success", "failure"]
 Action = Literal["open", "comment", "close", "none"]
 @dataclass(frozen=True)
 class RunContext: job: str; workflow_file: str; run_url: str; sha: str; repo: str; area: str; attachments_url: str | None
-def issue_title(job: str) -> str                          # f"nightly: {job} failing"
+def issue_title(workflow_file: str, job: str) -> str      # f"{workflow stem}: {job} failing"
 def decide(open_issue: int | None, outcome: Outcome) -> Action
 def failure_body(ctx: RunContext, last_green: str | None) -> str   # run link, sha, compare link last_green...sha, attachments link
 def recovery_body(ctx: RunContext) -> str

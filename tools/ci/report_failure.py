@@ -3,9 +3,10 @@
 Scheduled workflows (nightly, portability) call the `report-failure` composite action at the end of each job. It runs
 this script with the job's outcome:
 
-  - failure and no open issue titled "nightly: <job> failing": open one (labels `ci-failure` and the area label);
-    when `--triage` is given, also start `claude-triage.yml` with `issue=<number>` (an issue created with
-    GITHUB_TOKEN does not trigger other workflows, but `workflow_dispatch` is exempt);
+  - failure and no open issue titled "<workflow>: <job> failing" (e.g. "nightly: fuzz_gguf failing"; the workflow is
+    the `--workflow-file` stem): open one (labels `ci-failure` and the area label); when `--triage` is given,
+    also start `claude-triage.yml` with `issue=<number>` (an issue created with GITHUB_TOKEN does not trigger other
+    workflows, but `workflow_dispatch` is exempt);
   - failure and an open issue: add a comment, never a second issue;
   - success and an open issue: comment that the job recovered and close it;
   - success and no open issue: do nothing.
@@ -44,9 +45,9 @@ TRIAGE_WORKFLOW = "claude-triage.yml"
 class RunContext:
     """Everything about one job run that the issue text needs.
 
-    `job` names the job (it is part of the issue title), `workflow_file` is e.g. "nightly.yml", `run_url` links the
-    run, `sha` is the tested commit, `repo` is "owner/name", `area` is the area label and `attachments_url` links the
-    uploaded artifact or is None.
+    `job` names the job and `workflow_file` is e.g. "nightly.yml" (both are part of the issue title), `run_url`
+    links the run, `sha` is the tested commit, `repo` is "owner/name", `area` is the area label and
+    `attachments_url` links the uploaded artifact or is None.
     """
 
     job: str
@@ -58,9 +59,14 @@ class RunContext:
     attachments_url: str | None
 
 
-def issue_title(job: str) -> str:
-    """The title of the one issue for `job`; it is matched exactly, so it must stay stable."""
-    return f"nightly: {job} failing"
+def issue_title(workflow_file: str, job: str) -> str:
+    """The title of the one issue for `job` of `workflow_file`, e.g. "portability: arm64 failing".
+
+    The prefix is the workflow file's name without directory or extension ("nightly.yml" gives "nightly"), so the same
+    job name in two workflows gets two issues. It is matched exactly, so it must stay stable.
+    """
+    workflow = workflow_file.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return f"{workflow}: {job} failing"
 
 
 def decide(open_issue: int | None, outcome: Outcome) -> Action:
@@ -100,7 +106,7 @@ def report(gh: GitHub, ctx: RunContext, outcome: Outcome, triage: bool) -> Actio
     Dispatches `claude-triage.yml` with the new issue number only when an issue is opened (a comment or close needs no
     new triage) and `triage` is true.
     """
-    title = issue_title(ctx.job)
+    title = issue_title(ctx.workflow_file, ctx.job)
     existing = gh.find_open_issue(title)
     action = decide(existing, outcome)
     if action == "open":

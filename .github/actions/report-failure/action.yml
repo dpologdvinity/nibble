@@ -1,5 +1,5 @@
 # Reason: scheduled jobs (nightly, portability) must not fail silently, and must not spam either. This composite
-# action turns a job's outcome into one issue: it opens "nightly: <job> failing" on the first failure, comments on
+# action turns a job's outcome into one issue: it opens "<workflow>: <job> failing" (e.g. "nightly: fuzz_gguf failing") on the first failure, comments on
 # repeats, and comments and closes on recovery. With `triage: "true"` it also starts claude-triage.yml (an issue made
 # with GITHUB_TOKEN does not trigger other workflows, but workflow_dispatch is exempt).
 # Use: the last step of the job, with `if: always()`, after the caller's own checkout (and Python 3.12):
@@ -11,7 +11,7 @@ name: report-failure
 description: Open, update or close the single issue for a failing scheduled job.
 inputs:
   job:
-    description: 'Job name; it is part of the issue title (`nightly: <job> failing`), so keep it stable.'
+    description: 'Job name; it is part of the issue title (`<workflow>: <job> failing`), so keep it stable.'
     required: true
   outcome:
     description: '`success` or `failure`.'

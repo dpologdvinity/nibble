@@ -1,7 +1,6 @@
 # Reason: the per-PR matrix (ci.yml) builds with one x86-64 toolchain per cell, so it cannot back the portability
 # claims it does not cover. This workflow checks them weekly on master (a failing job opens or updates one
-# "nightly: <job> failing" issue through report-failure, which titles every issue that way; the job names here do
-# not collide with nightly.yml's), and a new compiler's warnings are errors here first
+# "portability: <job> failing" issue through report-failure), and a new compiler's warnings are errors here first
 # (the build uses -Wall -Wextra -Wpedantic -Werror), before they can break a pull request:
 #   arm64             the scalar kernels on a 64-bit ARM runner, built with -DNIBBLE_NATIVE=OFF. NOTE: this checks a
 #                     claim the README does not make yet (ARM64 is unproven, not known-broken); a red run is a

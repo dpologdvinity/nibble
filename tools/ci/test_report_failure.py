@@ -16,11 +16,17 @@ from fakes import FakeGitHub
 from report_failure import RunContext
 
 
-def make_ctx(job: str = "fuzz_gguf", *, sha: str = "abc1234", attachments_url: str | None = None) -> RunContext:
-    """A RunContext for `job` with fixed values for everything else."""
+def make_ctx(
+    job: str = "fuzz_gguf",
+    *,
+    sha: str = "abc1234",
+    attachments_url: str | None = None,
+    workflow_file: str = "nightly.yml",
+) -> RunContext:
+    """A RunContext for `job` (of `workflow_file`) with fixed values for everything else."""
     return RunContext(
         job=job,
-        workflow_file="nightly.yml",
+        workflow_file=workflow_file,
         run_url="https://github.com/o/r/actions/runs/42",
         sha=sha,
         repo="o/r",
@@ -36,8 +42,10 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(report_failure.decide(7, "success"), "close")
         self.assertEqual(report_failure.decide(None, "success"), "none")
 
-    def test_title(self) -> None:
-        self.assertEqual(report_failure.issue_title("fuzz_gguf"), "nightly: fuzz_gguf failing")
+    def test_title_is_prefixed_with_the_workflow_name(self) -> None:
+        self.assertEqual(report_failure.issue_title("nightly.yml", "fuzz_gguf"), "nightly: fuzz_gguf failing")
+        self.assertEqual(report_failure.issue_title("portability.yml", "arm64"), "portability: arm64 failing")
+        self.assertEqual(report_failure.issue_title("portability.yaml", "arm64"), "portability: arm64 failing")
 
 
 class ReportTests(unittest.TestCase):
@@ -59,6 +67,19 @@ class ReportTests(unittest.TestCase):
         titles = sorted(i.title for i in gh.issues.values())
         self.assertEqual(titles, ["nightly: fuzz_gguf failing", "nightly: fuzz_load failing"])
         self.assertTrue(all(not i.comments for i in gh.issues.values()))
+
+    def test_same_job_name_in_two_workflows_gets_two_issues(self) -> None:
+        gh = FakeGitHub()
+        nightly = make_ctx("arm64", workflow_file="nightly.yml")
+        portability = make_ctx("arm64", workflow_file="portability.yml")
+        self.assertEqual(report_failure.report(gh, nightly, "failure", triage=False), "open")
+        self.assertEqual(report_failure.report(gh, portability, "failure", triage=False), "open")
+        titles = sorted(i.title for i in gh.issues.values())
+        self.assertEqual(titles, ["nightly: arm64 failing", "portability: arm64 failing"])
+        # Recovery of one workflow's job closes only that workflow's issue.
+        self.assertEqual(report_failure.report(gh, portability, "success", triage=False), "close")
+        self.assertTrue(gh.issues[1].open)
+        self.assertFalse(gh.issues[2].open)
 
     def test_success_closes_only_own_issue(self) -> None:
         gh = FakeGitHub()
