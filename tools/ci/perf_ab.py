@@ -16,6 +16,14 @@ The verdict is deliberately conservative, because a runner's +-10% jitter must n
 fewer than two usable blocks, a block with a missing, zero, negative or non-finite median, or ratios that disagree
 by more than SPREAD_MAX are all "inconclusive". Only when every block agrees is the answer faster, slower or same.
 
+`summarize` folds the rows into the `perf` section of the PR-report JSON (one entry per (model, test, threads):
+base_median, head_median, ratios, verdict). The report schema has plain numbers only, so a median with no usable run
+and a broken block's ratio are written as 0.0 (the verdict for such a row is "inconclusive").
+
+usage (command line):
+    python tools/ci/perf_ab.py run --base BIN --head BIN --model M [--model M ...] --threads 1,4 --rounds 3 \\
+        --reps 3 --out rows.jsonl
+    python tools/ci/perf_ab.py summarize rows.jsonl --out perf.json
 usage (library): import perf_ab; perf_ab.run("base/nibble", "head/nibble", models, [1, 4], 3, 3, "ab.jsonl")
     rows = [json.loads(line) for line in open("ab.jsonl")]
     for key, ratios in perf_ab.block_ratios(rows).items(): print(key, perf_ab.verdict(ratios))
@@ -23,10 +31,12 @@ usage (library): import perf_ab; perf_ab.run("base/nibble", "head/nibble", model
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import statistics
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -153,3 +163,90 @@ def run(
                             row.update({"side": side, "block": blk, "position": position})
                             sink.write(json.dumps(row) + "\n")
                         sink.flush()
+
+
+def _json_number(x: float) -> float:
+    """Return `x`, or 0.0 if it is NaN or infinite, so the value survives strict JSON."""
+    return x if math.isfinite(x) else 0.0
+
+
+def summarize(rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    """Return one report entry per (model, test, threads), sorted by that key.
+
+    Each entry is {"model", "test", "threads", "base_median", "head_median", "ratios", "verdict"}. A side's median
+    is the median of its usable per-run medians (finite, > 0); `ratios` and `verdict` come from `block_ratios` and
+    `verdict`. Values that are NaN (no usable run, a broken block) are written as 0.0.
+    """
+    per_side: dict[tuple[str, str, int], dict[str, list[float]]] = {}
+    for row in rows:
+        model, test, threads, side = row.get("model"), row.get("test"), row.get("threads"), row.get("side")
+        value = _positive_finite(row.get("median"))
+        if (
+            isinstance(model, str)
+            and isinstance(test, str)
+            and isinstance(threads, int)
+            and not isinstance(threads, bool)
+            and side in ("base", "head")
+            and value is not None
+        ):
+            per_side.setdefault((model, test, threads), {"base": [], "head": []})[side].append(value)
+
+    ratios = block_ratios(rows)
+    entries: list[dict[str, object]] = []
+    for key in sorted(ratios):
+        sides = per_side.get(key, {"base": [], "head": []})
+        entries.append(
+            {
+                "model": key[0],
+                "test": key[1],
+                "threads": key[2],
+                "base_median": statistics.median(sides["base"]) if sides["base"] else 0.0,
+                "head_median": statistics.median(sides["head"]) if sides["head"] else 0.0,
+                "ratios": [_json_number(r) for r in ratios[key]],
+                "verdict": verdict(ratios[key]),
+            }
+        )
+    return entries
+
+
+def _thread_list(text: str) -> list[int]:
+    """Parse "1,4" into [1, 4]; every item must be a positive integer (argparse type)."""
+    try:
+        values = [int(part) for part in text.split(",")]
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a comma-separated list of integers: {text!r}") from None
+    if any(v < 1 for v in values):
+        raise argparse.ArgumentTypeError(f"thread counts must be >= 1: {text!r}")
+    return values
+
+
+def main(argv: Sequence[str]) -> int:
+    """Command line: `run` benchmarks two builds, `summarize` turns the rows into the report's perf JSON."""
+    parser = argparse.ArgumentParser(description="ABBA speed comparison of two nibble builds.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    p_run = sub.add_parser("run", help="benchmark base and head in interleaved ABBA blocks")
+    p_run.add_argument("--base", required=True, help="the base build's nibble binary")
+    p_run.add_argument("--head", required=True, help="the head build's nibble binary")
+    p_run.add_argument("--model", action="append", required=True, dest="models", help="a GGUF file (repeatable)")
+    p_run.add_argument("--threads", type=_thread_list, default=[1], help="comma-separated thread counts")
+    p_run.add_argument("--rounds", type=int, default=3, help="ABBA blocks per (model, threads)")
+    p_run.add_argument("--reps", type=int, default=3, help="repetitions per `nibble bench` run")
+    p_run.add_argument("--out", required=True, help="JSONL file the tagged rows are appended to")
+    p_sum = sub.add_parser("summarize", help="fold the rows into the report's perf section")
+    p_sum.add_argument("rows", help="JSONL file written by `run`")
+    p_sum.add_argument("--out", required=True, help="JSON file to write")
+    args = parser.parse_args(list(argv))
+
+    if args.command == "run":
+        if args.rounds < 1 or args.reps < 1:
+            parser.error("--rounds and --reps must be >= 1")
+        run(args.base, args.head, args.models, args.threads, args.rounds, args.reps, args.out)
+        return 0
+    lines = Path(args.rows).read_text(encoding="utf-8").splitlines()
+    summary = summarize([json.loads(line) for line in lines if line.strip()])
+    Path(args.out).write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
