@@ -1,6 +1,7 @@
 # Reusable workflow: builds the release artifacts (CLI tarballs for two instruction-set levels, and the container
 # image) and uploads them. Called by ci.yml on every push/PR (artifacts only) and by release.yml on tags (which
-# also pushes the image). Binaries are built without the tests, so no Catch2 download is needed.
+# also pushes the image and reports its digest in the image-digest output, which release.yml attests). Binaries
+# are built without the tests, so no Catch2 download is needed.
 name: package
 
 on:
@@ -14,6 +15,10 @@ on:
         description: "Version string used in artifact names (default: the short commit SHA)"
         type: string
         default: ""
+    outputs:
+      image-digest:
+        description: Digest (sha256:...) of the pushed container image; empty when push-image is false
+        value: ${{ jobs.image.outputs.image-digest }}
 
 jobs:
   binaries:
@@ -61,6 +66,9 @@ jobs:
   image:
     name: container image
     runs-on: ubuntu-24.04
+    outputs:
+      # The pushed image's content digest, so the caller can attest exactly the bytes that were pushed.
+      image-digest: ${{ steps.push.outputs.digest }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,6 +109,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push
+        id: push
         if: inputs.push-image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
