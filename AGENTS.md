@@ -98,5 +98,7 @@ skip with a notice without it):
   high confidence, an `agent/fix-issue-<n>` pull request whose first commit is the failing test.
 - `claude-review.yml`: owner, Dependabot and `agent` pull requests get inline review comments only (no approval, no
   change requests).
-- Agent pull requests carry the `agent` label and are never auto-merged. `automerge.yml` only enables auto-merge for the
+- Agent pull requests carry the `agent` label and are never auto-merged. The `agent-approval` check
+  (`agent-approval.yml`, logic in `tools/ci/agent_gate.py`) fails for them until the owner, a member or a collaborator
+  approves the current head commit; it is only a gate once the owner makes it a required check. `automerge.yml` only enables auto-merge for the
   owner's own pull requests and Dependabot's minor and patch updates, and switches it off when `agent` is added.

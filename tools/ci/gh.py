@@ -45,6 +45,27 @@ class RunInfo:
     created_at: str
 
 
+@dataclass(frozen=True)
+class PullRequest:
+    """What the agent gate needs to know about a pull request: its author's login, its label names and its head SHA."""
+
+    author: str
+    labels: list[str]
+    head_sha: str
+
+
+@dataclass(frozen=True)
+class Review:
+    """One pull request review: the reviewer's login ("" for a deleted account), its state (`APPROVED`,
+    `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` or `PENDING`), the commit it was made on and the reviewer's
+    `author_association` (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `NONE`, ...)."""
+
+    user: str
+    state: str
+    commit_id: str
+    association: str
+
+
 class GitHub(Protocol):
     """What the CI scripts need from GitHub. Implemented by GhCli and by fakes.FakeGitHub."""
 
@@ -108,6 +129,14 @@ class GitHub(Protocol):
 
     def download_artifact(self, run_id: int, name: str, dest: Path) -> bool:
         """Download artifact `name` of run `run_id` into the directory `dest`; False if it does not exist or expired."""
+        ...
+
+    def pull_request(self, number: int) -> PullRequest:
+        """Author, labels and current head SHA of pull request `number`."""
+        ...
+
+    def list_reviews(self, number: int) -> list[Review]:
+        """Every review of pull request `number`, oldest first."""
         ...
 
 
@@ -260,3 +289,27 @@ class GhCli:
             return False
         self._run(["gh", "run", "download", str(run_id), "-R", self.repo, "-n", name, "-D", str(dest)], None)
         return True
+
+    def pull_request(self, number: int) -> PullRequest:
+        data = json.loads(self._get(f"repos/{self.repo}/pulls/{number}"))
+        user = data.get("user")
+        labels = [str(label["name"]) for label in data.get("labels", []) if isinstance(label, dict) and "name" in label]
+        return PullRequest(
+            author=str(user.get("login", "")) if isinstance(user, dict) else "",
+            labels=labels,
+            head_sha=str(data.get("head", {}).get("sha", "")),
+        )
+
+    def list_reviews(self, number: int) -> list[Review]:
+        reviews: list[Review] = []
+        for item in _json_list(self._get(f"repos/{self.repo}/pulls/{number}/reviews?per_page=100", paginate=True)):
+            user = item.get("user")
+            reviews.append(
+                Review(
+                    user=str(user.get("login", "")) if isinstance(user, dict) else "",
+                    state=str(item.get("state", "")),
+                    commit_id=str(item.get("commit_id", "")),
+                    association=str(item.get("author_association", "")),
+                )
+            )
+        return reviews

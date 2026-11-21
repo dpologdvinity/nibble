@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from gh import GhError, RunInfo
+from gh import GhError, PullRequest, Review, RunInfo
 
 
 @dataclass
@@ -38,9 +38,10 @@ class FakeGitHub:
     ((workflow, branch) -> run ids, newest first), `job_conclusions` ((run id, job name) -> conclusion) and
     `recent_runs` ((workflow, branch) -> RunInfo, newest first; list_recent_runs filters by `created_at`),
     `artifacts` ((run id, artifact name) -> {file name: text}) and `branch_tips` (branch -> head sha).
+    `pull_requests` (number -> PullRequest, filled by add_pull_request) and `reviews` (number -> Review list).
     `vanished` ((run id, name) pairs that are listed but cannot be downloaded) and `failing_artifact_runs` (run ids
-    whose artifact listing raises GhError). `fail_listing` and `fail_tip` make the run listings and branch_tip raise
-    GhError.
+    whose artifact listing raises GhError). `fail_listing`, `fail_tip` and `fail_reviews` make the run listings,
+    branch_tip and list_reviews raise GhError.
     """
 
     BOT = "github-actions[bot]"
@@ -59,6 +60,9 @@ class FakeGitHub:
         self.failing_artifact_runs: set[int] = set()
         self.fail_listing = False
         self.fail_tip = False
+        self.fail_reviews = False
+        self.pull_requests: dict[int, PullRequest] = {}
+        self.reviews: dict[int, list[Review]] = {}
         self._next_number = 1
 
     def find_open_issue(self, title: str) -> int | None:
@@ -73,12 +77,13 @@ class FakeGitHub:
         self.issues[number] = FakeIssue(title, body, list(labels))
         return number
 
-    def add_pull_request(self, head_sha: str) -> int:
-        """Create an open pull request whose head commit is `head_sha` and return its number."""
+    def add_pull_request(self, head_sha: str, *, author: str = "someone", labels: Sequence[str] = ()) -> int:
+        """Create an open pull request at `head_sha` by `author` with `labels` and return its number."""
         number = self._next_number
         self._next_number += 1
-        self.issues[number] = FakeIssue(f"pull request {number}", "", [], is_pull_request=True)
+        self.issues[number] = FakeIssue(f"pull request {number}", "", list(labels), is_pull_request=True)
         self.prs_by_sha[head_sha] = number
+        self.pull_requests[number] = PullRequest(author, list(labels), head_sha)
         return number
 
     def comment_as(self, number: int, author: str, body: str) -> None:
@@ -145,3 +150,11 @@ class FakeGitHub:
         if self.fail_tip:
             raise GhError("simulated branch lookup failure")
         return self.branch_tips.get(branch)
+
+    def pull_request(self, number: int) -> PullRequest:
+        return self.pull_requests[number]
+
+    def list_reviews(self, number: int) -> list[Review]:
+        if self.fail_reviews:
+            raise GhError("simulated review listing failure")
+        return list(self.reviews.get(number, []))
