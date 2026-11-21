@@ -15,6 +15,7 @@ import json
 import re
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,52 @@ class LoadTests(unittest.TestCase):
         d["accuracy"]["rows"][0]["key"] = "q4_0/a\nb"
         self.reject(d)
 
+    def test_rejects_mention_and_reference_text(self) -> None:
+        # GitHub turns `\\@user` and `\\#1` into a mention and an issue link even though the backslash is consumed by
+        # Markdown, so text that reaches the comment may never contain `@` or `#` at all.
+        for bad in ("@octocat", "a@b", "see #1", "owner/repo#12", "cpu @ 2.80GHz"):
+            with self.subTest(runner=bad):
+                d = make_dict()
+                d["runner"] = bad
+                self.reject(d)
+            with self.subTest(key=bad):
+                d = make_dict()
+                d["accuracy"]["rows"][0]["key"] = bad
+                self.reject(d)
+
+    def test_rejects_markup_in_keys_and_runner(self) -> None:
+        for bad in ("a|b", "`c`", "<b>x</b>", "[x](http://e)", "a b", "a:b", "*x*", "a\\b", "q4_0/\u00e9"):
+            with self.subTest(key=bad):
+                d = make_dict()
+                d["accuracy"]["rows"][0]["key"] = bad
+                self.reject(d)
+        for bad in ("a|b", "`c`", "<b>x</b>", "[x](http://e)", "*x*", "a\\b", "a;b", "a=b"):
+            with self.subTest(runner=bad):
+                d = make_dict()
+                d["runner"] = bad
+                self.reject(d)
+
+    def test_accuracy_rows_must_be_empty_unless_ran(self) -> None:
+        d = make_dict()
+        d["accuracy"]["status"] = "skipped-cold-cache"
+        self.reject(d)
+        d = skipped_dict()
+        d["accuracy"]["rows"] = [{"key": "q4_0/capital", "base": 1.0, "head": 1.0}]
+        self.reject(d)
+
+    def test_accuracy_row_may_be_added_or_removed_but_not_both(self) -> None:
+        d = make_dict()
+        d["accuracy"]["rows"] = [
+            {"key": "q4_0/new", "base": None, "head": 0.9},
+            {"key": "q4_0/gone", "base": 0.9, "head": None},
+        ]
+        rows = pr_report.load(json.dumps(d))["accuracy"]["rows"]
+        self.assertEqual([(row["base"], row["head"]) for row in rows], [(None, 0.9), (0.9, None)])
+        d["accuracy"]["rows"] = [{"key": "q4_0/x", "base": None, "head": None}]
+        self.reject(d)
+        d["accuracy"]["rows"] = [{"key": "q4_0/x", "base": "nan", "head": None}]
+        self.reject(d)
+
     def test_rejects_bad_sha(self) -> None:
         for bad in ("a" * 39, "a" * 41, "A" * 40, "g" * 40, "a" * 40 + "\n", "", 5):
             for field in ("base_sha", "head_sha"):
@@ -326,26 +373,52 @@ class RenderTests(unittest.TestCase):
         self.assertIn("bit-identity", text)
 
     def test_markdown_escapes_pipe_in_key(self) -> None:
-        d = make_dict()
-        d["accuracy"]["rows"][0]["key"] = "q4_0/a|b `c` <b>@octocat</b> [x](http://e) #1"
-        text = pr_report.render(pr_report.load(json.dumps(d)))
+        # `load` refuses such keys; `render` still escapes them (defense in depth for a Report built by hand).
+        r = make_report()
+        r["accuracy"]["rows"][0]["key"] = "q4_0/a|b `c` <b>@octocat</b> [x](http://e) #1"
+        text = pr_report.render(r)
         row = next(line for line in text.splitlines() if "octocat" in line)
         # An unescaped pipe would add a column: 4 columns means 5 separators.
         self.assertEqual(len(re.findall(r"(?<!\\)\|", row)), 5)
         self.assertNotIn("<b>", text)
         self.assertNotIn("[x](", text)
-        self.assertIn(r"\@octocat", text)
-        self.assertNotIn("@octocat</b>", text)
+
+    def test_render_of_a_loaded_report_has_no_mention_or_reference(self) -> None:
+        text = pr_report.render(
+            pr_report.load(
+                pr_report.assemble(
+                    [json.dumps(AssembleTests.META | AssembleTests.REAL), json.dumps(AssembleTests.COLD)]
+                )
+            )
+        )
+        self.assertIsNone(re.search(r"[@#]\w", text), text)
+
+    def test_render_added_and_removed_cases(self) -> None:
+        d = make_dict()
+        d["accuracy"]["rows"] = [
+            {"key": "q4_0/new", "base": None, "head": 0.9},
+            {"key": "q4_0/gone", "base": 0.8, "head": None},
+        ]
+        text = pr_report.render(pr_report.load(json.dumps(d)))
+        rows = {
+            line.split("|")[1].strip(): [c.strip() for c in line.split("|")[2:-1]]
+            for line in text.splitlines()
+            if line.startswith("| q4")
+        }
+        self.assertEqual(rows[r"q4\_0\/new"], ["—", "0.9", "added"])
+        self.assertEqual(rows[r"q4\_0\/gone"], ["0.8", "—", "removed"])
+        self.assertIn("❗ bit-identity: 2 cases changed", text)  # kernels_changed is true in the fixture
 
     def test_render_of_maximal_report_fits_a_comment(self) -> None:
-        d = make_dict()
-        d["perf"] = [copy.deepcopy(d["perf"][0]) for _ in range(pr_report.MAX_PERF)]
-        d["perf"][0]["ratios"] = [1.0] * pr_report.MAX_RATIOS
-        d["runner"] = "|" * 120
-        d["accuracy"]["rows"] = [
+        # Built without `load` so that every character is one the escaper doubles: the worst case for the size.
+        r = make_report()
+        r["perf"] = [copy.deepcopy(perf_of(r)[0]) for _ in range(pr_report.MAX_PERF)]
+        perf_of(r)[0]["ratios"] = [1.0] * pr_report.MAX_RATIOS
+        r["runner"] = "|" * pr_report.MAX_RUNNER
+        r["accuracy"]["rows"] = [
             {"key": "|" * pr_report.MAX_KEY, "base": 0.5, "head": 0.25} for _ in range(pr_report.MAX_ROWS)
         ]
-        self.assertLess(len(pr_report.render(pr_report.load(json.dumps(d)))), 65_536)
+        self.assertLess(len(pr_report.render(r)), 65_536)
 
 
 class PostTests(unittest.TestCase):
@@ -406,6 +479,9 @@ class PostTests(unittest.TestCase):
 
 class AssembleTests(unittest.TestCase):
     META = {"base_sha": BASE, "head_sha": HEAD, "runner": "runner-1", "kernels_changed": False}
+    REAL = {"runner": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz"}  # what /proc/cpuinfo says on a runner
+    ACCURACY = {"accuracy": {"status": "ran", "rows": [{"key": "q4_0/capital", "base": 1.0, "head": 1.0}]}}
+    COLD = {"accuracy": {"status": "skipped-cold-cache", "rows": []}}
 
     def test_assemble_merges_parts(self) -> None:
         full = make_dict()
@@ -420,22 +496,42 @@ class AssembleTests(unittest.TestCase):
         self.assertEqual(merged["size"], full["size"])
         self.assertFalse(merged["kernels_changed"])
 
-    def test_assemble_defaults_missing_sections_to_skipped(self) -> None:
-        merged = pr_report.load(pr_report.assemble([json.dumps(self.META)]))
+    def test_assemble_defaults_perf_size_rss_to_skipped(self) -> None:
+        merged = pr_report.load(pr_report.assemble([json.dumps(self.META), json.dumps(self.COLD)]))
         self.assertIsNone(merged["perf"])
         self.assertIsNone(merged["size"])
         self.assertIsNone(merged["rss"])
         self.assertEqual(merged["accuracy"], {"status": "skipped-cold-cache", "rows": []})
 
+    def test_assemble_requires_the_accuracy_part(self) -> None:
+        # A crashed or cancelled accuracy job must not read as "cold cache": the cold case is an explicit status.
+        with self.assertRaisesRegex(ValueError, "accuracy"):
+            pr_report.assemble([json.dumps(self.META)])
+
+    def test_assemble_requires_kernels_changed(self) -> None:
+        meta = {k: v for k, v in self.META.items() if k != "kernels_changed"}
+        with self.assertRaisesRegex(ValueError, "kernels_changed"):
+            pr_report.assemble([json.dumps(meta), json.dumps(self.COLD)])
+
+    def test_assemble_makes_a_real_runner_name_inert(self) -> None:
+        merged = pr_report.load(pr_report.assemble([json.dumps(self.META | self.REAL), json.dumps(self.COLD)]))
+        self.assertEqual(merged["runner"], "Intel(R) Xeon(R) Platinum 8370C CPU at 2.80GHz")
+
+    def test_assemble_replaces_other_unsafe_runner_characters_and_truncates(self) -> None:
+        runner = "a#b <i>|\u00e9" + "x" * 200
+        merged = pr_report.load(pr_report.assemble([json.dumps(self.META | {"runner": runner}), json.dumps(self.COLD)]))
+        self.assertTrue(merged["runner"].startswith("a_b _i__"))
+        self.assertEqual(len(merged["runner"]), pr_report.MAX_RUNNER)
+
     def test_assemble_rejects_conflicts_and_unknown_parts(self) -> None:
         with self.assertRaises(ValueError):
-            pr_report.assemble([json.dumps(self.META), json.dumps({"runner": "other"})])
+            pr_report.assemble([json.dumps(self.META), json.dumps(self.COLD), json.dumps({"runner": "other"})])
         with self.assertRaises(ValueError):
-            pr_report.assemble([json.dumps(self.META), json.dumps({"surprise": 1})])
+            pr_report.assemble([json.dumps(self.META), json.dumps(self.COLD), json.dumps({"surprise": 1})])
         with self.assertRaises(ValueError):
-            pr_report.assemble([json.dumps({"runner": "x"})])  # no shas
+            pr_report.assemble([json.dumps({"runner": "x"}), json.dumps(self.COLD)])  # no shas
         with self.assertRaises(ValueError):
-            pr_report.assemble([json.dumps(self.META), "42"])
+            pr_report.assemble([json.dumps(self.META), json.dumps(self.COLD), "42"])
 
 
 class MainTests(unittest.TestCase):
@@ -448,12 +544,92 @@ class MainTests(unittest.TestCase):
     def test_assemble_then_post_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             meta, out = Path(tmp, "meta.json"), Path(tmp, "pr-report.json")
+            acc = Path(tmp, "part-accuracy.json")
             meta.write_text(json.dumps(AssembleTests.META), encoding="utf-8")
-            self.assertEqual(self.run_main(["assemble", str(meta), "--out", str(out)])[0], 0)
+            self.assertEqual(self.run_main(["accuracy", "--skipped-cold-cache", "--out", str(acc)])[0], 0)
+            self.assertEqual(self.run_main(["assemble", str(meta), str(acc), "--out", str(out)])[0], 0)
             fake = FakeGitHub()
             number = fake.add_pull_request(HEAD)
             self.assertEqual(self.run_main(["post", str(out), "--head-sha", HEAD], fake)[0], 0)
             self.assertIn(MARKER, fake.issues[number].comments[0])
+
+    def snapshot(self, tmp: str, name: str, cosines: Mapping[str, float | str]) -> str:
+        """Write a cosine snapshot in the format the nightly job uploads as `e2e-cosines.json`; return its path."""
+        data = {
+            key: {"model": key.split("/")[0], "prompt": key.split("/")[1], "min_cos": v, "positions": 8, "agree": 8}
+            for key, v in cosines.items()
+        }
+        path = Path(tmp, name)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return str(path)
+
+    def test_accuracy_subcommand_builds_rows_from_two_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self.snapshot(tmp, "base.json", {"q4_0/a": 0.99, "q4_0/gone": 0.5, "q8_0/a": 1.0})
+            head = self.snapshot(tmp, "head.json", {"q4_0/a": 0.98, "q4_0/new": 0.7, "q8_0/a": 1.0})
+            out = Path(tmp, "part-accuracy.json")
+            self.assertEqual(self.run_main(["accuracy", "--base", base, "--head", head, "--out", str(out)])[0], 0)
+            self.assertEqual(
+                json.loads(out.read_text(encoding="utf-8")),
+                {
+                    "accuracy": {
+                        "status": "ran",
+                        "rows": [
+                            {"key": "q4_0/a", "base": 0.99, "head": 0.98},
+                            {"key": "q4_0/gone", "base": 0.5, "head": None},
+                            {"key": "q4_0/new", "base": None, "head": 0.7},
+                            {"key": "q8_0/a", "base": 1.0, "head": 1.0},
+                        ],
+                    }
+                },
+            )
+
+    def test_accuracy_subcommand_skipped_cold_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp, "part-accuracy.json")
+            self.assertEqual(self.run_main(["accuracy", "--skipped-cold-cache", "--out", str(out)])[0], 0)
+            self.assertEqual(
+                json.loads(out.read_text(encoding="utf-8")), {"accuracy": {"status": "skipped-cold-cache", "rows": []}}
+            )
+
+    def test_accuracy_subcommand_refuses_bad_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            good = self.snapshot(tmp, "good.json", {"q4_0/a": 0.99})
+            out = str(Path(tmp, "part.json"))
+            for name, cosines in (("nan.json", {"q4_0/a": "nan"}), ("inf.json", {"q4_0/a": "-inf"})):
+                with self.subTest(name=name):
+                    bad = self.snapshot(tmp, name, cosines)
+                    code, err = self.run_main(["accuracy", "--base", good, "--head", bad, "--out", out])
+                    self.assertEqual(code, 1)
+                    self.assertIn("q4_0/a", err)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as ctx:
+                pr_report.main(["accuracy", "--head", good, "--out", out])  # --base missing
+            self.assertEqual(ctx.exception.code, 2)
+            conflicting: tuple[list[str], ...] = (["--skipped-cold-cache", "--base", good], [])  # and no option at all
+            for args in (*conflicting, ["--skipped-cold-cache", "--base", good, "--head", good]):
+                with self.subTest(args=args), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    pr_report.main(["accuracy", *args, "--out", out])
+            self.assertFalse(Path(out).exists())
+
+    def test_files_over_the_size_limit_are_refused_before_decoding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            big = Path(tmp, "pr-report.json")
+            big.write_bytes(b" " * (pr_report.MAX_BYTES + 1))
+            fake = FakeGitHub()
+            code, err = self.run_main(["post", str(big), "--head-sha", HEAD], fake)
+            self.assertEqual(code, 1)
+            self.assertIn("larger than", err)
+            with self.assertRaises(ValueError):
+                pr_report.read_limited(str(big))
+
+    def test_read_limited_reads_at_most_the_limit_plus_one_byte(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "f.json")
+            path.write_text("x" * 10, encoding="utf-8")
+            self.assertEqual(pr_report.read_limited(str(path)), "x" * 10)
+        # An endless file must give up after the limit instead of filling memory.
+        with self.assertRaises(ValueError):
+            pr_report.read_limited("/dev/zero")
 
     def test_post_with_invalid_report_fails_and_posts_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

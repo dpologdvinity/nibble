@@ -17,20 +17,31 @@ is untrusted input to a privileged job. Three rules keep that safe:
 
 Schema 1 (`null` for a section means "skipped"; numbers are JSON numbers, 0.0 means "no usable value"):
 
-    {"schema": 1, "base_sha": "<40 hex>", "head_sha": "<40 hex>", "runner": "<1-120 printable ASCII>",
+    {"schema": 1, "base_sha": "<40 hex>", "head_sha": "<40 hex>", "runner": "<1-120 chars of [A-Za-z0-9 ._()/:,+-]>",
      "kernels_changed": bool,
      "perf": [{"model": <allowlisted>, "test": "pp512"|"tg128", "threads": int, "base_median": x,
                "head_median": x, "ratios": [x...], "verdict": "faster"|"slower"|"same"|"inconclusive"}] | null,
      "size": {"base_bytes": int, "head_bytes": int} | null,
      "rss": {"base_kib": int, "head_kib": int} | null,
-     "accuracy": {"status": "ran"|"skipped-cold-cache", "rows": [{"key": "<model>/<prompt>", "base": x, "head": x}]}}
+     "accuracy": {"status": "ran"|"skipped-cold-cache",
+                  "rows": [{"key": "<model>/<prompt>", "base": x|null, "head": x|null}]}}   # rows only when "ran"
+
+A row's `base` or `head` is null for a case that exists on one side only (rendered "added" / "removed"; never both
+null). `key` is `[A-Za-z0-9._/+-]`, so no `@`, `#`, markup or whitespace reaches the comment: GitHub turns even a
+a backslash-escaped at-sign or hash mark into a mention or an issue link, so those characters are refused, not escaped.
 
 `assemble` takes partial files: a JSON object holding some of the keys above (each key in at most one part), or a
-bare JSON list, which is the `perf` section exactly as `perf_ab.py summarize` writes it. Sections no part provides
-become skipped (null, or accuracy "skipped-cold-cache"); `base_sha`, `head_sha` and `runner` are required.
+bare JSON list, which is the `perf` section exactly as `perf_ab.py summarize` writes it. `base_sha`, `head_sha`,
+`runner`, `kernels_changed` and `accuracy` are required (a missing accuracy part is an error, never "cold cache":
+the cold case is the explicit status `skipped-cold-cache`); `perf`, `size` and `rss` default to null (skipped). The
+runner is made inert first (`@` becomes "at", other unsafe characters "_", cut to 120), because a CPU model name
+such as "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz" is what a runner reports. The `accuracy` subcommand builds
+the accuracy part from two nightly-format cosine snapshots (`e2e-cosines.json`).
 
 usage:
-    python tools/ci/pr_report.py assemble meta.json perf.json size.json --out pr-report.json
+    python tools/ci/pr_report.py accuracy --base base-cosines.json --head head-cosines.json --out part-accuracy.json
+    python tools/ci/pr_report.py accuracy --skipped-cold-cache --out part-accuracy.json
+    python tools/ci/pr_report.py assemble meta.json perf.json part-accuracy.json --out pr-report.json
     python tools/ci/pr_report.py post pr-report.json --head-sha "$HEAD_SHA"   # GITHUB_REPOSITORY and GH_TOKEN set
 """
 
@@ -43,7 +54,7 @@ import os
 import re
 import statistics
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -75,7 +86,10 @@ MAX_INT = 2**50  # sizes in bytes / KiB: far above any real value, far below flo
 MAX_FLOAT = 1e12  # tokens per second, ratios and cosines
 
 _SHA = re.compile(r"[0-9a-f]{40}")
-_PRINTABLE = re.compile(r"[ -~]+")  # printable ASCII: no control characters, newlines or unicode tricks
+# Allowed text. No `@` and no `#` (mentions and issue links), no markup characters, no control characters.
+_KEY_TEXT = re.compile(r"[A-Za-z0-9._/+-]+")  # `<model>/<prompt>`: ids and prompt names, never whitespace
+_RUNNER_TEXT = re.compile(r"[A-Za-z0-9 ._()/:,+-]+")  # a CPU model name, once `assemble` has made it inert
+_RUNNER_UNSAFE = re.compile(r"[^A-Za-z0-9 ._()/:,+-]")
 _PUNCTUATION = re.compile(r"([!-/:-@\[-`{-~])")
 
 _TOP_KEYS = frozenset(
@@ -112,11 +126,14 @@ class Rss(TypedDict):
 
 
 class AccuracyRow(TypedDict):
-    """Minimum cosine similarity against the golden logits for `key` ("<model>/<prompt>")."""
+    """Minimum cosine similarity against the golden logits for `key` ("<model>/<prompt>").
+
+    `base` or `head` is None for a case that exists on one side only (never both).
+    """
 
     key: str
-    base: float
-    head: float
+    base: float | None
+    head: float | None
 
 
 class Accuracy(TypedDict):
@@ -169,9 +186,22 @@ def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def read_limited(path: str, limit: int = MAX_BYTES) -> str:
+    """Read the UTF-8 file at `path`, reading at most `limit` + 1 bytes; ValueError if it is larger than `limit`.
+
+    The artifact is untrusted: its size is checked before the whole file is read, so a huge or endless file cannot
+    exhaust memory. A decoding error is a ValueError too.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{os.path.basename(path)}: larger than {limit} bytes")
+    return data.decode("utf-8")
+
+
 def _parse(text: str, what: str) -> Any:
     """Parse untrusted JSON text strictly; every failure is a ValueError that names `what`."""
-    if len(text) > MAX_BYTES:
+    if len(text) > MAX_BYTES:  # characters; read_limited has already bounded the bytes of a file
         raise ValueError(f"{what}: larger than {MAX_BYTES} bytes")
     try:
         return json.loads(text, parse_constant=_no_constant, object_pairs_hook=_no_duplicates)
@@ -214,10 +244,10 @@ def _number(value: object, where: str, low: float = 0.0, high: float = MAX_FLOAT
     return value
 
 
-def _text(value: object, where: str, max_len: int) -> str:
-    """1..max_len characters of printable ASCII."""
-    if not isinstance(value, str) or not 1 <= len(value) <= max_len or not _PRINTABLE.fullmatch(value):
-        raise ValueError(f"{where}: expected 1-{max_len} printable ASCII characters, got {_show(value)}")
+def _text(value: object, where: str, max_len: int, allowed: re.Pattern[str]) -> str:
+    """1..max_len characters, all matching `allowed` (a pattern for one or more allowed characters)."""
+    if not isinstance(value, str) or not 1 <= len(value) <= max_len or not allowed.fullmatch(value):
+        raise ValueError(f"{where}: expected 1-{max_len} characters from {allowed.pattern}, got {_show(value)}")
     return value
 
 
@@ -255,6 +285,11 @@ def _perf_entry(value: object, where: str) -> PerfEntry:
     }
 
 
+def _cosine(value: object, where: str) -> float | None:
+    """A cosine in [-1, 1] (the slack covers float rounding of the printed value), or None for a missing side."""
+    return None if value is None else _number(value, where, -2.0, 2.0)
+
+
 def _accuracy(value: object) -> Accuracy:
     o = _object(value, ("status", "rows"), "accuracy")
     rows: list[AccuracyRow] = []
@@ -262,13 +297,18 @@ def _accuracy(value: object) -> Accuracy:
         row = _object(raw, ("key", "base", "head"), f"accuracy.rows[{i}]")
         rows.append(
             {
-                "key": _text(row["key"], f"accuracy.rows[{i}].key", MAX_KEY),
+                "key": _text(row["key"], f"accuracy.rows[{i}].key", MAX_KEY, _KEY_TEXT),
                 # A cosine lies in [-1, 1]; the slack covers float rounding of the printed value.
-                "base": _number(row["base"], f"accuracy.rows[{i}].base", -2.0, 2.0),
-                "head": _number(row["head"], f"accuracy.rows[{i}].head", -2.0, 2.0),
+                "base": _cosine(row["base"], f"accuracy.rows[{i}].base"),
+                "head": _cosine(row["head"], f"accuracy.rows[{i}].head"),
             }
         )
-    return {"status": _choice(o["status"], "accuracy.status", STATUSES), "rows": rows}
+        if rows[-1]["base"] is None and rows[-1]["head"] is None:
+            raise ValueError(f"accuracy.rows[{i}]: base and head are both null")
+    status = _choice(o["status"], "accuracy.status", STATUSES)
+    if rows and status != "ran":
+        raise ValueError(f"accuracy: rows given although the status is {status}")
+    return {"status": status, "rows": rows}
 
 
 def _validate(value: object) -> Report:
@@ -298,7 +338,7 @@ def _validate(value: object) -> Report:
         "schema": SCHEMA,
         "base_sha": _sha(o["base_sha"], "base_sha"),
         "head_sha": _sha(o["head_sha"], "head_sha"),
-        "runner": _text(o["runner"], "runner", MAX_RUNNER),
+        "runner": _text(o["runner"], "runner", MAX_RUNNER, _RUNNER_TEXT),
         "kernels_changed": o["kernels_changed"],
         "perf": perf,
         "size": size,
@@ -312,15 +352,22 @@ def load(text: str) -> Report:
     return _validate(_parse(text, "report"))
 
 
+def _inert_runner(name: str) -> str:
+    """Make a runner description loadable: `@` becomes "at" (a CPU is "... CPU @ 2.80GHz"), any other character
+    outside the allowed set becomes "_", and the result is cut to MAX_RUNNER characters."""
+    return _RUNNER_UNSAFE.sub("_", name.replace("@", "at"))[:MAX_RUNNER]
+
+
 def assemble(parts: Sequence[str]) -> str:
     """Merge the JSON texts of the partial files into the text of a validated pr-report.json.
 
     Each part is an object holding some top-level keys of the schema (no key in two parts) or a bare list, taken as
-    the `perf` section. Missing sections are skipped; `base_sha`, `head_sha` and `runner` must be provided. The
-    merged result goes through `load`, so `assemble` never writes a report `post` would refuse.
+    the `perf` section. `base_sha`, `head_sha`, `runner`, `kernels_changed` and `accuracy` must be provided (a missing
+    accuracy part is an error, not a cold cache); `perf`, `size` and `rss` default to skipped. The runner is made
+    inert (`_inert_runner`). The merged result goes through `load`, so `assemble` never writes a report `post` would
+    refuse.
     """
-    merged: dict[str, Any] = {"schema": SCHEMA, "kernels_changed": False, "perf": None, "size": None, "rss": None}
-    merged["accuracy"] = {"status": "skipped-cold-cache", "rows": []}
+    merged: dict[str, Any] = {"schema": SCHEMA, "perf": None, "size": None, "rss": None}
     seen: set[str] = set()
     for index, text in enumerate(parts):
         part = _parse(text, f"part {index}")
@@ -336,9 +383,11 @@ def assemble(parts: Sequence[str]) -> str:
             raise ValueError(f"part {index}: keys already given by an earlier part: {sorted(repeated)}")
         seen |= part.keys()
         merged.update(part)
-    for required in ("base_sha", "head_sha", "runner"):
+    for required in ("base_sha", "head_sha", "runner", "kernels_changed", "accuracy"):
         if required not in seen:
             raise ValueError(f"no part provides {required}")
+    if isinstance(merged["runner"], str):
+        merged["runner"] = _inert_runner(merged["runner"])
     text = json.dumps(merged, indent=2, allow_nan=False)
     load(text)
     return text
@@ -394,7 +443,7 @@ def _accuracy_lines(r: Report) -> list[str]:
     rows = acc["rows"]
     if not rows:
         return ["**Accuracy:** ran, no rows"]
-    changed = sum(1 for row in rows if row["base"] != row["head"])
+    changed = sum(1 for row in rows if row["base"] != row["head"])  # an added or removed case counts as changed
     lines = ["**Accuracy:** min cosine against llama.cpp, per case", ""]
     if r["kernels_changed"]:
         lines.append(
@@ -405,8 +454,15 @@ def _accuracy_lines(r: Report) -> list[str]:
         lines.append("")
     lines += ["| case | base | head | Δ |", "|---|---:|---:|---:|"]
     for row in rows:
-        delta = "—" if row["base"] == row["head"] else f"{row['head'] - row['base']:+.6f}"
-        lines.append(f"| {_esc(row['key'])} | {row['base']:.6g} | {row['head']:.6g} | {delta} |")
+        base, head = row["base"], row["head"]
+        if base is None:
+            delta = "added"
+        elif head is None:
+            delta = "removed"
+        else:
+            delta = "—" if base == head else f"{head - base:+.6f}"
+        cells = ["—" if v is None else f"{v:.6g}" for v in (base, head)]
+        lines.append(f"| {_esc(row['key'])} | {cells[0]} | {cells[1]} | {delta} |")
     return lines
 
 
@@ -478,33 +534,83 @@ def post(gh: GitHub, r: Report, run_head_sha: str) -> int:
     return number
 
 
+def _snapshot(path: str) -> dict[str, float]:
+    """Read a cosine snapshot, the `e2e-cosines.json` the nightly job writes, as {key: min_cos}.
+
+    The file is `{"<model>/<prompt>": {"model", "prompt", "min_cos", "positions", "agree"}, ...}`; a `min_cos` that is
+    not finite is written there as a string ("nan", "inf"). Only `min_cos` is used. A non-finite or non-numeric value
+    is a ValueError naming the case: the schema cannot carry it, and a broken kernel must not pass quietly.
+    """
+    raw = _parse(read_limited(path), os.path.basename(path))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{os.path.basename(path)}: expected an object")
+    cosines: dict[str, float] = {}
+    for key, entry in raw.items():
+        value = entry.get("min_cos") if isinstance(entry, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"{os.path.basename(path)}: {_show(key)} has no finite min_cos")
+        cosines[key] = float(value)
+    return cosines
+
+
+def accuracy_part(base: Mapping[str, float], head: Mapping[str, float]) -> str:
+    """The text of an `accuracy` part: one row per case in either snapshot, sorted by key (None for a missing side).
+
+    The result is validated like a loaded report's accuracy section, so a key outside the allowed characters, too many
+    rows or an out-of-range cosine is a ValueError here, in the job that wrote the data.
+    """
+    rows = [{"key": k, "base": base.get(k), "head": head.get(k)} for k in sorted(base.keys() | head.keys())]
+    section = {"status": "ran", "rows": rows}
+    _accuracy(section)
+    return json.dumps({"accuracy": section}, indent=2, allow_nan=False)
+
+
 def main(argv: Sequence[str], gh: GitHub | None = None) -> int:
-    """Command line: `assemble` merges partial files, `post` comments on the pull request. `gh` is for tests."""
+    """Command line: `accuracy` and `assemble` build the report, `post` comments it. `gh` is for tests."""
     parser = argparse.ArgumentParser(description="Assemble and post the nibble PR report.")
     sub = parser.add_subparsers(dest="command", required=True)
     p_asm = sub.add_parser("assemble", help="merge partial JSON files into pr-report.json")
     p_asm.add_argument("parts", nargs="+", help="partial JSON files")
     p_asm.add_argument("--out", required=True, help="file to write")
+    p_acc = sub.add_parser("accuracy", help="write the accuracy part from two cosine snapshots")
+    p_acc.add_argument("--base", help="e2e-cosines.json of the base build")
+    p_acc.add_argument("--head", help="e2e-cosines.json of the head build")
+    p_acc.add_argument("--skipped-cold-cache", action="store_true", help="write the explicit cold-cache status instead")
+    p_acc.add_argument("--out", required=True, help="file to write")
     p_post = sub.add_parser("post", help="comment the report on the pull request of the triggering run")
     p_post.add_argument("report", help="downloaded pr-report.json (untrusted)")
     p_post.add_argument("--head-sha", required=True, help="head SHA of the workflow run that triggered this job")
     args = parser.parse_args(list(argv))
+    if args.command == "accuracy":
+        has_snapshots = bool(args.base and args.head)
+        if has_snapshots == args.skipped_cold_cache or (args.skipped_cold_cache and (args.base or args.head)):
+            # Neither given, or both, or only one of --base and --head.
+            parser.error("give either --skipped-cold-cache, or both --base and --head")
 
     try:
         if args.command == "assemble":
-            text = assemble([Path(p).read_text(encoding="utf-8") for p in args.parts])
+            text = assemble([read_limited(p) for p in args.parts])
+            Path(args.out).write_text(text + "\n", encoding="utf-8")
+            return 0
+        if args.command == "accuracy":
+            if args.skipped_cold_cache:
+                text = json.dumps({"accuracy": {"status": "skipped-cold-cache", "rows": []}}, indent=2)
+            else:
+                text = accuracy_part(_snapshot(args.base), _snapshot(args.head))
             Path(args.out).write_text(text + "\n", encoding="utf-8")
             return 0
         run_sha = _sha(args.head_sha, "--head-sha")
-        report = load(Path(args.report).read_text(encoding="utf-8"))
+        report = load(read_limited(args.report))
         if report["head_sha"] != run_sha:
             print("pr_report: the report's head_sha does not match the triggering run; nothing posted", file=sys.stderr)
             return 0
+        if gh is None and not os.environ.get("GITHUB_REPOSITORY"):
+            raise ValueError("GITHUB_REPOSITORY is not set")
         client = gh if gh is not None else GhCli(os.environ["GITHUB_REPOSITORY"])
         number = post(client, report, run_sha)
         print(f"pr_report: {'commented on #' + str(number) if number else 'no open pull request for this commit'}")
         return 0
-    except (ValueError, OSError, GhError, KeyError) as exc:
+    except (ValueError, OSError, GhError) as exc:
         # One line, prefixed: a message can never begin a line with `::` (a workflow command).
         print(f"pr_report: {args.command}: {' '.join(str(exc).split())}", file=sys.stderr)
         return 1
