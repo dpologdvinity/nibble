@@ -609,6 +609,12 @@ if spec.startswith("-"):
     sys.exit(1)
 name = re.sub(r"\\\\(.)", r"\\1", spec)
 if "--list-tests" in args:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "list-env.json"), "w") as f:
+        json.dump({{k: os.environ.get(k) for k in ("ASAN_OPTIONS", "UBSAN_OPTIONS")}}, f)
+    if name.startswith("listcrash"):
+        # What a LeakSanitizer that cannot run, or a leak in static initialisation, does to every invocation.
+        print("<MatchingTests><TestCase><Name>" + name + "</Name></TestCase></MatchingTests>")
+        sys.exit(1)
     count = 2 if name.startswith("ambiguous") else 0 if name.startswith("nomatch") else 1
     cases = "".join(f"<TestCase><Name>{{name}}</Name></TestCase>" for _ in range(count))
     print("<MatchingTests>" + cases + "</MatchingTests>")
@@ -637,7 +643,7 @@ elif name == "skips":
     write("<skipped type='SKIP'>SKIPPED</skipped>", 4)
 elif name.startswith("nomatch"):
     write(None, 2)
-elif name.startswith("ambiguous"):
+elif name.startswith("ambiguous") or name.startswith("listcrash"):
     os.kill(os.getpid(), signal.SIGABRT)
 else:
     write("", 0)
@@ -743,6 +749,24 @@ class RunTests(unittest.TestCase):
         self.assertEqual(
             seen, {"ASAN_OPTIONS": "detect_leaks=1", "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"}
         )
+
+    def test_the_listing_probe_runs_with_the_environment_of_the_run(self) -> None:
+        self.write_cases(["passes"])
+        with mock.patch.dict(os.environ, {"ASAN_OPTIONS": "abort_on_error=1"}):
+            self.run_all()
+        seen = json.loads((self.build / "list-env.json").read_text(encoding="utf-8"))
+        self.assertEqual(seen["ASAN_OPTIONS"], "abort_on_error=1:detect_leaks=1")
+        self.assertIn("halt_on_error=1", seen["UBSAN_OPTIONS"])
+
+    def test_a_failing_listing_is_not_a_unique_match(self) -> None:
+        # The probe lists the case but exits 1 (a sanitizer failing before any test ran): the later crash of the
+        # run is then not attributable to the case, so it must not count as proof.
+        selection = self.write_cases(["listcrash case"])
+        self.run_all()
+        recorded = json.loads((self.results / "0.status.json").read_text(encoding="utf-8"))
+        self.assertFalse(recorded["unique"])
+        results, _ = fix_proof.read_results(str(self.results), selection)
+        self.assertEqual(results, {"listcrash case": "missing"})
 
     def test_merge_options(self) -> None:
         self.assertEqual(fix_proof._merge_options(None, "a=1:b=2"), "a=1:b=2")

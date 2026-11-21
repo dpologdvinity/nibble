@@ -14,9 +14,9 @@ nibble requires that a bug fix comes with a test that fails without the fix. CI 
 
 A case counts as failed when its JUnit says so, or when its process crashed (signal), timed out or exited non-zero
 (a LeakSanitizer report comes after the JUnit and leaves the case passed in it; so does a non-halting sanitizer
-finding), provided `--list-tests` showed that the spec matches exactly that one case. Without that proof a process
-outcome is not attributed to the case, because Catch2 also exits 1 without running anything when it refuses its
-command line.
+finding), provided `--list-tests` (run with the same environment, and exiting 0) showed that the spec matches
+exactly that one case. Without that proof a process outcome is not attributed to the case, because Catch2 also exits 1
+without running anything when it refuses its command line, and a sanitizer can fail every invocation.
 
 What can never be proven, by design (the "unresolved" and "not-runnable" paths):
 
@@ -760,11 +760,17 @@ def _merge_options(existing: str | None, wanted: str) -> str:
     return ":".join(parts + [w for w in wanted.split(":") if w.split("=", 1)[0] not in present])
 
 
-def _list_probe(binary: Path, spec: str, name: str) -> bool:
-    """True when `<binary> <spec> --list-tests` lists exactly one case and it is `name`."""
+def _list_probe(binary: Path, spec: str, name: str, env: Mapping[str, str]) -> bool:
+    """True when `<binary> <spec> --list-tests` exits 0 and lists exactly one case, `name`.
+
+    It runs with `env`, the environment of the run itself: a failure that happens without running any case
+    (LeakSanitizer unable to run, a leak in static initialisation) then shows up here too, and the exit status keeps it
+    from being attributed to the case.
+    """
     try:
         proc = subprocess.run(
             [str(binary), spec, "--list-tests", "-r", "xml"],
+            env=env,
             capture_output=True,
             encoding="utf-8",
             errors="replace",
@@ -774,7 +780,7 @@ def _list_probe(binary: Path, spec: str, name: str) -> bool:
         listed = [el.findtext("Name", "").strip() for el in ET.fromstring(proc.stdout).iter("TestCase")]
     except (OSError, subprocess.TimeoutExpired, ET.ParseError):
         return False
-    return listed == [name]
+    return proc.returncode == 0 and listed == [name]
 
 
 def run_case(build_dir: Path, results_dir: Path, index: int, case: Case, timeout: float) -> RunStatus:
@@ -790,7 +796,7 @@ def run_case(build_dir: Path, results_dir: Path, index: int, case: Case, timeout
     if not binary.is_file():
         status = RunStatus(False, None, None, False, False)
     else:
-        unique = _list_probe(binary, spec, _name(case))
+        unique = _list_probe(binary, spec, _name(case), env)
         try:
             proc = subprocess.run(
                 [str(binary), spec, "-r", "junit", "-o", str(xml_path)],
