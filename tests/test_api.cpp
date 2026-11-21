@@ -8,6 +8,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <filesystem>
 #include <fstream>
+#include <unistd.h>
 
 #include "nibble/nibble.h"
 #include "tiny_model.h"
