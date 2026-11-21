@@ -252,6 +252,27 @@ class LineChartTest(unittest.TestCase):
         self.assertIn("below the axis minimum (0.99)", svg)
         self.assertIn("above the axis maximum (1)", svg)
 
+    def test_line_chart_without_y_max_never_flags_points_above_the_axis(self) -> None:
+        # Float noise can leave the nice top a hair below the highest point; callers that set no maximum
+        # must see the old drawing (solid dot, no footnote), not a "Hollow = above the axis maximum" note.
+        for v in (1.0000000000000002, 1.000000000001):
+            svg = plot.line_chart("t", "y", [("a", "#000", [(T0, 0.995), (T0 + DAY, v)])], y_min=0.99)
+            self.assertNotIn("Hollow", svg, v)
+            self.assertEqual(len(re.findall(r'<circle [^>]*fill="white"', svg)), 0, v)
+
+    def test_line_chart_all_points_above_y_max(self) -> None:
+        svg = plot.line_chart("t", "%", [("a", "#000", [(T0, 150.0), (T0 + DAY, 160.0)])], y_max=100)
+        self.assertEqual(self.y_labels(svg)[-1], "100")
+        self.assertEqual(len(re.findall(r'<circle [^>]*fill="white"', svg)), 2)
+        self.assertIn("Hollow = above the axis maximum (100)", svg)
+        self.assertEqual(set(re.findall(r'<circle cx="[\d.]+" cy="([\d.]+)"', svg)), {"40.0"})  # the top edge
+
+    def test_line_chart_validates_y_max_even_without_data(self) -> None:
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [], y_max=0.0)  # the axis would start at 0
+        with self.assertRaisesRegex(ValueError, "y_max"):
+            plot.line_chart("t", "y", [], y_min=1.0, y_max=0.5)
+
     def test_line_chart_rejects_bad_y_max(self) -> None:
         one = [("a", "#000", [(T0, 1.0)])]
         for bad in (float("nan"), float("inf"), float("-inf")):

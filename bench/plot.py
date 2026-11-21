@@ -411,6 +411,8 @@ def line_chart(
         raise ValueError(f"y_min must be finite, got {y_min}")
     if y_max is not None and not math.isfinite(y_max):
         raise ValueError(f"y_max must be finite, got {y_max}")
+    if y_max is not None and y_min is not None and y_max <= y_min:
+        raise ValueError(f"y_max ({y_max:g}) must be above y_min ({y_min:g})")
     w, h, left, right, top, bottom = 900, 460, 70, 190, 40, 60
     svg = Svg(w, h, title)
     pts = [
@@ -420,6 +422,8 @@ def line_chart(
     svg.legend(w - right + 15, top + 20, [(label, colour) for label, colour, _ in pts])
     xs = [x for _, _, p in pts for x, _ in p]
     ys = [y for _, _, p in pts for _, y in p]
+    if y_max is not None and y_min is None and y_max <= 0 and min(ys, default=0.0) >= 0:  # the axis bottom is 0
+        raise ValueError(f"y_max ({y_max:g}) must be above the axis bottom (0)")
     if not xs:
         svg.add(
             svg.text(
@@ -467,16 +471,20 @@ def line_chart(
         x = x_of(t)
         svg.line(x, top + ph, x, top + ph + 4, stroke="#888")
         svg.add(svg.text(x, top + ph + 18, date_label(t), size=10, anchor="middle"))
+    # Only an explicit y_max puts points above the axis: otherwise `hi` is at or (by float noise) a hair below
+    # the highest point, which is drawn as it always was (solid, uncapped, no footnote).
+    clamp: Callable[[float], float] = lambda y: max(y, lo) if y_max is None else min(max(y, lo), hi)
+    is_off: Callable[[float], bool] = lambda y: y < lo or (y_max is not None and y > hi)
     for _label, colour, p in pts:
         if not p:
             continue
-        xy = [(x_of(x), y_of(min(max(y, lo), hi)), not lo <= y <= hi) for x, y in p]
+        xy = [(x_of(x), y_of(clamp(y)), is_off(y)) for x, y in p]
         d = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in xy)
         svg.add(f'<polyline points="{d}" fill="none" stroke="{colour}" stroke-width="1.5"/>')
         for x, y, off in xy:
             svg.dot(x, y, colour, off, r=3)
     svg.add(svg.text(left - 55, top + ph / 2, y_label, anchor="middle", rotate=-90))
-    below, above = any(y < lo for y in ys), any(y > hi for y in ys)
+    below, above = any(y < lo for y in ys), y_max is not None and any(y > hi for y in ys)
     if below or above:
         parts = ([f"below the axis minimum ({lo:g}), drawn on the bottom edge"] if below else []) + (
             [f"above the axis maximum ({hi:g}), drawn on the top edge"] if above else []
