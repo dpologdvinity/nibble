@@ -26,8 +26,13 @@ class GhError(RuntimeError):
 
 
 def subprocess_runner(argv: Sequence[str], stdin: str | None) -> str:
-    """Run `argv` with `stdin` as input and return stdout; raise GhError(stderr) on a non-zero exit."""
-    proc = subprocess.run(list(argv), input=stdin, capture_output=True, text=True, check=False)
+    """Run `argv` with `stdin` as input and return stdout; raise GhError(stderr) on a non-zero exit, and GhError too
+    when the program cannot start (`gh` missing or not executable): to a caller that is a GitHub problem, not an
+    OSError about its own files."""
+    try:
+        proc = subprocess.run(list(argv), input=stdin, capture_output=True, text=True, check=False)
+    except OSError as e:
+        raise GhError(f"cannot run {argv[0]}: {e}") from e
     if proc.returncode != 0:
         raise GhError(proc.stderr.strip() or f"{argv[0]} exited with status {proc.returncode}")
     return proc.stdout

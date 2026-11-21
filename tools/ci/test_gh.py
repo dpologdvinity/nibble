@@ -344,6 +344,12 @@ class SubprocessRunnerTests(unittest.TestCase):
             gh.subprocess_runner(["sh", "-c", "echo boom >&2; exit 3"], None)
         self.assertIn("boom", str(ctx.exception))
 
+    def test_runner_that_cannot_start_raises_gh_error(self) -> None:
+        # A missing `gh` is a GitHub problem for the callers (they catch GhError), not an OSError about their files.
+        with self.assertRaises(gh.GhError) as ctx:
+            gh.subprocess_runner(["/nonexistent/gh-for-the-test", "api"], None)
+        self.assertIn("gh-for-the-test", str(ctx.exception))
+
     def test_runner_returns_stdout_and_feeds_stdin(self) -> None:
         self.assertEqual(gh.subprocess_runner(["cat"], "hi"), "hi")
 
