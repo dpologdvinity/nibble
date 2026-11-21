@@ -76,123 +76,22 @@ jobs:
         id: e2e
         continue-on-error: true
         run: ctest --test-dir build -L e2e -j2 -V --output-log "$PWD/e2e.log" --timeout 7200
+      # tools/ci/accuracy.py writes e2e-cosines.json and fails the step when fewer than MIN_KEYS results parsed or a min
+      # cosine is NaN or infinite.
       - name: Parse the min-cosine lines
         id: parse
         if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}
-        run: |
-          python -I - <<'PY'
-          import json
-          import math
-          import os
-          import sys
-          from pathlib import Path
-
-          sys.path.insert(0, "tools/ci")
-          import cosine
-
-          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
-          expected = int(os.environ["MIN_KEYS"])
-          try:
-              runs = cosine.parse_min_cosine(Path("e2e.log").read_text(encoding="utf-8", errors="replace"))
-          except (OSError, ValueError) as e:
-              print("::error title=e2e log::" + str(e).replace("\n", " "))
-              sys.exit(1)
-
-          # NaN and +-inf: diff_cosines counts NaN == NaN as unchanged, so a broken kernel would never show up as a
-          # change. They are written as strings (JSON has no NaN) so the artifact still shows what happened.
-          bad = sorted(k for k, c in runs.items() if not math.isfinite(c.min_cos))
-          data = {
-              k: {
-                  "model": c.model,
-                  "prompt": c.prompt,
-                  "min_cos": c.min_cos if math.isfinite(c.min_cos) else repr(c.min_cos),
-                  "positions": c.positions,
-                  "agree": c.agree,
-              }
-              for k, c in sorted(runs.items())
-          }
-          Path("e2e-cosines.json").write_text(json.dumps(data, indent=1, allow_nan=False) + "\n", encoding="utf-8")
-
-          problems = []
-          if len(runs) < expected:
-              problems.append(f"only {len(runs)} of the expected {expected} min-cosine results parsed (models missing?)")
-          if bad:
-              problems.append("non-finite min cosine: " + ", ".join(bad))
-          with summary.open("a", encoding="utf-8") as out:
-              out.write(f"### e2e accuracy\n\n{len(runs)} min-cosine results parsed.\n\n")
-              for p in problems:
-                  out.write(f"- FAILED: {p}\n")
-          for p in problems:
-              print("::error title=e2e accuracy::" + p)
-          sys.exit(1 if problems else 0)
-          PY
-      # The previous night's numbers come from the last successful nightly on master that has the artifact (a
-      # hand-run of one other job leaves none). No such run is a first night, and a fetch problem only costs the
-      # comparison: neither fails the job.
+        run: python tools/ci/accuracy.py snapshot e2e.log --out e2e-cosines.json --summary "$GITHUB_STEP_SUMMARY" --expected "$MIN_KEYS"
+      # The previous night's numbers come from the newest completed nightly on master whose accuracy JOB succeeded and
+      # that still has the e2e-cosines artifact (the run as a whole may be red because fuzz_load failed, and a
+      # hand-run of one other job leaves no artifact). No such run is a first night, and a GitHub or artifact problem
+      # only costs the comparison: the step never fails the job.
       - name: Compare with the previous night
         if: ${{ !cancelled() && hashFiles('e2e-cosines.json') != '' }}
         env:
           GH_TOKEN: ${{ github.token }}  # only this step lists and downloads runs; the build and tests never see it
-          REPO: ${{ github.repository }}
-        run: |
-          prev_json=""
-          prev_run=""
-          note=""
-          if ids=$(gh run list -R "$REPO" -w nightly.yml -b master --status success -L 10 --json databaseId --jq '.[].databaseId'); then
-            for id in $ids; do
-              if gh run download "$id" -R "$REPO" -n e2e-cosines -D "previous-$id" 2> /dev/null && [ -f "previous-$id/e2e-cosines.json" ]; then
-                prev_json="previous-$id/e2e-cosines.json"
-                prev_run="$id"
-                break
-              fi
-            done
-            if [ -z "$prev_json" ]; then note="first night: no earlier successful nightly run on master has an e2e-cosines artifact"; fi
-          else
-            echo "::warning title=nightly::could not list the previous nightly runs"
-            note="comparison unavailable: could not list the previous nightly runs"
-          fi
-          PREV_JSON="$prev_json" PREV_RUN="$prev_run" NOTE="$note" python -I - <<'PY'
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          sys.path.insert(0, "tools/ci")
-          from cosine import Cosine, diff_cosines
-
-
-          def load(path: str) -> dict[str, Cosine]:
-              raw = json.loads(Path(path).read_text(encoding="utf-8"))
-              return {k: Cosine(v["model"], v["prompt"], float(v["min_cos"]), int(v["positions"]), int(v["agree"])) for k, v in raw.items()}
-
-
-          out = Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8")
-          out.write("### e2e accuracy versus the previous night\n\n")
-          prev_json = os.environ["PREV_JSON"]
-          if not prev_json:
-              out.write(os.environ["NOTE"] + ".\n")
-              sys.exit(0)
-          try:
-              changes = diff_cosines(load(prev_json), load("e2e-cosines.json"))
-          except (OSError, ValueError, KeyError, TypeError) as e:
-              print("::warning title=nightly::cannot compare with the previous night: " + str(e).replace("\n", " "))
-              out.write("Comparison unavailable: the previous artifact could not be read.\n")
-              sys.exit(0)
-          out.write(f"Previous run: {os.environ['PREV_RUN']}.\n\n")
-          if not changes:
-              out.write("No min-cosine value changed.\n")
-              sys.exit(0)
-
-
-          def fmt(v: float | None) -> str:
-              return "absent" if v is None else f"{v:.6g}"
-
-
-          out.write("| model/prompt | previous | now |\n|---|---|---|\n")
-          for c in changes:
-              out.write(f"| {c.key} | {fmt(c.old)} | {fmt(c.new)} |\n")
-              print(f"::warning title=min cosine changed::{c.key}: {fmt(c.old)} -> {fmt(c.new)}")
-          PY
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python tools/ci/accuracy.py compare e2e-cosines.json --summary "$GITHUB_STEP_SUMMARY" --dest previous
       - name: Upload the parsed min cosines
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

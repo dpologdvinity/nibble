@@ -13,6 +13,7 @@ import json
 import subprocess
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Protocol
 
 # (argv, stdin) -> stdout. argv is the full command including the program name. Raises GhError on a non-zero exit.
@@ -64,6 +65,19 @@ class GitHub(Protocol):
 
     def dispatch(self, workflow_file: str, ref: str, inputs: Mapping[str, str]) -> None:
         """Start `workflow_file` on `ref` through workflow_dispatch (exempt from the GITHUB_TOKEN no-trigger rule)."""
+        ...
+
+    def list_completed_runs(self, workflow_file: str, branch: str, limit: int) -> list[int]:
+        """Ids of the `limit` newest runs of `workflow_file` on `branch` (any event or result), newest first."""
+        ...
+
+    def job_conclusion(self, run_id: int, job_name: str) -> str | None:
+        """Conclusion ("success", "failure", "skipped", ...) of the job named `job_name` in run `run_id`'s latest
+        attempt, or None when the run has no such job or it has not concluded."""
+        ...
+
+    def download_artifact(self, run_id: int, name: str, dest: Path) -> bool:
+        """Download artifact `name` of run `run_id` into the directory `dest`; False if it does not exist or expired."""
         ...
 
 
@@ -158,3 +172,25 @@ class GhCli:
             f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/dispatches",
             {"ref": ref, "inputs": dict(inputs)},
         )
+
+    def list_completed_runs(self, workflow_file: str, branch: str, limit: int) -> list[int]:
+        query = urllib.parse.urlencode({"branch": branch, "status": "completed", "per_page": limit})
+        path = f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow_file, safe='')}/runs?{query}"
+        return [int(run["id"]) for run in json.loads(self._get(path)).get("workflow_runs", [])]
+
+    def job_conclusion(self, run_id: int, job_name: str) -> str | None:
+        # `filter=latest` keeps a re-run attempt's jobs and drops the superseded ones.
+        text = self._get(f"repos/{self.repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100", paginate=True)
+        for page in _json_values(text):
+            for job in page.get("jobs", []) if isinstance(page, dict) else []:
+                if job.get("name") == job_name:
+                    conclusion = job.get("conclusion")
+                    return None if conclusion is None else str(conclusion)
+        return None
+
+    def download_artifact(self, run_id: int, name: str, dest: Path) -> bool:
+        listing = json.loads(self._get(f"repos/{self.repo}/actions/runs/{run_id}/artifacts?per_page=100"))
+        if not any(a.get("name") == name and not a.get("expired") for a in listing.get("artifacts", [])):
+            return False
+        self._run(["gh", "run", "download", str(run_id), "-R", self.repo, "-n", name, "-D", str(dest)], None)
+        return True
