@@ -129,6 +129,10 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allow_fork_prs: "false"
+          # The action denies cmake and python on any pull request by a bot (it treats bot authors as untrusted), so on
+          # Claude's own agent/ pull requests the session could not build or test. Those come from this repository's
+          # branches (the gate above skips forks); every other pull request, Dependabot's too, keeps the restriction.
+          restrict_untrusted_prs: ${{ (github.event.pull_request.user.login || github.event.issue.user.login) == 'claude[bot]' && 'false' || 'true' }}
           # A topic-named branch under agent/ (issue events; on an open pull request Claude pushes to that PR's branch).
           branch_prefix: agent/
           # The App token gets no actions access by default, so gh run view (CI logs) would be refused.
