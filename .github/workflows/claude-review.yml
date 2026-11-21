@@ -11,6 +11,9 @@
 # which has no tracking comment, no commit or push wrappers and no auto permission mode (allowed_bots is set). Edit
 # and Write are denied on top of that, because `permissions: contents: read` only limits GITHUB_TOKEN, not the Claude
 # GitHub App token the action obtains.
+# The session cannot read the OAuth token: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB strips credentials from the commands it runs
+# (only gh pr diff here) and the deny list keeps Read, Grep and Glob out of /proc, where the Claude process's own
+# environment (which keeps the token) is readable.
 # How it is triggered: by a pull_request event, never by hand and there is no workflow_dispatch; push to the pull
 # request, mark it ready for review or add the `agent` label.
 name: claude-review
@@ -42,6 +45,10 @@ jobs:
     timeout-minutes: 20
     # A newer push makes the running review stale. A label event for any label but `agent` is skipped by the `if:`
     # above, but gets a group of its own anyway so that it can never cancel a running review.
+    env:
+      # Strip credentials from the environment of every command the session runs; the action sets it only for
+      # allowed_non_write_users, which this workflow does not use. Read by the action from env.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}${{ github.event.action == 'labeled' && github.event.label.name != 'agent' && format('-label-{0}', github.run_id) || '' }}
       cancel-in-progress: true
@@ -102,8 +109,9 @@ jobs:
             - Never approve and never request changes. Do not post a top-level review or a summary comment.
             - Be concise. No praise, no restating the diff, no style nits that clang-format or ruff already enforce.
             - If there is nothing worth a comment, post nothing.
-          # No gh pr view: its --jq filter can print the process environment, which holds the OAuth token, and a
-          # prefix rule cannot forbid a flag (gh pr diff has no --jq).
+          # No gh pr view: its --jq filter can print the process environment, and a prefix rule cannot forbid a flag
+          # (gh pr diff has no --jq). Read is denied /proc (the rule covers Grep, Glob and a symlink's target):
+          # /proc/self/environ of the Claude process holds the OAuth token, which the scrub leaves to that process.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Read,Grep,Glob"
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Read(//proc),Read(//proc/**)"
