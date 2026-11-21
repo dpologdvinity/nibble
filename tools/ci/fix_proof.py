@@ -15,7 +15,7 @@ What can never be proven, by design (the "unresolved" and "not-runnable" paths):
 
 * A TEST_CASE whose name is not one plain string literal (the `E2E_CASE` macro in tests/test_e2e_golden.cpp builds
   its names with the preprocessor) cannot be named to Catch2, so a change to it is listed as unresolved.
-* A case that deletes a whole TEST_CASE selects nothing and is listed as `deleted: <name>`.
+* A change that deletes a whole TEST_CASE selects nothing and is listed as `deleted: <name>`.
 * A case that SKIPs on the base (the end-to-end cases without models) or leaves no result is not-runnable.
 * Edits to tests/*.cpp files that neither nibble_tests nor nibble_alloc_tests builds (simd_helpers_test.cpp and so on)
   are listed as unresolved.
@@ -265,8 +265,9 @@ def _headers(source: str) -> list[tuple[int, str | None]]:
 
 def test_cases(path: str, source: str) -> list[Case]:
     """Every TEST_CASE of `source` (the text of `path`) with its line span; see `Case` for the fields."""
-    binary = ALLOC_BINARY if path == "tests/alloc_tests.cpp" else TESTS_BINARY
-    last = len(source.splitlines())
+    # `select` never passes a file that no binary builds; any other path (a fixture in a test) gets nibble_tests.
+    binary = _binary_for(path) or TESTS_BINARY
+    last = source.count("\n") + (0 if source.endswith("\n") or not source else 1)
     headers = _headers(source)
     cases: list[Case] = []
     for idx, (line, name) in enumerate(headers):
@@ -303,15 +304,17 @@ def _diff_path(line: str) -> str | None:
 def _hunks(diff: str) -> list[_Hunk]:
     """Parse `git diff -U0 --no-ext-diff --no-color` output into hunks of tests/*.cpp files only.
 
-    The hunk header counts say how many content lines follow, so a removed line that itself starts with `-- ` is not
-    mistaken for a file header.
+    The hunk header counts say how many content lines follow, so a content line that looks like a header (a removed
+    `-- ...`, an added `++ b/tests/x.cpp`) is never read as one. The accounting runs for every file in the diff, also
+    those whose hunks are not returned (the `tests/*.cpp` pathspec matches tests/fuzz/*.cpp too), so text in one
+    file cannot redirect a later hunk. Lines are split at `\n` only, as git writes them.
     """
     hunks: list[_Hunk] = []
     old_path: str | None = None
     path: str | None = None
     old_left = new_left = 0
     current: _Hunk | None = None
-    for line in diff.splitlines():
+    for line in diff.split("\n"):
         if old_left > 0 or new_left > 0:
             if line.startswith("-"):
                 old_left -= 1
@@ -328,12 +331,14 @@ def _hunks(diff: str) -> list[_Hunk]:
         elif line.startswith("+++ "):
             new_path = _diff_path(line)
             path = new_path if new_path is not None else old_path
-        elif (m := _HUNK.match(line)) and path is not None and _TEST_FILE.match(path):
+        elif m := _HUNK.match(line):
             old_count = 1 if m.group(2) is None else int(m.group(2))
             new_count = 1 if m.group(4) is None else int(m.group(4))
-            current = _Hunk(path, int(m.group(3)), new_count, old_count, [])
-            hunks.append(current)
             old_left, new_left = old_count, new_count
+            current = None
+            if path is not None and _TEST_FILE.match(path):
+                current = _Hunk(path, int(m.group(3)), new_count, old_count, [])
+                hunks.append(current)
         else:
             current = None
     return hunks
@@ -425,10 +430,12 @@ _SPEC_SPECIAL = frozenset(',[]*"~\\')
 def catch_spec(name: str) -> str:
     """Escape `name` for a Catch2 test spec: a backslash before each of `, [ ] * " ~` and backslash itself.
 
-    Escaping `~` and `[` also covers a leading `~` (exclusion) and a leading `[` (tag). Catch2 still treats a leading
-    or trailing `*` as a wildcard after unescaping, so such a spec may match more cases than `name`.
+    Escaping `~` and `[` also covers a leading `~` (exclusion) and a leading `[` (tag). A leading `-` is escaped too:
+    unescaped, Catch2 reads the name as a command-line option ("Unrecognised token") and runs nothing. Catch2 still
+    treats a leading or trailing `*` as a wildcard after unescaping, so such a spec may match more cases than `name`.
     """
-    return "".join("\\" + ch if ch in _SPEC_SPECIAL else ch for ch in name)
+    spec = "".join("\\" + ch if ch in _SPEC_SPECIAL else ch for ch in name)
+    return "\\" + spec if spec.startswith("-") else spec
 
 
 def _element_state(case: ET.Element) -> CaseResult:
@@ -555,7 +562,15 @@ _REF = re.compile(r"[0-9A-Za-z][0-9A-Za-z._/~^-]*")
 
 def _git(repo: str, *args: str) -> str:
     """Run `git <args>` in `repo` (argv list, no shell) and return stdout; a failure raises ValueError with stderr."""
-    proc = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
+    # quotePath=false: git prints non-ASCII paths as they are instead of as quoted octal escapes. Bytes that are not
+    # UTF-8 (a stray Latin-1 comment in a test file) become U+FFFD instead of failing the whole check.
+    proc = subprocess.run(
+        ["git", "-C", repo, "-c", "core.quotePath=false", *args],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
     if proc.returncode != 0:
         raise ValueError(f"git {args[0]} failed: {proc.stderr.strip()}")
     return proc.stdout
@@ -590,7 +605,7 @@ def _read_selection(path: str) -> Selection:
             raise ValueError(f"{path}: a case must be an object")
         file, name, start, end, binary = (item.get(k) for k in ("file", "name", "start", "end", "binary"))
         ints_ok = all(isinstance(v, int) and not isinstance(v, bool) for v in (start, end))
-        if not (isinstance(file, str) and isinstance(name, str) and isinstance(binary, str) and ints_ok):
+        if not (isinstance(file, str) and isinstance(name, str) and ints_ok and binary in (TESTS_BINARY, ALLOC_BINARY)):
             raise ValueError(f"{path}: bad case {item!r}")
         assert isinstance(start, int) and isinstance(end, int)
         cases.append(Case(file, name, start, end, binary))
@@ -617,7 +632,7 @@ def read_results(results_dir: str, selection: Selection) -> dict[str, CaseResult
 
 def _cmd_gate(args: argparse.Namespace) -> int:
     base, head = _check_ref(args.base), _check_ref(args.head)
-    subjects = _git(args.repo, "log", "--format=%s", f"{base}..{head}").splitlines()
+    subjects = _git(args.repo, "log", "--format=%s", f"{base}..{head}").split("\n")
     names = [p for p in _git(args.repo, "diff", "--name-only", "-z", f"{base}...{head}").split("\0") if p]
     print(f"fix={str(is_fix(args.title, subjects)).lower()}")
     print(f"code={str(touches_code(names)).lower()}")

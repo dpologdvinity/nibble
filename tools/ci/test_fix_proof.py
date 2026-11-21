@@ -194,6 +194,21 @@ class ChangedLinesTests(unittest.TestCase):
         diff = file_diff("tests/test_a.cpp", hunk(10, ["-- a comment", "++ b"], 9, []))
         self.assertEqual(fix_proof.changed_lines(diff), {"tests/test_a.cpp": {9}})
 
+    def test_a_non_test_file_cannot_redirect_a_later_hunk(self) -> None:
+        # tests/fuzz/*.cpp matches the `tests/*.cpp` pathspec. Its added line `++ b/tests/test_x.cpp` is diff text
+        # `+++ b/tests/test_x.cpp`; its second hunk must not be read as a hunk of test_x.cpp.
+        diff = file_diff(
+            "tests/fuzz/f.cpp", hunk(3, [], 4, ["++ b/tests/test_x.cpp"]), hunk(40, ["a"], 41, ["b"])
+        ) + file_diff("tests/test_a.cpp", hunk(7, [], 8, ["ok"]))
+        self.assertEqual(fix_proof.changed_lines(diff), {"tests/test_a.cpp": {8}})
+
+    def test_form_feed_inside_a_line_does_not_split_it(self) -> None:
+        # str.splitlines would cut this added line at the form feed and read `+++ b/...` as a file header.
+        diff = file_diff(
+            "tests/test_a.cpp", hunk(3, [], 4, ["x\x0c+++ b/tests/test_y.cpp"]), hunk(40, ["a"], 41, ["b"])
+        )
+        self.assertEqual(fix_proof.changed_lines(diff), {"tests/test_a.cpp": {4, 41}})
+
     def test_deleted_header_contributes_no_line_and_is_named(self) -> None:
         diff = file_diff(
             "tests/test_a.cpp",
@@ -334,6 +349,15 @@ class CatchSpecTests(unittest.TestCase):
         self.assertEqual(fix_proof.catch_spec("~lead"), r"\~lead")
         self.assertEqual(fix_proof.catch_spec("*lead"), r"\*lead")
         self.assertEqual(fix_proof.catch_spec("[tag] x"), r"\[tag\] x")
+
+    def test_catch_spec_leading_dash_never_reaches_catch2_as_an_option(self) -> None:
+        # `build/nibble_tests "-1 handling"` dies with "Unrecognised token: -1"; Catch2 accepts the escaped form
+        # (checked with a real binary: `--list-tests '\\-1 handling'` lists the case).
+        self.assertEqual(fix_proof.catch_spec("-1 handling"), r"\-1 handling")
+        self.assertEqual(fix_proof.catch_spec("--list-tests"), r"\--list-tests")
+        self.assertEqual(fix_proof.catch_spec("a-b"), "a-b")
+        (c,) = fix_proof.test_cases("tests/test_x.cpp", 'TEST_CASE("-1 handling") {}\n')
+        self.assertEqual(c.name, "-1 handling")
 
     def test_catch_spec_leaves_other_characters_alone(self) -> None:
         # `{`, `}`, `/`, `:` and `<` need no escape: the real name below runs under Catch2 as written.
@@ -592,6 +616,23 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(
                 stdout.splitlines(), ["fix=true", "code=false"], base
             )  # master's src change is not the PR's
+
+    def test_select_reads_non_utf8_and_non_ascii_paths(self) -> None:
+        base = self.commit({"tests/test_a.cpp": 'TEST_CASE("a") {\n}\n'}, "feat: base")
+        Path(self.repo, "tests/test_\u00e9.cpp").write_text('TEST_CASE("accent") {\n}\n', encoding="utf-8")
+        Path(self.repo, "tests/test_a.cpp").write_bytes(b'TEST_CASE("a") {\n  // latin-1 \xe9 and \xff\n}\n')
+        head = self.commit({}, "fix: encodings")
+        out = Path(self.tmp.name, "cases.json")
+        code, _ = self.run_main("select", "--repo", str(self.repo), "--base", base, "--head", head, "--out", str(out))
+        self.assertEqual(code, 0)
+        names = sorted(c["name"] for c in json.loads(out.read_text(encoding="utf-8"))["cases"])
+        self.assertEqual(names, ["a", "accent"])  # the git-quoted path "tests/test_\303\251.cpp" is not dropped
+
+    def test_cases_json_with_an_unknown_binary_is_refused(self) -> None:
+        bad = Path(self.tmp.name, "bad.json")
+        case = {"file": "tests/test_a.cpp", "name": "a", "start": 1, "end": 2, "binary": "../../bin/sh"}
+        bad.write_text(json.dumps({"cases": [case], "unresolved": []}), encoding="utf-8")
+        self.assertEqual(self.run_main("specs", "--cases", str(bad))[0], 2)
 
     def test_select_refuses_an_option_looking_revision(self) -> None:
         code, _ = self.run_main("select", "--repo", str(self.repo), "--base=--output=x", "--head", "HEAD", "--out", "o")
