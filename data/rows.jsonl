@@ -35,3 +35,4 @@
 {"schema":1,"date":"2026-11-21T06:46:56Z","commit":"fab3eeea929ae76c5324a1e1489e2ae4e02e763e","source":"nightly","metric":"fuzz_seconds","key":"fuzz_load","value":7201.0,"unit":"s","runner":"Intel(R) Xeon(R) 6975P-C","run_id":44867692841}
 {"schema":1,"date":"2026-11-21T06:46:56Z","commit":"fab3eeea929ae76c5324a1e1489e2ae4e02e763e","source":"nightly","metric":"corpus_files","key":"fuzz_load","value":336.0,"unit":"files","runner":"Intel(R) Xeon(R) 6975P-C","run_id":44867692841}
 {"schema":1,"date":"2026-11-21T06:46:57Z","commit":"fab3eeea929ae76c5324a1e1489e2ae4e02e763e","source":"nightly","metric":"job_status","key":"nightly/fuzz_load","value":1.0,"unit":"ok","runner":"Intel(R) Xeon(R) 6975P-C","run_id":44867692841}
+{"schema":1,"date":"2026-11-21T09:15:08Z","commit":"102804b357dff478acdea0e81918f067b44be1df","source":"ci","metric":"line_coverage","key":"src+cli","value":94.6,"unit":"%","runner":"AMD EPYC 9V74 80-Core Processor","run_id":44888320250}
