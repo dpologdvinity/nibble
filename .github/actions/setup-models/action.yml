@@ -40,7 +40,7 @@ runs:
         path: |
           models/
           !models/hf
-        key: models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt') }}
+        key: models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt', 'tests/corpus.h') }}
 
     # Decide once: build=true means this run must produce models/ itself; warm is the value handed to the caller.
     - name: Decide whether to rebuild

@@ -121,7 +121,7 @@ Findings from the PR #49 review (CodeRabbit, each verified against the plan befo
   | codeql | `11 6 * * 2` |
   | gitleaks full history | `29 2 * * 3` |
 - **Cache keys:**
-  - `models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt') }}`
+  - `models-qwen-v1-${{ hashFiles('tools/llama_cpp_version.txt', 'tools/download_models.sh', 'tools/build_llama_cpp.sh', 'tools/make_quants.sh', 'tools/make_golden.sh', 'tools/llama_ref/**', 'tests/e2e/prompts/**', 'tests/tokenizer/corpus*.txt', 'tests/corpus.h') }}`
     over paths `models/` and `!models/hf`.
   - `fuzz-corpus-<target>-${{ github.run_id }}`, with restore-key `fuzz-corpus-<target>-`.
 - **Labels** (name: colour, description). `tools/ci/labels.py` is the source of truth.
