@@ -37,10 +37,16 @@ env:
   PYTHON_VERSION: "3.12"
   DEPS_DIR: ${{ github.workspace }}/.deps-cache
 
+# Each job serializes with itself (concurrency group nightly-<job>[-<target>]-<ref>, never cancelling): a scheduled and
+# a hand-started run of the same job on master would otherwise both look up "nightly: <job> failing" before either
+# creates it and open two issues. GitHub keeps at most one run pending per group, so a third run replaces a waiting one.
 jobs:
   accuracy:
     name: accuracy
     if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'accuracy'
+    concurrency:
+      group: nightly-accuracy-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
@@ -138,6 +144,9 @@ jobs:
   sanitizers-real-model:
     name: sanitizers-real-model
     if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'sanitizers-real-model'
+    concurrency:
+      group: nightly-sanitizers-real-model-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
@@ -200,6 +209,9 @@ jobs:
   fuzz:
     name: ${{ matrix.target }}
     if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'fuzz'
+    concurrency:
+      group: nightly-fuzz-${{ matrix.target }}-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -221,12 +233,13 @@ jobs:
           cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNIBBLE_FUZZ=ON -DNIBBLE_NATIVE=OFF \
                 -DNIBBLE_BUILD_TESTS=OFF
           cmake --build build-fuzz -j "$(nproc)" --target fuzz_gguf fuzz_load make_seed
-      # Each night's merged corpus is saved under its own run id; the newest earlier one is restored.
+      # Each attempt's merged corpus is saved under its own run id and attempt number (a cache entry cannot be
+      # replaced, so a re-run reusing the run id would lose its new inputs); the newest earlier one is restored.
       - name: Restore the corpus
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: corpus
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
       - name: Seed the corpus
         run: |
@@ -257,7 +270,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: corpus
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Dashboard rows (fuzzing)
         if: always()
         continue-on-error: true
@@ -298,6 +311,9 @@ jobs:
   trend-bench:
     name: trend-bench
     if: github.event_name != 'workflow_dispatch' || inputs.jobs == 'all' || inputs.jobs == 'trend-bench'
+    concurrency:
+      group: nightly-trend-bench-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
