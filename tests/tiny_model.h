@@ -1,5 +1,6 @@
 #pragma once
 // Tiny synthetic models for tests: tokenizer half, and tokenizer + qwen2 weights.
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <random>

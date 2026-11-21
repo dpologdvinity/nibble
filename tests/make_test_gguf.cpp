@@ -3,6 +3,7 @@
 // probe for `nibble info`, a Q6_K tensor file - and, with --big-u8, a file whose metadata holds a huge u8
 // array to probe memory amplification.
 // Test helper: writes GGUF fixtures into the directory given as argv[1].
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
