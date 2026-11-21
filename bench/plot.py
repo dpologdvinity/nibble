@@ -471,12 +471,14 @@ def line_chart(
     y_of: Callable[[float], float] = lambda v: top + ph * (1 - (v - lo) / (hi - lo))
     ticks = [first_tick + step * i for i in range(math.floor((hi - first_tick) / step + 1e-9) + 1)]
     y_axis(svg, left, w - right, y_of, ticks, lambda v: tick_label(v, step))
-    x_lo, x_hi = min(xs), max(xs)
+    x_lo, x_hi = data_lo, data_hi = min(xs), max(xs)
     if x_lo == x_hi:  # a single instant: centre it in a one-day window
         x_lo, x_hi = x_lo - DAY / 2, x_hi + DAY / 2
     pad = 10  # keeps the first and last markers inside the plot area
     x_of: Callable[[float], float] = lambda t: left + pad + (t - x_lo) / (x_hi - x_lo) * (w - left - right - 2 * pad)
-    for t in date_ticks(x_lo, x_hi):
+    # Ticks come from the data's range, not the padded window: the window around a single afternoon point holds the
+    # next midnight, and a lone tick there would date the point a day late.
+    for t in date_ticks(data_lo, data_hi):
         x = x_of(t)
         svg.line(x, top + ph, x, top + ph + 4, stroke="#888")
         svg.add(svg.text(x, top + ph + 18, date_label(t), size=10, anchor="middle"))
