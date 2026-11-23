@@ -3,7 +3,8 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # The composite actions under .github/actions pin actions too; "/" alone only scans .github/workflows.
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     commit-message:
