@@ -112,7 +112,7 @@ jobs:
         run: python tools/ci/accuracy.py compare e2e-cosines.json --summary "$GITHUB_STEP_SUMMARY" --dest previous
       - name: Upload the parsed min cosines
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-cosines
           path: e2e-cosines.json
@@ -135,7 +135,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow nightly --job accuracy --outcome "$JOB_STATUS" --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-accuracy
           path: rows.jsonl
@@ -148,7 +148,7 @@ jobs:
         if: ${{ always() && job.status == 'failure' }}
         # An upload problem (e.g. a 409 on a re-run attempt) must not fail the job; the link is then empty.
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: failure-accuracy
           path: e2e*.*
@@ -232,7 +232,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow nightly --job sanitizers-real-model --outcome "$JOB_STATUS" --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-sanitizers-real-model
           path: rows.jsonl
@@ -358,7 +358,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow nightly --job "$TARGET" --outcome "$JOB_STATUS" --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-${{ matrix.target }}
           path: rows.jsonl
@@ -371,7 +371,7 @@ jobs:
         if: ${{ always() && job.status == 'failure' }}
         # An upload problem (e.g. a 409 on a re-run attempt) must not fail the job; the link is then empty.
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: failure-${{ matrix.target }}
           path: crashes/*
@@ -471,7 +471,7 @@ jobs:
         run: python tools/ci/dashboard_data.py status --workflow nightly --job trend-bench --outcome "$JOB_STATUS" --out rows.jsonl
       - name: Upload dashboard rows
         if: ${{ always() && job.status != 'cancelled' && steps.models.outputs.warm != 'false' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dashboard-rows-trend-bench
           path: rows.jsonl
